@@ -72,7 +72,64 @@ pub mod qobject {
         #[qproperty(bool, suggestions_enabled, cxx_name = "suggestionsEnabled")]
         /// Bumped when the suggestions are for another track.
         #[qproperty(i32, suggestions_revision, cxx_name = "suggestionsRevision")]
+        /// Bumped when Beatport sign-in, a Beatport list or the playlists
+        /// changed.
+        #[qproperty(i32, beatport_revision, cxx_name = "beatportRevision")]
+        /// Bumped when the download queue moved on (row indicators).
+        #[qproperty(i32, beatport_download_revision, cxx_name = "beatportDownloadRevision")]
+        /// The signed-in Beatport user, empty when signed out.
+        #[qproperty(QString, beatport_account, cxx_name = "beatportAccount")]
+        /// Beatport tracks are being downloaded for offline use.
+        #[qproperty(bool, beatport_downloading, cxx_name = "beatportDownloading")]
+        /// "Downloading 3 / 29 · 5.6 MB/s".
+        #[qproperty(QString, beatport_download_text, cxx_name = "beatportDownloadText")]
+        /// Share of the batch done, 0..1.
+        #[qproperty(f64, beatport_download_fraction, cxx_name = "beatportDownloadFraction")]
         type AppController = super::AppControllerRust;
+
+        /// Downloads a Beatport playlist of the user for offline use.
+        #[qinvokable]
+        #[cxx_name = "downloadBeatportPlaylist"]
+        fn download_beatport_playlist(self: &AppController, playlist: i64);
+
+        #[qinvokable]
+        #[cxx_name = "cancelBeatportDownloads"]
+        fn cancel_beatport_downloads(self: &AppController);
+
+        /// Signs in to Beatport in the background (the password is not kept).
+        #[qinvokable]
+        #[cxx_name = "beatportLogin"]
+        fn beatport_login(self: &AppController, username: &QString, password: &QString);
+
+        #[qinvokable]
+        #[cxx_name = "beatportLogout"]
+        fn beatport_logout(self: &AppController);
+
+        /// Loads a Beatport catalog track (by Beatport id) onto a deck.
+        #[qinvokable]
+        #[cxx_name = "loadBeatport"]
+        fn load_beatport(self: &AppController, deck: i32, beatport_id: i64);
+
+        /// Fetches the user's Beatport playlists again.
+        #[qinvokable]
+        #[cxx_name = "refreshBeatportPlaylists"]
+        fn refresh_beatport_playlists(self: &AppController);
+
+        /// Deletes the cached files of streamed tracks (not those on a deck);
+        /// `with_offline` also those kept offline.
+        #[qinvokable]
+        #[cxx_name = "clearBeatportCache"]
+        fn clear_beatport_cache(self: &AppController, with_offline: bool);
+
+        /// "12 tracks · 480 MB, 8 kept offline (310 MB)" for the settings.
+        #[qinvokable]
+        #[cxx_name = "beatportCacheText"]
+        fn beatport_cache_text(self: &AppController) -> QString;
+
+        /// Opens a web page in the desktop's browser.
+        #[qinvokable]
+        #[cxx_name = "openWebPage"]
+        fn open_web_page(self: &AppController, url: &QString);
 
         #[qinvokable]
         #[cxx_name = "pauseAnalysis"]
@@ -324,6 +381,12 @@ pub struct AppControllerRust {
     battery_minutes: i32,
     suggestions_enabled: bool,
     suggestions_revision: i32,
+    beatport_revision: i32,
+    beatport_download_revision: i32,
+    beatport_account: QString,
+    beatport_downloading: bool,
+    beatport_download_text: QString,
+    beatport_download_fraction: f64,
 }
 
 struct ImportReport {
@@ -411,6 +474,69 @@ impl qobject::AppController {
         }
     }
 
+    fn beatport_login(&self, username: &QString, password: &QString) {
+        if let Some(app) = app() {
+            app.beatport_login(username.to_string(), password.to_string());
+        }
+    }
+
+    fn beatport_logout(&self) {
+        if let Some(app) = app() {
+            app.beatport_logout();
+        }
+    }
+
+    fn load_beatport(&self, deck: i32, beatport_id: i64) {
+        if let Some(app) = app() {
+            app.load_beatport(deck.clamp(0, 3) as u8, beatport_id);
+        }
+    }
+
+    fn refresh_beatport_playlists(&self) {
+        if let Some(app) = app() {
+            app.beatport_refresh_playlists();
+        }
+    }
+
+    fn clear_beatport_cache(&self, with_offline: bool) {
+        if let Some(app) = app() {
+            app.clear_beatport_cache(with_offline);
+        }
+    }
+
+    fn beatport_cache_text(&self) -> QString {
+        let u = app().map(|a| a.beatport_cache_usage()).unwrap_or_default();
+        let size = |b: u64| {
+            if b >= 1 << 30 { format!("{:.1} GB", b as f64 / f64::from(1 << 30)) } else { format!("{} MB", b >> 20) }
+        };
+        QString::from(format!(
+            "{} tracks · {}, of those {} kept offline ({})",
+            u.files,
+            size(u.bytes),
+            u.offline_files,
+            size(u.offline_bytes)
+        ))
+    }
+
+    fn download_beatport_playlist(&self, playlist: i64) {
+        if let Some(app) = app() {
+            app.beatport_download_list(rille_app::BeatportList::Playlist(playlist));
+        }
+    }
+
+    fn cancel_beatport_downloads(&self) {
+        if let Some(app) = app() {
+            app.beatport_cancel_downloads();
+        }
+    }
+
+    fn open_web_page(&self, url: &QString) {
+        let url = url.to_string();
+        if url.starts_with("https://") {
+            let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+        }
+    }
+
     fn tick(mut self: Pin<&mut Self>) {
         let Some(app) = app() else { return };
         app.tick();
@@ -480,10 +606,38 @@ impl qobject::AppController {
         self.as_mut().set_on_battery(battery.is_some_and(|b| b.on_battery));
         self.as_mut().set_battery_percent(battery.map_or(-1, |b| b.percent.round() as i32));
         self.as_mut().set_battery_minutes(battery.and_then(|b| b.minutes_left).map_or(-1, |m| m as i32));
+        let account = QString::from(app.beatport_account().unwrap_or_default());
+        if *self.beatport_account() != account {
+            self.as_mut().set_beatport_account(account);
+        }
+        let dl = app.beatport_downloads();
+        self.as_mut().set_beatport_downloading(dl.running);
+        if dl.running {
+            let finished = dl.done + dl.failed;
+            let text = format!(
+                "Downloading {} / {} · {:.1} MB/s",
+                (finished + 1).min(dl.total),
+                dl.total,
+                dl.bytes_per_sec / 1_048_576.0
+            );
+            if *self.beatport_download_text() != QString::from(&text) {
+                self.as_mut().set_beatport_download_text(QString::from(text));
+            }
+            let fraction = (finished as f64 + f64::from(dl.current)) / dl.total.max(1) as f64;
+            self.as_mut().set_beatport_download_fraction(fraction.min(1.0));
+        }
 
         for ev in app.poll_ui_events() {
             match ev {
                 UiEvent::Status(t) => self.as_mut().set_status(QString::from(t)),
+                UiEvent::BeatportChanged => {
+                    let r = *self.beatport_revision() + 1;
+                    self.as_mut().set_beatport_revision(r);
+                }
+                UiEvent::BeatportDownloads => {
+                    let r = *self.beatport_download_revision() + 1;
+                    self.as_mut().set_beatport_download_revision(r);
+                }
                 UiEvent::LibraryChanged => {
                     let r = *self.library_revision() + 1;
                     self.as_mut().set_library_revision(r);
@@ -643,7 +797,7 @@ impl qobject::AppController {
         let s = app.settings();
         let roots: Vec<String> = s.library_roots.iter().map(|r| json_str(&r.display().to_string())).collect();
         QString::from(format!(
-            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{}}}"#,
+            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{},"beatport_quality":{},"beatport_cache_mb":{}}}"#,
             s.audio_device.as_deref().map_or("null".into(), json_str),
             s.buffer_frames.map_or("null".into(), |b| b.to_string()),
             s.tempo_range,
@@ -675,7 +829,9 @@ impl qobject::AppController {
             json_str(&s.mixer_channels),
             s.suggestions,
             s.browser_row_size,
-            s.browser_sidebar_width
+            s.browser_sidebar_width,
+            json_str(&s.beatport_quality),
+            s.beatport_cache_mb
         ))
     }
 
@@ -729,6 +885,10 @@ impl qobject::AppController {
             "header_meter" => s.header_meter = b,
             "show_mixer" => s.show_mixer = b,
             "suggestions" => s.suggestions = b,
+            "beatport_quality" => s.beatport_quality = rille_app::BeatportQuality::from_name(&v).name().to_owned(),
+            "beatport_cache_mb" => {
+                s.beatport_cache_mb = v.parse::<u32>().unwrap_or(s.beatport_cache_mb).clamp(512, 1 << 20)
+            }
             _ => return,
         }
         app.set_settings(s);

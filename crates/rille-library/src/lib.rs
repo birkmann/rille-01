@@ -16,7 +16,7 @@ mod schema;
 mod search;
 
 pub use library::{CoverSize, Library, TrackRow, cover_thumb};
-pub use meta::{SUPPORTED_EXTENSIONS, is_supported, parse_key};
+pub use meta::{SUPPORTED_EXTENSIONS, Tags, is_supported, parse_key};
 pub use nml::NmlReport;
 pub use playlists::{HistoryEntry, HistorySession, PlaylistNode};
 pub use scan::{ImportReport, ScanError, ScanProgress, ScanReport};

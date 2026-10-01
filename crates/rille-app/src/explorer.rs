@@ -221,6 +221,8 @@ pub fn file_row(path: &Path) -> TrackRow {
         analysis_version: None,
         analysis_failed: false,
         missing: false,
+        beatport_id: None,
+        beatport_offline: false,
     }
 }
 

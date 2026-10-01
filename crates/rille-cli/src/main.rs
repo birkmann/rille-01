@@ -7,11 +7,13 @@
 //! rille-cli click <out-dir> <files...>           track + metronome click WAV per file
 //! rille-cli eval <files or dirs...> [--mixxx <mixxxdb.sqlite>] [--bpm-range lo:hi]
 //! rille-cli audit <files or dirs...>             grid vs audio, independent of the analyzer
+//! rille-cli beatport <command>                   Beatport sign-in, search, lists, downloads
 //! ```
 //! `eval` compares BPM and key with the files' tags and, when given, with a
 //! Mixxx database (BPM and first-beat phase).
 
 mod audit;
+mod beatport;
 mod eval;
 mod mixxx;
 mod plot;
@@ -29,6 +31,10 @@ fn main() {
     let Some(cmd) = args.first() else {
         usage();
     };
+    if cmd == "beatport" {
+        beatport::run(&args[1..]);
+        return;
+    }
     let mut files = Vec::new();
     let mut mixxx: Option<PathBuf> = None;
     let mut buffer: Option<u32> = None;

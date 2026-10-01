@@ -6,7 +6,7 @@ use lofty::prelude::*;
 use lofty::tag::{Tag, TagType};
 use rille_core::track::ANALYZER_VERSION;
 use rille_core::{BeatGrid, BeatMap, CueKind, CuePoint, GridFlags, GridSource, Key, TrackAnalysis, TrackCues};
-use rille_library::{CoverSize, Error, Library, ScanProgress};
+use rille_library::{CoverSize, Error, Library, ScanProgress, Tags};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -108,7 +108,7 @@ fn schema_create_and_reopen() {
     }
     let conn = rusqlite::Connection::open(&db).unwrap();
     let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 4);
     let mode: String = conn.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap();
     assert_eq!(mode, "wal");
 
@@ -120,6 +120,73 @@ fn schema_create_and_reopen() {
     let mut lib = Library::open_in_memory(&cache).unwrap();
     assert!(lib.tracks().unwrap().is_empty());
     assert!(lib.add_root(&dir.path().join("nope")).is_err());
+}
+
+#[test]
+fn streamed_tracks_keep_their_data_and_never_relink() {
+    let mut env = Env::new();
+    let cached = env.dir.path().join("cache/beatport/42.wav");
+    let tags = Tags {
+        title: "Polymorph (Original Mix)".into(),
+        artist: "Easy Peelers".into(),
+        label: "Drumcode".into(),
+        bpm: Some(126.0),
+        key: Some(Key::new(9, true)),
+        duration_secs: 3.0,
+        ..Tags::default()
+    };
+    // Listed before the file is downloaded.
+    let id = env.lib.upsert_streamed(42, &cached, &tags, Some(&png(300, 300))).unwrap();
+    let row = env.lib.track(id).unwrap().unwrap();
+    assert_eq!((row.beatport_id, row.missing, row.title.as_str()), (Some(42), true, "Polymorph (Original Mix)"));
+    assert!(env.lib.cover_path(id, CoverSize::Large).is_some());
+    assert_eq!(env.lib.streamed_track(42).unwrap(), Some(id));
+    assert_eq!(env.lib.streamed_track(43).unwrap(), None);
+
+    // Downloaded (under another name than planned): the file's properties
+    // join the catalog's tags.
+    let cached = env.dir.path().join("cache/beatport/42.other.wav");
+    write_wav(&cached, 3.0, 440.0);
+    env.lib.set_streamed_file(id, &cached).unwrap();
+    let row = env.lib.track(id).unwrap().unwrap();
+    assert!(!row.missing && row.file_size > 0);
+    assert_eq!((row.sample_rate, row.label.as_str(), &row.path), (Some(44100), "Drumcode", &cached));
+
+    // Analysis, cues and the file survive a later catalog update; same row.
+    env.lib.set_analysis(id, &analysis(128.0, ANALYZER_VERSION)).unwrap();
+    let cues = TrackCues { main_cue_secs: 1.5, ..TrackCues::default() };
+    env.lib.set_cues(id, &cues).unwrap();
+    let planned = env.dir.path().join("cache/beatport/42.wav");
+    let again = env.lib.upsert_streamed(42, &planned, &Tags { bpm: Some(100.0), ..tags.clone() }, None).unwrap();
+    assert_eq!(again, id);
+    let row = env.lib.track(id).unwrap().unwrap();
+    assert!((row.bpm.unwrap() - 128.0).abs() < 1e-6, "analysis bpm wins");
+    assert_eq!(env.lib.cues(id).unwrap(), cues);
+    assert!(row.has_cover, "the earlier cover stays");
+    assert_eq!((&row.path, row.missing), (&cached, false));
+
+    // An evicted cache file never lets a local copy take over the row.
+    let local = env.music().join("copy.wav");
+    std::fs::copy(&cached, &local).unwrap();
+    std::fs::remove_file(&cached).unwrap();
+    env.lib.set_streamed_file(id, &cached).unwrap();
+    assert!(env.lib.track(id).unwrap().unwrap().missing);
+    let local_id = env.lib.import_file(&local).unwrap();
+    assert_ne!(local_id, id);
+    assert_eq!(env.lib.track(id).unwrap().unwrap().beatport_id, Some(42));
+    assert_eq!(env.lib.track(local_id).unwrap().unwrap().beatport_id, None);
+    assert_eq!(env.lib.streamed_tracks(false).unwrap(), vec![id]);
+
+    // Kept offline: listed as offline only while the file is there.
+    env.lib.set_streamed_offline(&[id, local_id], true).unwrap();
+    assert!(env.lib.track(id).unwrap().unwrap().beatport_offline);
+    assert!(!env.lib.track(local_id).unwrap().unwrap().beatport_offline, "local files are not streamed");
+    assert!(env.lib.streamed_tracks(true).unwrap().is_empty(), "file gone");
+    write_wav(&cached, 3.0, 440.0);
+    env.lib.set_streamed_file(id, &cached).unwrap();
+    assert_eq!(env.lib.streamed_tracks(true).unwrap(), vec![id]);
+    env.lib.set_streamed_offline(&[id], false).unwrap();
+    assert!(env.lib.streamed_tracks(true).unwrap().is_empty());
 }
 
 #[test]

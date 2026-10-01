@@ -274,7 +274,7 @@ fn folder_cover(track: &Path) -> Option<Vec<u8>> {
 
 /// Writes JPEG thumbnails for an image (deduplicated by content hash) and
 /// returns the hash.
-fn make_cover(bytes: &[u8], cache_dir: &Path) -> Result<String, String> {
+pub(crate) fn make_cover(bytes: &[u8], cache_dir: &Path) -> Result<String, String> {
     static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
     let cover = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(bytes));
     if COVER_SIZES.iter().all(|px| cover_file(cache_dir, &cover, *px).exists()) {

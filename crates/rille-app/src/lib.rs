@@ -4,6 +4,7 @@
 
 pub mod analysis;
 mod audio;
+pub mod beatport;
 mod engine_slot;
 pub mod explorer;
 pub mod remix;
@@ -31,9 +32,11 @@ use rille_midi::{LearnSession, Mapping, MappingStore, MidiEvent, MidiManager, po
 
 pub use analysis::{AnalysisQueue, AnalysisState, Priority};
 pub use audio::AudioStatus;
+pub use beatport::{BeatportList, BeatportStatus, CacheUsage, DownloadState, DownloadsStatus};
 use engine_slot::EngineSlot;
 use explorer::FolderTree;
 pub use remix::{RemixCell, RemixSet};
+pub use rille_beatport::Quality as BeatportQuality;
 pub use rille_library::{HistorySession, PlaylistNode};
 pub use settings::{KeyNotation, MixingMode, Paths, Settings, WaveformStyle};
 pub use suggest::Suggestion;
@@ -62,6 +65,10 @@ pub enum UiEvent {
     AudioChanged,
     /// The track suggestions are for changed (see [`App::suggestion_reference`]).
     SuggestionsChanged,
+    /// Beatport sign-in, a list or the playlists changed.
+    BeatportChanged,
+    /// The download queue moved on (rows' indicators, the status bar).
+    BeatportDownloads,
 }
 
 /// The analysis queue's state for the status bar.
@@ -103,6 +110,8 @@ pub struct DeckInfo {
     pub remix: Option<Arc<RemixSet>>,
     pub cover: Option<PathBuf>,
     pub loading: bool,
+    /// A streamed track is being downloaded.
+    pub download: Option<beatport::Download>,
     pub analyzing: bool,
     pub error: Option<String>,
     /// Bumped on every change.
@@ -140,6 +149,10 @@ pub enum Source {
     History(i64),
     /// Tracks that fit the playing one, best first (see [`suggest`]).
     Suggestions,
+    /// Tracks streamed from Beatport, most recent first.
+    BeatportRecent,
+    /// Streamed tracks kept offline (downloaded), most recent first.
+    BeatportOffline,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -213,6 +226,7 @@ pub struct App {
     learn: Arc<Mutex<Option<LearnSession>>>,
     last_tick: Mutex<Instant>,
     shutdown: Arc<AtomicBool>,
+    beatport: beatport::BeatportState,
 }
 
 /// Options for [`App::start`].
@@ -257,6 +271,7 @@ impl App {
             learn: Arc::new(Mutex::new(None)),
             last_tick: Mutex::new(Instant::now()),
             shutdown: Arc::new(AtomicBool::new(false)),
+            beatport: beatport::BeatportState::new(paths.beatport_token()),
             paths,
         });
         app.restart_audio(opts.audio);
@@ -660,6 +675,31 @@ impl App {
     }
 
     fn load_worker(self: Arc<Self>, deck: u8, id: TrackId, seq: u64, path: PathBuf) {
+        // A streamed track whose file is not in the cache downloads first.
+        let streamed = self.library.lock().expect("library lock").track(id).ok().flatten();
+        let path = match streamed.filter(|r| r.beatport_id.is_some()) {
+            Some(row) => match self.streamed_file(&row, Some((deck, seq))) {
+                Ok(p) => {
+                    // The downloaded file may bring the cover the catalog had not.
+                    let cover = self.library.lock().expect("library lock").cover_path(id, CoverSize::Large);
+                    self.update_deck(deck, seq, |i| {
+                        i.path = Some(p.clone());
+                        i.cover = i.cover.take().or(cover);
+                    });
+                    p
+                }
+                Err(e) => {
+                    if self.update_deck(deck, seq, |i| {
+                        i.loading = false;
+                        i.error = Some(e.clone());
+                    }) {
+                        self.notify(UiEvent::Status(format!("Cannot stream {}: {e}", row.title)));
+                    }
+                    return;
+                }
+            },
+            None => path,
+        };
         let audio = match rille_decode::decode_file(&path, None, &mut |_| {}) {
             Ok(a) => a,
             Err(e) => {
@@ -819,6 +859,8 @@ impl App {
             Source::Playlist(p) => self.library.lock().expect("library lock").playlist_tracks(p).ok(),
             Source::History(h) => self.library.lock().expect("library lock").history_tracks(h).ok(),
             Source::Suggestions => suggested,
+            Source::BeatportRecent => self.library.lock().expect("library lock").streamed_tracks(false).ok(),
+            Source::BeatportOffline => self.library.lock().expect("library lock").streamed_tracks(true).ok(),
         };
         let matching: Option<HashSet<usize>> =
             (!search.trim().is_empty()).then(|| t.index.search(search).into_iter().collect());
@@ -831,18 +873,24 @@ impl App {
                 .filter(|i| matching.as_ref().is_none_or(|m| m.contains(i)))
                 .map(|i| t.rows[i].clone())
                 .collect(),
+            // The collection is the local files; streamed tracks have their own list.
             None => t
                 .rows
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| matching.as_ref().is_none_or(|m| m.contains(i)))
+                .filter(|(i, r)| r.beatport_id.is_none() && matching.as_ref().is_none_or(|m| m.contains(i)))
                 .map(|(_, r)| r.clone())
                 .collect(),
         };
-        if !matches!(source, Source::Playlist(_) | Source::History(_) | Source::Suggestions)
-            || descending
-            || sort != SortKey::Artist
-        {
+        let ordered = matches!(
+            source,
+            Source::Playlist(_)
+                | Source::History(_)
+                | Source::Suggestions
+                | Source::BeatportRecent
+                | Source::BeatportOffline
+        );
+        if !ordered || descending || sort != SortKey::Artist {
             sort_rows(&mut rows, sort, descending);
         }
         rows
@@ -1157,9 +1205,14 @@ impl App {
         }
     }
 
-    /// Number of tracks in the collection.
+    /// Number of tracks in the collection (local files, not streamed ones).
     pub fn track_count(&self) -> usize {
-        self.tracks.read().expect("tracks lock").rows.len()
+        self.tracks.read().expect("tracks lock").rows.iter().filter(|r| r.beatport_id.is_none()).count()
+    }
+
+    /// Number of tracks streamed from Beatport.
+    pub fn streamed_count(&self) -> usize {
+        self.tracks.read().expect("tracks lock").rows.iter().filter(|r| r.beatport_id.is_some()).count()
     }
 
     /// Back to the analyzer's grid for these tracks (edits and imported
@@ -1329,8 +1382,14 @@ impl App {
     /// Analyzes one collection track and stores the result; a failure is
     /// recorded so the file is not retried until the analyzer changes.
     fn analyze_track(&self, id: TrackId) -> bool {
-        let path = self.library.lock().expect("library lock").track(id).ok().flatten().map(|r| r.path);
-        let Some(path) = path else { return false };
+        let row = self.library.lock().expect("library lock").track(id).ok().flatten();
+        let Some(row) = row else { return false };
+        // A streamed track out of the cache is analyzed when it is loaded
+        // again; that is no failure of the analyzer.
+        if row.beatport_id.is_some() && !row.path.exists() {
+            return false;
+        }
+        let path = row.path;
         let cfg = analysis_config(&self.settings());
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rille_analysis::analyze_file(&path, &cfg, None)));

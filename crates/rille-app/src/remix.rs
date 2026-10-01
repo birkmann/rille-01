@@ -373,11 +373,19 @@ impl App {
             self.notify(UiEvent::Status(format!("Remix deck {} is full", letter(deck))));
             return;
         };
-        let Ok(Some(row)) = self.library.lock().expect("library lock").track(id) else { return };
+        let Ok(Some(mut row)) = self.library.lock().expect("library lock").track(id) else { return };
         let (app, seq, fallback_bpm) = (self.clone(), info.engine_id, set.bpm);
         std::thread::Builder::new()
             .name(format!("remix-cell-{}", letter(deck)))
             .spawn(move || {
+                // A streamed track out of the cache downloads first.
+                match app.streamed_file(&row, None) {
+                    Ok(p) => row.path = p,
+                    Err(e) => {
+                        app.notify(UiEvent::Status(format!("Cannot stream {}: {e}", row.title)));
+                        return;
+                    }
+                }
                 let audio = match rille_decode::decode_file(&row.path, None, &mut |_| {}) {
                     Ok(a) => a,
                     Err(e) => {

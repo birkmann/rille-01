@@ -1,7 +1,7 @@
 //! The [`Library`] handle: opening, track rows, single-file import and the
 //! per-track data written by analysis and the user.
 
-use crate::meta::{self, FileInfo};
+use crate::meta::{self, FileInfo, Tags};
 use crate::{Error, Result, TrackId, io_err, now, schema};
 use rille_core::track::ANALYZER_VERSION;
 use rille_core::{BeatGrid, BeatMap, GridFlags, GridSource, Key, TrackAnalysis, TrackCues};
@@ -59,6 +59,12 @@ pub struct TrackRow {
     /// The current analyzer failed on this file.
     pub analysis_failed: bool,
     pub missing: bool,
+    /// Set for a track streamed from Beatport; `path` is its cache file,
+    /// which may be gone (`missing`) until the track is loaded again.
+    pub beatport_id: Option<i64>,
+    /// A streamed track downloaded to keep offline: its file is never
+    /// removed to make room.
+    pub beatport_offline: bool,
 }
 
 impl TrackRow {
@@ -88,7 +94,7 @@ impl CoverSize {
 const TRACK_SELECT: &str = "SELECT t.id, t.path, t.title, t.artist, t.album, t.remixer, t.label, t.genre, t.comment,
     t.year, t.duration, t.bpm, t.musical_key, t.rating, t.color, t.play_count, t.last_played, t.date_added,
     t.file_size, t.bitrate, t.sample_rate, t.cover, g.confidence, g.flags, g.locked,
-    a.analyzer_version, e.track_id IS NOT NULL, t.missing
+    a.analyzer_version, e.track_id IS NOT NULL, t.missing, t.beatport_id, t.beatport_offline
     FROM tracks t LEFT JOIN beatgrids g ON g.track_id = t.id LEFT JOIN analysis a ON a.track_id = t.id
     LEFT JOIN analysis_errors e ON e.track_id = t.id AND e.analyzer_version >= ?V";
 
@@ -134,6 +140,8 @@ fn track_row(r: &Row) -> rusqlite::Result<TrackRow> {
         analysis_version: r.get(25)?,
         analysis_failed: r.get(26)?,
         missing: r.get(27)?,
+        beatport_id: r.get(28)?,
+        beatport_offline: r.get(29)?,
     })
 }
 
@@ -249,6 +257,116 @@ impl Library {
         let cover: String =
             self.conn.query_row("SELECT cover FROM tracks WHERE id = ?1", [id], |r| r.get(0)).ok().flatten()?;
         Some(meta::cover_file(&self.cache_dir, &cover, size.px())).filter(|p| p.exists())
+    }
+
+    // -- Streamed tracks ---------------------------------------------------
+
+    /// Adds or updates a track streamed from Beatport, tagged from the
+    /// catalog. A new track's cache file will be `path`; a known one keeps
+    /// its file (see [`Self::set_streamed_file`]). Bpm and key from analysis
+    /// win over the catalog's.
+    pub fn upsert_streamed(
+        &mut self,
+        beatport_id: i64,
+        path: &Path,
+        tags: &Tags,
+        cover: Option<&[u8]>,
+    ) -> Result<TrackId> {
+        let cover = cover.and_then(|b| meta::make_cover(b, &self.cache_dir).ok());
+        let tx = self.conn.transaction()?;
+        let existing: Option<TrackId> =
+            tx.query_row("SELECT id FROM tracks WHERE beatport_id = ?1", [beatport_id], |r| r.get(0)).optional()?;
+        let id = match existing {
+            Some(id) => id,
+            None => {
+                tx.execute(
+                    "INSERT INTO tracks (path, file_size, mtime, content_hash, date_added, beatport_id, missing)
+                     VALUES (?1, 0, 0, 0, ?2, ?3, ?4)",
+                    params![path_blob(path), now(), beatport_id, !path.exists()],
+                )?;
+                tx.last_insert_rowid()
+            }
+        };
+        let t = tags;
+        tx.execute(
+            "UPDATE tracks SET title = ?2, artist = ?3, album = ?4, remixer = ?5, label = ?6, genre = ?7,
+             year = ?8, duration = CASE WHEN duration > 0 THEN duration ELSE ?9 END, bpm = COALESCE(bpm, ?10),
+             musical_key = COALESCE(musical_key, ?11), cover = COALESCE(?12, cover) WHERE id = ?1",
+            params![
+                id,
+                t.title,
+                t.artist,
+                t.album,
+                t.remixer,
+                t.label,
+                t.genre,
+                t.year,
+                t.duration_secs,
+                t.bpm,
+                t.key.map(u8::from),
+                cover,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// Records a streamed track's cache file `path` after a download (size,
+    /// audio properties), or that it is gone.
+    pub fn set_streamed_file(&mut self, id: TrackId, path: &Path) -> Result<()> {
+        let n = self.conn.execute(
+            "UPDATE tracks SET path = ?2, missing = ?3 WHERE id = ?1 AND beatport_id IS NOT NULL",
+            params![id, path_blob(path), !path.exists()],
+        )?;
+        if n == 0 {
+            return Err(Error::NoTrack(id));
+        }
+        if !path.exists() {
+            return Ok(());
+        }
+        // The catalog's tags stay; the file adds what only it knows.
+        let info = meta::read_file(path, &self.cache_dir)?;
+        let t = &info.tags;
+        self.conn.execute(
+            "UPDATE tracks SET file_size = ?2, mtime = ?3, content_hash = ?4, bitrate = ?5, sample_rate = ?6,
+             duration = CASE WHEN ?7 > 0 THEN ?7 ELSE duration END, cover = COALESCE(cover, ?8), missing = 0
+             WHERE id = ?1",
+            params![id, info.size, info.mtime, info.hash as i64, t.bitrate, t.sample_rate, t.duration_secs, info.cover],
+        )?;
+        Ok(())
+    }
+
+    /// The collection row of a streamed Beatport track.
+    pub fn streamed_track(&self, beatport_id: i64) -> Result<Option<TrackId>> {
+        Ok(self
+            .conn
+            .query_row("SELECT id FROM tracks WHERE beatport_id = ?1", [beatport_id], |r| r.get(0))
+            .optional()?)
+    }
+
+    /// Streamed tracks (with `offline_only`, those kept offline whose file
+    /// is there), most recently played or added first.
+    pub fn streamed_tracks(&self, offline_only: bool) -> Result<Vec<TrackId>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM tracks WHERE beatport_id IS NOT NULL
+             AND (?1 = 0 OR (beatport_offline = 1 AND missing = 0))
+             ORDER BY MAX(COALESCE(last_played, 0), date_added) DESC, id DESC",
+        )?;
+        let ids = stmt.query_map([offline_only], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(ids)
+    }
+
+    /// Keeps streamed tracks offline (their files are never removed to make
+    /// room), or lets them go again.
+    pub fn set_streamed_offline(&mut self, ids: &[TrackId], offline: bool) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for id in ids {
+            tx.execute(
+                "UPDATE tracks SET beatport_offline = ?2 WHERE id = ?1 AND beatport_id IS NOT NULL",
+                params![id, offline],
+            )?;
+        }
+        Ok(tx.commit()?)
     }
 
     // -- Analysis and grids ------------------------------------------------
@@ -493,8 +611,9 @@ pub(crate) fn store_file(conn: &Connection, info: &FileInfo) -> Result<(TrackId,
         Some(id) => (id, Stored::Updated),
         None => {
             // A track with the same content whose file is gone was moved here.
-            let mut stmt =
-                conn.prepare_cached("SELECT id, path FROM tracks WHERE content_hash = ?1 AND file_size = ?2")?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT id, path FROM tracks WHERE content_hash = ?1 AND file_size = ?2 AND beatport_id IS NULL",
+            )?;
             let candidates: Vec<(TrackId, Vec<u8>)> = stmt
                 .query_map(params![info.hash as i64, info.size], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<rusqlite::Result<_>>()?;

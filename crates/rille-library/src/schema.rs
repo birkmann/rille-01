@@ -102,6 +102,15 @@ CREATE TABLE analysis_errors (
     at INTEGER NOT NULL
 );
 "#,
+    r#"
+-- Tracks streamed from Beatport: the file is a cache copy.
+ALTER TABLE tracks ADD COLUMN beatport_id INTEGER;
+CREATE UNIQUE INDEX tracks_beatport ON tracks(beatport_id) WHERE beatport_id IS NOT NULL;
+"#,
+    r#"
+-- Streamed tracks downloaded to keep offline: never removed to make room.
+ALTER TABLE tracks ADD COLUMN beatport_offline INTEGER NOT NULL DEFAULT 0;
+"#,
 ];
 
 pub const VERSION: u32 = MIGRATIONS.len() as u32;

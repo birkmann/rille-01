@@ -643,7 +643,7 @@ impl qobject::AppController {
         let s = app.settings();
         let roots: Vec<String> = s.library_roots.iter().map(|r| json_str(&r.display().to_string())).collect();
         QString::from(format!(
-            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{}}}"#,
+            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{}}}"#,
             s.audio_device.as_deref().map_or("null".into(), json_str),
             s.buffer_frames.map_or("null".into(), |b| b.to_string()),
             s.tempo_range,
@@ -674,7 +674,8 @@ impl qobject::AppController {
             s.mixing.name(),
             json_str(&s.mixer_channels),
             s.suggestions,
-            s.browser_row_size
+            s.browser_row_size,
+            s.browser_sidebar_width
         ))
     }
 
@@ -702,6 +703,9 @@ impl qobject::AppController {
             }
             "browser_columns" => s.browser_columns = v.clone(),
             "browser_row_size" => s.browser_row_size = v.parse::<u8>().unwrap_or(0).min(2),
+            "browser_sidebar_width" => {
+                s.browser_sidebar_width = f.map_or(s.browser_sidebar_width, |w| w.round().clamp(160.0, 800.0) as u16);
+            }
             "remix_decks" => s.remix_decks = v.to_uppercase().chars().filter(|c| ('A'..='D').contains(c)).collect(),
             "bpm_min" => s.bpm_min = f.unwrap_or(s.bpm_min),
             "bpm_max" => s.bpm_max = f.unwrap_or(s.bpm_max),

@@ -61,6 +61,10 @@ Item {
     readonly property int rowHeight: rowHeights[rowSize] || 30
     readonly property int coverSize: coverSizes[rowSize] || 26
     property real viewWidth: 800
+    // Width of the source tree; drag the gap next to it, saved in the settings.
+    property real sidebarWidth: 250
+    readonly property real sidebarMin: 160
+    readonly property real sidebarMax: Math.max(sidebarMin, Math.min(800, width - 400))
     // The shown columns with their definitions. Text columns (flex) share any
     // spare width in proportion to their set widths, so the table looks
     // the same at every window size; the others keep their width.
@@ -124,6 +128,7 @@ Item {
         saved = saved.filter(l => l && columnDef(l.key))
         layout = saved.length ? saved : defaultColumns()
         rowSize = Number(JSON.parse(AppController.settingsJson()).browser_row_size) || 0
+        sidebarWidth = Number(JSON.parse(AppController.settingsJson()).browser_sidebar_width) || 250
     }
     function saveLayout() {
         AppController.setSetting("browser_columns", JSON.stringify(layout))
@@ -310,11 +315,11 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: Theme.gap
+            spacing: 0
 
             // --- Source tree ------------------------------------------------
             Panel {
-                Layout.preferredWidth: 250
+                Layout.preferredWidth: Math.max(browser.sidebarMin, Math.min(browser.sidebarMax, browser.sidebarWidth))
                 Layout.fillHeight: true
 
                 ColumnLayout {
@@ -460,6 +465,44 @@ Item {
                             implicitHeight: 24
                             onClicked: newName.accepted()
                         }
+                    }
+                }
+            }
+
+            // Drag to resize the source tree; double-click for the default width.
+            Item {
+                Layout.preferredWidth: Theme.gap
+                Layout.fillHeight: true
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 2
+                    height: parent.height
+                    radius: 1
+                    color: splitter.pressed ? Theme.textDim : Theme.knobEdge
+                    visible: splitter.containsMouse || splitter.pressed
+                }
+                MouseArea {
+                    id: splitter
+                    property real startX: 0
+                    property real startWidth: 0
+                    anchors.fill: parent
+                    anchors.leftMargin: -3
+                    anchors.rightMargin: -3
+                    hoverEnabled: true
+                    cursorShape: Qt.SplitHCursor
+                    onPressed: mouse => {
+                        startX = mapToItem(browser, mouse.x, 0).x
+                        startWidth = Math.max(browser.sidebarMin, Math.min(browser.sidebarMax, browser.sidebarWidth))
+                    }
+                    onPositionChanged: mouse => {
+                        if (pressed)
+                            browser.sidebarWidth = Math.max(browser.sidebarMin, Math.min(browser.sidebarMax,
+                                startWidth + mapToItem(browser, mouse.x, 0).x - startX))
+                    }
+                    onReleased: AppController.setSetting("browser_sidebar_width", String(Math.round(browser.sidebarWidth)))
+                    onDoubleClicked: {
+                        browser.sidebarWidth = 250
+                        AppController.setSetting("browser_sidebar_width", "250")
                     }
                 }
             }
@@ -691,14 +734,14 @@ Item {
                         icon: AppController.analysisPaused ? "play" : "pause"
                         implicitWidth: 24
                         implicitHeight: 20
-                        tip: AppController.analysisPaused ? "Resume the analysis" : "Pause the analysis"
+                        tip: AppController.analysisPaused ? "Resume the analysis" : "Pause the analysis (stays paused after a restart until resumed)"
                         onClicked: AppController.pauseAnalysis(!AppController.analysisPaused)
                     }
                     DjButton {
                         icon: "x"
                         implicitWidth: 24
                         implicitHeight: 20
-                        tip: "Cancel the analysis"
+                        tip: "Cancel the analysis and turn off background analysis (Settings → Analyze in the background turns it on again)"
                         onClicked: AppController.cancelAnalysis()
                     }
                 }

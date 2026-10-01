@@ -294,3 +294,28 @@ fn suggestions_follow_the_loaded_track() {
     assert!(suggested().is_empty());
     app.shutdown();
 }
+
+#[test]
+fn pause_and_cancel_stick() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(dir.path());
+    assert!(app.settings().background_analysis);
+
+    // A pause is kept over a restart.
+    app.set_analysis_paused(true);
+    app.shutdown();
+    drop(app);
+    let app = start(dir.path());
+    assert!(app.settings().analysis_paused && app.analysis_progress().paused);
+    app.set_analysis_paused(false);
+    assert!(!app.analysis_progress().paused);
+
+    // Cancel turns the background pass off, also after a restart.
+    app.cancel_analysis();
+    assert!(!app.settings().background_analysis);
+    app.shutdown();
+    drop(app);
+    let app = start(dir.path());
+    assert!(!app.settings().background_analysis && !app.analysis_progress().paused);
+    app.shutdown();
+}

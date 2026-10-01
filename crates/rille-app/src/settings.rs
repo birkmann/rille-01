@@ -172,8 +172,11 @@ pub struct Settings {
     pub waveform_mixer: bool,
     /// The scrolling waveform dims with the channel fader and crossfader.
     pub waveform_fader_dim: bool,
-    /// Analyze new tracks in the background.
+    /// Analyze new tracks in the background. Cancelling the analysis turns
+    /// it off.
     pub background_analysis: bool,
+    /// The analysis queue is paused (kept over restarts until resumed).
+    pub analysis_paused: bool,
     /// Main output meter in the title bar.
     pub header_meter: bool,
     /// The on-screen mixer and crossfader; off leaves the room to the decks
@@ -189,6 +192,8 @@ pub struct Settings {
     /// Height of the browser's track rows and their covers: 0 compact,
     /// 1 medium, 2 large.
     pub browser_row_size: u8,
+    /// Width of the browser's source tree (left column) in pixels.
+    pub browser_sidebar_width: u16,
     /// The browser lists tracks that fit the playing one (tempo, key,
     /// genre) under "Suggestions".
     pub suggestions: bool,
@@ -219,11 +224,13 @@ impl Default for Settings {
             waveform_mixer: false,
             waveform_fader_dim: false,
             background_analysis: true,
+            analysis_paused: false,
             header_meter: false,
             show_mixer: true,
             midi_mappings: BTreeMap::new(),
             browser_columns: String::new(),
             browser_row_size: 0,
+            browser_sidebar_width: 250,
             suggestions: false,
         }
     }

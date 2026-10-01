@@ -53,7 +53,9 @@ automatically and precisely enough that sync never drifts.**
   subfolders) or add them as music folders. Analysis runs in the background
   with priorities (loaded decks first, then what you asked for, then the rest
   of the collection); progress, pause and cancel are in the status bar, and
-  files that cannot be analyzed are not retried.
+  files that cannot be analyzed are not retried. A pause lasts until you
+  resume, also over restarts; cancel turns the background analysis off until
+  you turn it on again in Settings.
 - **Controllers:** MIDI mappings (bundled: Pioneer DDJ-400, Hercules DJControl
   Inpulse 200, Allen & Heath Xone:K2 as a 4-deck controller, and a documented
   generic template), the Native Instruments Traktor Kontrol Z1, X1 MK2 and F1
@@ -132,8 +134,8 @@ the score.
 10/1 ms, ×2/÷2 fix half/double tempo, BEAT HERE puts a beat on the play
 position, BAR START marks the first beat of a bar, GRID START does both at
 once (put the play position on the first kick and press it: the grid snaps
-onto the kick and its bars start there), TAP sets the tempo by tapping, the lock protects the grid from re-analysis, RESET returns to the
-analyzed grid. Corrections are saved immediately.
+onto the kick and its bars start there), TAP sets the tempo by tapping, the
+lock protects the grid from re-analysis, RESET returns to the analyzed grid. Corrections are saved immediately.
 
 **Controllers:** Settings → Controllers lists MIDI inputs; choose a mapping or
 use **MIDI LEARN** (click a control on screen, then move the control on the

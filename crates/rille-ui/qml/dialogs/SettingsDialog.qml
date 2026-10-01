@@ -300,7 +300,7 @@ Popup {
                             title: "Analysis"
                             SettingRow {
                                 label: "Analyze in the background"
-                                hint: "New and changed tracks are analyzed automatically."
+                                hint: "New and changed tracks are analyzed automatically. Cancelling the analysis turns this off."
                                 ToggleSwitch { checked: !!dialog.s.background_analysis; onToggled: dialog.set("background_analysis", checked) }
                             }
                             SettingRow {

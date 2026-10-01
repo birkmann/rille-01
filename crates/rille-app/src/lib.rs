@@ -264,6 +264,7 @@ impl App {
         if opts.midi && app.settings().midi {
             app.start_midi();
         }
+        app.queue.set_paused(app.settings().analysis_paused);
         app.clone().spawn_analysis_workers(kick_rx);
         if app.settings().background_analysis {
             let _ = app.analysis_kick.send(());
@@ -301,6 +302,9 @@ impl App {
         }
         if old.remix_decks != s.remix_decks {
             self.apply_deck_types();
+        }
+        if !old.background_analysis && s.background_analysis {
+            let _ = self.analysis_kick.send(());
         }
         if old.suggestions != s.suggestions {
             // The browser shows or hides its Suggestions entry.
@@ -1065,13 +1069,31 @@ impl App {
         }
     }
 
-    pub fn cancel_analysis(&self) {
+    /// Drops the waiting jobs and turns the background pass off, so they
+    /// don't come back until the user turns it on again.
+    pub fn cancel_analysis(self: &Arc<Self>) {
+        // Off before clearing, so the planner can't refill the queue.
+        let mut s = self.settings();
+        let was_on = s.background_analysis;
+        s.background_analysis = false;
+        s.analysis_paused = false;
+        self.set_settings(s);
         self.queue.cancel();
+        self.queue.set_paused(false);
+        if was_on {
+            self.notify(UiEvent::Status(
+                "Analysis cancelled; background analysis is off (Settings → Analyze in the background)".into(),
+            ));
+        }
         self.notify_progress();
     }
 
-    pub fn set_analysis_paused(&self, paused: bool) {
+    /// Pauses or resumes the queue; a pause lasts over restarts.
+    pub fn set_analysis_paused(self: &Arc<Self>, paused: bool) {
         self.queue.set_paused(paused);
+        let mut s = self.settings();
+        s.analysis_paused = paused;
+        self.set_settings(s);
         self.notify_progress();
     }
 

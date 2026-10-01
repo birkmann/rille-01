@@ -42,6 +42,7 @@ Item {
         { key: "added", title: "Added", kind: "text", role: "dateAdded", width: 92, sort: "added", tone: "dim" },
         { key: "played", title: "Last played", kind: "text", role: "lastPlayed", width: 120, sort: "played", tone: "dim" },
         { key: "plays", title: "Plays", kind: "text", role: "playCount", width: 56, sort: "plays", tone: "dim", align: "right" },
+        { key: "match", title: "Match", name: "Match (suggestions)", kind: "text", role: "match", width: 60, sort: "", tone: "dim", align: "right" },
         { key: "file", title: "File", flex: true, kind: "text", role: "fileName", width: 240, sort: "file", tone: "faint" },
         { key: "path", title: "Path", flex: true, kind: "text", role: "filePath", width: 340, sort: "path", tone: "faint" }
     ]
@@ -53,6 +54,12 @@ Item {
     ]
     // Shown columns in order: [{ key, width }], saved in the settings.
     property var layout: []
+    // Row size: 0 compact, 1 medium, 2 large (rows and cover art grow).
+    property int rowSize: 0
+    readonly property var rowHeights: [30, 44, 68]
+    readonly property var coverSizes: [26, 40, 64]
+    readonly property int rowHeight: rowHeights[rowSize] || 30
+    readonly property int coverSize: coverSizes[rowSize] || 26
     property real viewWidth: 800
     // The shown columns with their definitions. Text columns (flex) share any
     // spare width in proportion to their set widths, so the table looks
@@ -66,7 +73,7 @@ Item {
             if (!def)
                 continue
             var c = Object.assign({}, def)
-            c.width = layout[i].width
+            c.width = setWidth(layout[i])
             if (c.flex)
                 flex += c.width
             else
@@ -87,6 +94,14 @@ Item {
         return Math.max(w, viewWidth)
     }
 
+    // A column's set width; the cover column fits the cover size.
+    function setWidth(l) {
+        return l.key === "cover" ? coverSize + 12 : l.width
+    }
+    function setRowSize(size) {
+        rowSize = size
+        AppController.setSetting("browser_row_size", String(size))
+    }
     function columnDef(key) {
         for (var i = 0; i < allColumns.length; i++)
             if (allColumns[i].key === key)
@@ -108,6 +123,7 @@ Item {
         }
         saved = saved.filter(l => l && columnDef(l.key))
         layout = saved.length ? saved : defaultColumns()
+        rowSize = Number(JSON.parse(AppController.settingsJson()).browser_row_size) || 0
     }
     function saveLayout() {
         AppController.setSetting("browser_columns", JSON.stringify(layout))
@@ -139,7 +155,7 @@ Item {
             if (!def)
                 continue
             if (!def.flex)
-                fixed += j === i ? 0 : layout[j].width
+                fixed += j === i ? 0 : setWidth(layout[j])
             else if (j !== i)
                 otherFlex += layout[j].width
         }
@@ -177,6 +193,20 @@ Item {
     function loadSelected(deck) {
         if (list.currentIndex >= 0)
             tracks.loadRow(list.currentIndex, deck)
+    }
+
+    // The tree row of the open source again, after the tree changed (rows
+    // added or removed above it); -1 when it is not shown.
+    function syncSourceRow() {
+        if (sourceRow < 0 && folderMode)
+            return
+        for (var r = 0; r < tree.count; r++) {
+            if (tree.kindAt(r) === tracks.sourceKind && tree.idAt(r) === tracks.sourceId) {
+                sourceRow = r
+                return
+            }
+        }
+        sourceRow = -1
     }
 
     function openSource(row) {
@@ -234,12 +264,20 @@ Item {
     BrowserTreeModel {
         id: tree
         Component.onCompleted: refresh()
+        onModelReset: browser.syncSourceRow()
     }
     Connections {
         target: AppController
         function onLibraryRevisionChanged() {
             tracks.refresh()
             tree.refresh()
+            // Suggestions switched off while showing them.
+            if (tracks.sourceKind === 6 && !AppController.suggestionsEnabled)
+                browser.openSource(0)
+        }
+        function onSuggestionsRevisionChanged() {
+            if (tracks.sourceKind === 6)
+                tracks.refresh()
         }
         function onTracksRevisionChanged() {
             tracks.updateChanged()
@@ -442,7 +480,7 @@ Item {
                         Layout.preferredHeight: 28
                         spacing: 4
                         Icon {
-                            name: browser.folderMode ? "folder" : (tracks.sourceKind === 1 ? "list" : (tracks.sourceKind === 2 ? "clock" : "library"))
+                            name: browser.folderMode ? "folder" : (tracks.sourceKind === 1 ? "list" : (tracks.sourceKind === 2 ? "clock" : (tracks.sourceKind === 6 ? "suggest" : "library")))
                             size: 16
                             color: Theme.sync
                         }
@@ -457,6 +495,27 @@ Item {
                             text: tracks.summary
                             color: Theme.textDim
                             font.pixelSize: Theme.fontSmall
+                        }
+                        // Row size: compact, medium, large.
+                        Row {
+                            spacing: 0
+                            Repeater {
+                                model: [
+                                    { text: "S", tip: "Compact rows" },
+                                    { text: "M", tip: "Taller rows with larger cover art" },
+                                    { text: "L", tip: "Large rows with big cover art" }
+                                ]
+                                DjButton {
+                                    required property int index
+                                    required property var modelData
+                                    flat: true
+                                    text: modelData.text
+                                    tip: modelData.tip
+                                    implicitWidth: 24
+                                    lit: browser.rowSize === index
+                                    onClicked: browser.setRowSize(index)
+                                }
+                            }
                         }
                         DjButton {
                             icon: "columns"
@@ -563,6 +622,8 @@ Item {
                         delegate: TrackRow {
                             width: browser.tableWidth
                             columns: browser.columns
+                            rowHeight: browser.rowHeight
+                            coverSize: browser.coverSize
                             onPressedRow: (row, mods, button) => {
                                 list.currentIndex = row
                                 list.forceActiveFocus()
@@ -839,6 +900,12 @@ Item {
             visible: treeMenu.kind === 0
             height: visible ? implicitHeight : 0
             onTriggered: AppController.rescan()
+        }
+        StyledMenuItem {
+            text: "Turn off suggestions"
+            visible: treeMenu.kind === 6
+            height: visible ? implicitHeight : 0
+            onTriggered: AppController.setSetting("suggestions", "false")
         }
     }
 }

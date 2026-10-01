@@ -450,6 +450,14 @@ Popup {
                                 DjButton { icon: "import"; text: "IMPORT…"; onClicked: nmlDialog.open() }
                             }
                         }
+                        SettingsSection {
+                            title: "Suggestions"
+                            SettingRow {
+                                label: "Suggest tracks"
+                                hint: "Adds Suggestions to the browser: tracks that fit the one playing, by tempo (half and double time count), key (Camelot neighbours) and genre, best first. Tracks on the decks and those played in this session are left out."
+                                ToggleSwitch { checked: !!dialog.s.suggestions; onToggled: dialog.set("suggestions", checked) }
+                            }
+                        }
                     }
                 }
 

@@ -18,7 +18,9 @@ Rectangle {
     signal loadRow(int row, int deck)
     signal rate(var id, int stars)
 
-    readonly property int rowHeight: 30
+    // Set by the browser's row size (compact, medium, large).
+    property int rowHeight: 30
+    property int coverSize: 26
     height: rowHeight
     color: row.model.selected ? Theme.selection : (row.index % 2 ? Theme.panel : Theme.rowAlt)
 
@@ -178,25 +180,26 @@ Rectangle {
             Rectangle { width: 3; height: row.rowHeight - 4; y: 2; radius: 1; color: row.model.tagColor.length ? row.model.tagColor : "transparent" }
             Rectangle {
                 x: 6
-                y: 2
-                width: 26
-                height: 26
+                anchors.verticalCenter: parent.verticalCenter
+                width: row.coverSize
+                height: row.coverSize
                 radius: 2
                 color: Theme.control
                 Image {
                     anchors.fill: parent
-                    source: row.model.cover
+                    // The 256 px thumbnail once the small one would look soft.
+                    source: row.coverSize > 32 && row.model.coverLarge.length > 0 ? row.model.coverLarge : row.model.cover
                     visible: row.model.cover.length > 0
                     asynchronous: true
-                    sourceSize.width: 52
-                    sourceSize.height: 52
+                    sourceSize.width: row.coverSize * 2
+                    sourceSize.height: row.coverSize * 2
                     fillMode: Image.PreserveAspectCrop
                 }
                 Icon {
                     anchors.centerIn: parent
                     visible: row.model.cover.length === 0
                     name: "music"
-                    size: 12
+                    size: Math.round(row.coverSize * 0.45)
                     color: Theme.textFaint
                 }
             }

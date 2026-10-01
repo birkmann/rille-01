@@ -68,6 +68,10 @@ pub mod qobject {
         #[qproperty(i32, battery_percent, cxx_name = "batteryPercent")]
         /// Estimated runtime left on battery, -1 when unknown.
         #[qproperty(i32, battery_minutes, cxx_name = "batteryMinutes")]
+        /// Settings → Library: the browser shows track suggestions.
+        #[qproperty(bool, suggestions_enabled, cxx_name = "suggestionsEnabled")]
+        /// Bumped when the suggestions are for another track.
+        #[qproperty(i32, suggestions_revision, cxx_name = "suggestionsRevision")]
         type AppController = super::AppControllerRust;
 
         #[qinvokable]
@@ -318,6 +322,8 @@ pub struct AppControllerRust {
     on_battery: bool,
     battery_percent: i32,
     battery_minutes: i32,
+    suggestions_enabled: bool,
+    suggestions_revision: i32,
 }
 
 struct ImportReport {
@@ -464,6 +470,7 @@ impl qobject::AppController {
         self.as_mut().set_deck_count(i32::from(settings.deck_count));
         self.as_mut().set_header_meter(settings.header_meter);
         self.as_mut().set_mixer_hidden(!settings.show_mixer);
+        self.as_mut().set_suggestions_enabled(settings.suggestions);
         let channels = if external { settings.mixer_channels.to_uppercase() } else { String::new() };
         if *self.mixer_channels() != QString::from(&channels) {
             self.as_mut().set_mixer_channels(QString::from(channels));
@@ -526,6 +533,10 @@ impl qobject::AppController {
                     self.as_mut().set_browser_action(QString::from(action));
                     let seq = *self.browser_action_seq() + 1;
                     self.as_mut().set_browser_action_seq(seq);
+                }
+                UiEvent::SuggestionsChanged => {
+                    let r = *self.suggestions_revision() + 1;
+                    self.as_mut().set_suggestions_revision(r);
                 }
                 UiEvent::DeckChanged(_) | UiEvent::AudioChanged => {}
             }
@@ -631,7 +642,7 @@ impl qobject::AppController {
         let s = app.settings();
         let roots: Vec<String> = s.library_roots.iter().map(|r| json_str(&r.display().to_string())).collect();
         QString::from(format!(
-            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{}}}"#,
+            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{}}}"#,
             s.audio_device.as_deref().map_or("null".into(), json_str),
             s.buffer_frames.map_or("null".into(), |b| b.to_string()),
             s.tempo_range,
@@ -660,7 +671,9 @@ impl qobject::AppController {
             json_str(&s.browser_columns),
             json_str(&s.remix_decks),
             s.mixing.name(),
-            json_str(&s.mixer_channels)
+            json_str(&s.mixer_channels),
+            s.suggestions,
+            s.browser_row_size
         ))
     }
 
@@ -687,6 +700,7 @@ impl qobject::AppController {
                 s.mixer_channels = seen;
             }
             "browser_columns" => s.browser_columns = v.clone(),
+            "browser_row_size" => s.browser_row_size = v.parse::<u8>().unwrap_or(0).min(2),
             "remix_decks" => s.remix_decks = v.to_uppercase().chars().filter(|c| ('A'..='D').contains(c)).collect(),
             "bpm_min" => s.bpm_min = f.unwrap_or(s.bpm_min),
             "bpm_max" => s.bpm_max = f.unwrap_or(s.bpm_max),
@@ -709,6 +723,7 @@ impl qobject::AppController {
             "background_analysis" => s.background_analysis = b,
             "header_meter" => s.header_meter = b,
             "show_mixer" => s.show_mixer = b,
+            "suggestions" => s.suggestions = b,
             _ => return,
         }
         app.set_settings(s);

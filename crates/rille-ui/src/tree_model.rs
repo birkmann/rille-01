@@ -33,7 +33,7 @@ pub mod qobject {
         fn toggle(self: Pin<&mut BrowserTreeModel>, row: i32);
 
         /// Kind of `row`: 0 collection, 1 playlist, 2 history session,
-        /// 3 folder, 4 group, 5 playlist folder, −1 none.
+        /// 3 folder, 4 group, 5 playlist folder, 6 suggestions, −1 none.
         #[qinvokable]
         #[cxx_name = "kindAt"]
         fn kind_at(self: &BrowserTreeModel, row: i32) -> i32;
@@ -93,6 +93,7 @@ pub const KIND_HISTORY: i32 = 2;
 pub const KIND_FOLDER: i32 = 3;
 pub const KIND_GROUP: i32 = 4;
 pub const KIND_PLAYLIST_FOLDER: i32 = 5;
+pub const KIND_SUGGESTIONS: i32 = 6;
 
 struct Node {
     label: String,
@@ -150,6 +151,18 @@ impl BrowserTreeRust {
             icon: "library",
             detail: total.to_string(),
         });
+        if app.settings().suggestions {
+            out.push(Node {
+                label: "Suggestions".into(),
+                kind: KIND_SUGGESTIONS,
+                id: 0,
+                depth: 0,
+                expandable: false,
+                key: "suggestions".into(),
+                icon: "suggest",
+                detail: String::new(),
+            });
+        }
 
         out.push(group("Playlists", "g:playlists", "list"));
         if self.expanded.contains("g:playlists") {

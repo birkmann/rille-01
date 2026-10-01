@@ -186,6 +186,12 @@ pub struct Settings {
     /// The browser's track columns as JSON (`[{"key":…,"width":…}]` in
     /// display order); empty = the default layout.
     pub browser_columns: String,
+    /// Height of the browser's track rows and their covers: 0 compact,
+    /// 1 medium, 2 large.
+    pub browser_row_size: u8,
+    /// The browser lists tracks that fit the playing one (tempo, key,
+    /// genre) under "Suggestions".
+    pub suggestions: bool,
 }
 
 impl Default for Settings {
@@ -217,6 +223,8 @@ impl Default for Settings {
             show_mixer: true,
             midi_mappings: BTreeMap::new(),
             browser_columns: String::new(),
+            browser_row_size: 0,
+            suggestions: false,
         }
     }
 }
@@ -282,6 +290,7 @@ mod tests {
         std::fs::write(&p, "tempo_range = 0.5\nbogus = 1\n").unwrap();
         assert_eq!(Settings::load(&p).tempo_range, 0.5);
         assert!(Settings::load(&p).show_mixer, "older files keep the mixer");
+        assert!(!Settings::load(&p).suggestions, "suggestions are opt-in");
     }
 
     #[test]

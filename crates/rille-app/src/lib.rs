@@ -8,6 +8,7 @@ mod engine_slot;
 pub mod explorer;
 pub mod remix;
 pub mod settings;
+pub mod suggest;
 pub mod timing;
 mod values;
 
@@ -35,6 +36,7 @@ use explorer::FolderTree;
 pub use remix::{RemixCell, RemixSet};
 pub use rille_library::{HistorySession, PlaylistNode};
 pub use settings::{KeyNotation, MixingMode, Paths, Settings, WaveformStyle};
+pub use suggest::Suggestion;
 pub use timing::{Timing, format_duration};
 
 /// Something the UI should react to.
@@ -58,6 +60,8 @@ pub enum UiEvent {
     MidiChanged,
     MidiLearned(String),
     AudioChanged,
+    /// The track suggestions are for changed (see [`App::suggestion_reference`]).
+    SuggestionsChanged,
 }
 
 /// The analysis queue's state for the status bar.
@@ -131,6 +135,8 @@ pub enum Source {
     Collection,
     Playlist(i64),
     History(i64),
+    /// Tracks that fit the playing one, best first (see [`suggest`]).
+    Suggestions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -156,6 +162,14 @@ pub enum SortKey {
     FileSize,
     LastPlayed,
     Path,
+}
+
+/// The track the suggestions are for (deck, track) and the tracks on the
+/// decks, which they leave out.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SuggestFor {
+    reference: Option<(u8, TrackId)>,
+    loaded: [Option<TrackId>; MAX_DECKS],
 }
 
 struct Tracks {
@@ -189,6 +203,8 @@ pub struct App {
     analysis_kick: Sender<()>,
     queue: Arc<AnalysisQueue>,
     history_session: Mutex<Option<i64>>,
+    /// What the suggestions were made for, while they are switched on.
+    suggest_for: Mutex<SuggestFor>,
     midi: Mutex<Option<MidiManager>>,
     mappings: Mutex<MappingStore>,
     learn: Arc<Mutex<Option<LearnSession>>>,
@@ -232,6 +248,7 @@ impl App {
             analysis_kick: kick_tx,
             queue: Arc::new(AnalysisQueue::default()),
             history_session: Mutex::new(None),
+            suggest_for: Mutex::default(),
             midi: Mutex::new(None),
             mappings: Mutex::new(MappingStore::load(&mapping_dirs)),
             learn: Arc::new(Mutex::new(None)),
@@ -281,6 +298,11 @@ impl App {
         }
         if old.remix_decks != s.remix_decks {
             self.apply_deck_types();
+        }
+        if old.suggestions != s.suggestions {
+            // The browser shows or hides its Suggestions entry.
+            *self.suggest_for.lock().expect("suggest lock") = SuggestFor::default();
+            self.notify(UiEvent::LibraryChanged);
         }
     }
 
@@ -420,6 +442,9 @@ impl App {
             engine.poll(|e| self.on_engine_event(e));
             let snap = engine.snapshot();
             self.log_history(&snap, dt);
+            if self.settings.read().expect("settings lock").suggestions {
+                self.follow_playing_track(&snap);
+            }
         }
         if let Some(m) = self.midi.lock().expect("midi lock").as_mut() {
             m.send_feedback(&values::SnapshotValues(self.engine.clone()));
@@ -485,6 +510,60 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Points the suggestions at the track on air: the master deck while it
+    /// plays with its fader open, else the deck that has played longest
+    /// that way. With nothing audible they stay with the last track (or the
+    /// first loaded deck before anything played). Loading or ejecting a
+    /// track updates them too.
+    fn follow_playing_track(&self, snap: &Snapshot) {
+        let loaded = |d: usize| {
+            let info = self.decks[d].read().expect("deck lock");
+            info.track_id.filter(|_| info.remix.is_none()).map(|t| (t, info.play_secs))
+        };
+        let audible = |d: usize| snap.decks[d].playing && snap.channels[d].volume > 0.1;
+        let playing: Vec<(usize, TrackId, f64)> =
+            (0..MAX_DECKS).filter(|&d| audible(d)).filter_map(|d| loaded(d).map(|(t, secs)| (d, t, secs))).collect();
+        let on_air = playing
+            .iter()
+            .find(|(d, ..)| snap.decks[*d].master)
+            .or_else(|| playing.iter().max_by(|a, b| a.2.total_cmp(&b.2)))
+            .map(|&(d, t, _)| (d as u8, t));
+        let mut current = self.suggest_for.lock().expect("suggest lock");
+        let next = SuggestFor {
+            reference: on_air
+                .or(current.reference)
+                .or_else(|| (0..MAX_DECKS).find_map(|d| loaded(d).map(|(t, _)| (d as u8, t)))),
+            loaded: std::array::from_fn(|d| self.decks[d].read().expect("deck lock").track_id),
+        };
+        if next != *current {
+            *current = next;
+            drop(current);
+            self.notify(UiEvent::SuggestionsChanged);
+        }
+    }
+
+    /// The deck and track the suggestions are for.
+    pub fn suggestion_reference(&self) -> Option<(u8, TrackRow)> {
+        let (deck, id) = self.suggest_for.lock().expect("suggest lock").reference?;
+        Some((deck, self.track_row(id)?))
+    }
+
+    /// Suggested tracks for [`Self::suggestion_reference`], best first;
+    /// empty while suggestions are switched off. Leaves out the tracks on
+    /// the decks and those played in this session.
+    pub fn suggestions(&self) -> Vec<Suggestion> {
+        if !self.settings().suggestions {
+            return Vec::new();
+        }
+        let Some((_, reference)) = self.suggestion_reference() else { return Vec::new() };
+        let mut exclude: HashSet<TrackId> = (0..MAX_DECKS as u8).filter_map(|d| self.deck(d).track_id).collect();
+        let session = *self.history_session.lock().expect("history lock");
+        if let Some(s) = session {
+            exclude.extend(self.library.lock().expect("library lock").history_tracks(s).unwrap_or_default());
+        }
+        suggest::suggest(&reference, &self.tracks.read().expect("tracks lock").rows, &exclude)
     }
 
     // --------------------------------------------------------------- decks
@@ -721,17 +800,20 @@ impl App {
 
     /// Rows for the browser.
     pub fn tracks(&self, source: Source, search: &str, sort: SortKey, descending: bool) -> Vec<TrackRow> {
+        // Before taking the tracks lock, which this reads too.
+        let suggested = (source == Source::Suggestions).then(|| self.suggestions().into_iter().map(|s| s.id).collect());
         let t = self.tracks.read().expect("tracks lock");
         let ids: Option<Vec<TrackId>> = match source {
             Source::Collection => None,
             Source::Playlist(p) => self.library.lock().expect("library lock").playlist_tracks(p).ok(),
             Source::History(h) => self.library.lock().expect("library lock").history_tracks(h).ok(),
+            Source::Suggestions => suggested,
         };
         let matching: Option<HashSet<usize>> =
             (!search.trim().is_empty()).then(|| t.index.search(search).into_iter().collect());
         let by_id = |id: TrackId| t.by_id.get(&id).copied();
         let mut rows: Vec<TrackRow> = match ids {
-            // Playlists and history keep their own order unless sorted.
+            // Playlists, history and suggestions keep their own order unless sorted.
             Some(ids) => ids
                 .into_iter()
                 .filter_map(by_id)
@@ -746,7 +828,10 @@ impl App {
                 .map(|(_, r)| r.clone())
                 .collect(),
         };
-        if !matches!(source, Source::Playlist(_) | Source::History(_)) || descending || sort != SortKey::Artist {
+        if !matches!(source, Source::Playlist(_) | Source::History(_) | Source::Suggestions)
+            || descending
+            || sort != SortKey::Artist
+        {
             sort_rows(&mut rows, sort, descending);
         }
         rows

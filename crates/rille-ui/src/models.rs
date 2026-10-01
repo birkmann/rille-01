@@ -24,7 +24,8 @@ pub mod qobject {
         #[qml_element]
         #[base = QAbstractListModel]
         #[qproperty(QString, search)]
-        /// 0 collection, 1 playlist, 2 history session, 3 explorer folder.
+        /// 0 collection, 1 playlist, 2 history session, 3 explorer folder,
+        /// 6 suggestions.
         #[qproperty(i32, source_kind, cxx_name = "sourceKind")]
         /// Playlist or session id, or the folder's path token.
         #[qproperty(i64, source_id, cxx_name = "sourceId")]
@@ -153,7 +154,7 @@ pub mod qobject {
 }
 
 use core::pin::Pin;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use cxx_qt::CxxQtType;
@@ -200,6 +201,8 @@ const TRACK_ROLES: &[&str] = &[
     "dateAdded",
     "lastPlayed",
     "filePath",
+    "match",
+    "coverLarge",
 ];
 
 #[derive(Default)]
@@ -220,6 +223,8 @@ pub struct TrackListRust {
     anchor: Option<usize>,
     /// Last change sequence number seen (see `global::push_changed`).
     seen: u64,
+    /// Suggestion scores (0..=1) by track id, in the suggestions view.
+    scores: HashMap<i64, f32>,
 }
 
 fn roles(names: &[&str]) -> QHash<QHashPair_i32_QByteArray> {
@@ -317,6 +322,7 @@ impl qobject::TrackListModel {
                 *self.descending(),
             ),
             3 => token_path(*self.source_id()).map(|dir| app.folder_rows(&dir)).unwrap_or_default(),
+            6 => app.tracks(Source::Suggestions, &search, sort_key(&self.sort_key().to_string()), *self.descending()),
             _ => app.tracks(Source::Collection, &search, sort_key(&self.sort_key().to_string()), *self.descending()),
         };
         if *self.source_kind() == 3 {
@@ -334,8 +340,23 @@ impl qobject::TrackListModel {
         }
         let total_secs: f64 = rows.iter().map(|r| r.duration_secs).sum();
         let new = rows.iter().filter(|r| r.id < 0).count();
+        let scores: HashMap<i64, f32> = if *self.source_kind() == 6 {
+            app.suggestions().into_iter().map(|s| (s.id, s.score)).collect()
+        } else {
+            HashMap::new()
+        };
         let summary = if *self.source_kind() == 3 {
             format!("{} files, {} not in the collection", rows.len(), new)
+        } else if *self.source_kind() == 6 {
+            match app.suggestion_reference() {
+                Some((deck, r)) => format!(
+                    "{} tracks fitting deck {}: {}",
+                    rows.len(),
+                    char::from(b'A' + deck),
+                    if r.artist.is_empty() { r.title } else { format!("{} – {}", r.artist, r.title) }
+                ),
+                None => "Load or play a track to get suggestions".into(),
+            }
         } else {
             format!("{} tracks, {:.1} hours", rows.len(), total_secs / 3600.0 + 0.0)
         };
@@ -348,6 +369,7 @@ impl qobject::TrackListModel {
             r.rows = rows;
             r.anchor = None;
             r.seen = seen;
+            r.scores = scores;
         }
         self.as_mut().end_reset_model();
         let n = self.rust().rows.len() as i32;
@@ -567,11 +589,13 @@ impl qobject::TrackListModel {
             "rating" => QVariant::from(&i32::from(r.rating)),
             "duration" => s(&fmt_time(r.duration_secs)),
             "fileName" => s(&r.path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()),
-            "cover" => s(&r
-                .cover
-                .as_deref()
-                .and_then(|c| app.cover_file(c, CoverSize::Small))
-                .map_or(String::new(), |p| format!("file://{}", p.display()))),
+            "cover" | "coverLarge" => {
+                let size = if name == "cover" { CoverSize::Small } else { CoverSize::Large };
+                s(&r.cover
+                    .as_deref()
+                    .and_then(|c| app.cover_file(c, size))
+                    .map_or(String::new(), |p| format!("file://{}", p.display())))
+            }
             "analyzed" => QVariant::from(&r.analyzed),
             "gridNote" | "gridAttention" => s(if r.analyzed { grid_attention(r) } else { "" }),
             "playCount" => QVariant::from(&(r.play_count as i32)),
@@ -602,6 +626,7 @@ impl qobject::TrackListModel {
             }),
             "lastPlayed" => s(&r.last_played.map_or(String::new(), crate::tree_model::format_date)),
             "filePath" => s(&r.path.display().to_string()),
+            "match" => s(&self.rust().scores.get(&r.id).map_or(String::new(), |m| format!("{:.0} %", m * 100.0))),
             _ => QVariant::default(),
         }
     }

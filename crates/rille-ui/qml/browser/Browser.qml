@@ -215,6 +215,19 @@ Item {
         list.currentIndex = -1
     }
 
+    // Refresh after a change in the background (a track loaded, imported or
+    // analyzed): the list keeps its scroll position and current row, unlike
+    // opening a source, searching or sorting, which start at the top.
+    function refreshInPlace() {
+        var x = list.contentX, y = list.contentY, cur = list.currentIndex
+        tracks.refresh()
+        list.currentIndex = cur < list.count ? cur : -1
+        list.contentX = x
+        // Fewer rows than before: no further than the new end.
+        var maxY = list.originY + list.contentHeight + list.bottomMargin - list.height
+        list.contentY = Math.max(list.originY, Math.min(y, maxY))
+    }
+
     function loadSelected(deck) {
         if (list.currentIndex >= 0)
             tracks.loadRow(list.currentIndex, deck)
@@ -305,7 +318,7 @@ Item {
     Connections {
         target: AppController
         function onLibraryRevisionChanged() {
-            tracks.refresh()
+            browser.refreshInPlace()
             tree.refresh()
             // Suggestions switched off while showing them.
             if (tracks.sourceKind === 6 && !AppController.suggestionsEnabled)
@@ -313,14 +326,14 @@ Item {
         }
         function onSuggestionsRevisionChanged() {
             if (tracks.sourceKind === 6)
-                tracks.refresh()
+                browser.refreshInPlace()
         }
         function onTracksRevisionChanged() {
             tracks.updateChanged()
         }
         function onBeatportRevisionChanged() {
             if (browser.beatportMode)
-                tracks.refresh()
+                browser.refreshInPlace()
             tree.refresh()
         }
         function onBeatportAccountChanged() {

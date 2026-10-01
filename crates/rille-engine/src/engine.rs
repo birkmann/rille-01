@@ -260,7 +260,7 @@ impl Engine {
                     self.settings = s;
                     self.limiter.set_ceiling_db(s.limiter_ceiling_db);
                 }
-                Command::SetClockBpm(bpm) => self.clock.bpm = bpm.clamp(40.0, 250.0),
+                Command::SetClockBpm(bpm) => self.set_clock_bpm(bpm),
                 Command::SetMaster(m) => self.set_master(m),
                 Command::SetRemix { deck, remix } => {
                     let d = usize::from(deck).min(MAX_DECKS - 1);
@@ -281,6 +281,20 @@ impl Engine {
                         let _ = self.garbage.push(Garbage::Sample(s));
                     }
                 }
+            }
+        }
+    }
+
+    /// Sets the master tempo. A deck that leads moves its tempo fader to
+    /// play at it, as far as the tempo range allows.
+    fn set_clock_bpm(&mut self, bpm: f64) {
+        self.clock.bpm = bpm.clamp(40.0, 250.0);
+        let range = self.settings.tempo_range.max(1e-6);
+        if let Some(m) = self.clock.master {
+            let deck = &mut self.decks[usize::from(m)];
+            if let Some(own) = deck.track_bpm() {
+                let rate = self.clock.bpm / own;
+                deck.tempo_fader = (0.5 + (rate - 1.0) / (2.0 * range)).clamp(0.0, 1.0) as f32;
             }
         }
     }

@@ -27,6 +27,8 @@ pub mod qobject {
         #[qproperty(QString, artist)]
         #[qproperty(QString, info)]
         #[qproperty(QString, cover)]
+        /// The track streams from Beatport.
+        #[qproperty(bool, streamed)]
         #[qproperty(QString, key_text, cxx_name = "keyText")]
         #[qproperty(QString, key_color, cxx_name = "keyColor")]
         #[qproperty(f64, bpm)]
@@ -177,6 +179,7 @@ pub struct DeckControllerRust {
     artist: QString,
     info: QString,
     cover: QString,
+    streamed: bool,
     key_text: QString,
     key_color: QString,
     bpm: f64,
@@ -310,6 +313,7 @@ impl qobject::DeckController {
             ));
             self.as_mut().set_key_text(QString::from(info.key.map_or(String::new(), |k| settings.key_text(k))));
             self.as_mut().set_key_color(QString::from(info.key.map_or("#8a9099".into(), key_color)));
+            self.as_mut().set_streamed(info.streamed);
             self.as_mut().set_loading(info.loading);
             let (text, progress, detail) = match info.download {
                 Some(d) if d.total_bytes == 0 => ("Connecting to Beatport…", 0.0, String::new()),

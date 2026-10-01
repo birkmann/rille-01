@@ -365,3 +365,79 @@ fn beatport_live_download_queue_and_covers() {
     assert!(app.deck(0).error.is_none());
     app.shutdown();
 }
+
+#[test]
+fn suggestions_follow_the_loaded_track() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir_all(&music).unwrap();
+    let am = rille_core::Key::new(9, true);
+    // a: the reference; b: same tempo and key; c: a bit faster; d: too fast to mix.
+    let tracks = [("a.wav", 124.0, am, 1), ("b.wav", 124.0, am, 2), ("c.wav", 126.0, am, 3), ("d.wav", 150.0, am, 4)];
+    for (name, bpm, key, seed) in tracks {
+        let r = synth::render(&Spec { sections: vec![(32, bpm)], key, seed, ..Spec::default() });
+        write_wav(&music.join(name), &r.audio);
+    }
+    let app = start(dir.path());
+    app.add_music_folder(music);
+    let analyzed = || {
+        let rows = app.tracks(Source::Collection, "", SortKey::Title, false);
+        rows.len() == 4 && rows.iter().all(|r| r.bpm.is_some())
+    };
+    wait_for("scan and analysis", 120.0, analyzed);
+    let rows = app.tracks(Source::Collection, "", SortKey::Title, false);
+    let id = |title: &str| rows.iter().find(|r| r.title == title).unwrap().id;
+    let suggested =
+        || app.tracks(Source::Suggestions, "", SortKey::Artist, false).iter().map(|r| r.id).collect::<Vec<_>>();
+
+    // Off by default.
+    app.load_track(0, id("a"));
+    app.tick();
+    assert!(app.suggestion_reference().is_none());
+    assert!(suggested().is_empty());
+
+    let mut s = app.settings();
+    s.suggestions = true;
+    app.set_settings(s);
+    app.tick();
+    assert_eq!(app.suggestion_reference().map(|(deck, r)| (deck, r.id)), Some((0, id("a"))));
+    let ids = suggested();
+    assert_eq!(ids.first(), Some(&id("b")), "{ids:?}");
+    assert!(ids.contains(&id("c")) && !ids.contains(&id("d")) && !ids.contains(&id("a")), "{ids:?}");
+
+    // A track loaded on another deck is left out.
+    app.load_track(1, id("b"));
+    app.tick();
+    assert!(!suggested().contains(&id("b")));
+
+    let mut s = app.settings();
+    s.suggestions = false;
+    app.set_settings(s);
+    assert!(suggested().is_empty());
+    app.shutdown();
+}
+
+#[test]
+fn pause_and_cancel_stick() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(dir.path());
+    assert!(app.settings().background_analysis);
+
+    // A pause is kept over a restart.
+    app.set_analysis_paused(true);
+    app.shutdown();
+    drop(app);
+    let app = start(dir.path());
+    assert!(app.settings().analysis_paused && app.analysis_progress().paused);
+    app.set_analysis_paused(false);
+    assert!(!app.analysis_progress().paused);
+
+    // Cancel turns the background pass off, also after a restart.
+    app.cancel_analysis();
+    assert!(!app.settings().background_analysis);
+    app.shutdown();
+    drop(app);
+    let app = start(dir.path());
+    assert!(!app.settings().background_analysis && !app.analysis_progress().paused);
+    app.shutdown();
+}

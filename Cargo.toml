@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
-authors = ["Rafael Birkmann"]
+authors = ["The rille contributors"]
 repository = "https://github.com/birkmann/rille-01"
 rust-version = "1.85"
 

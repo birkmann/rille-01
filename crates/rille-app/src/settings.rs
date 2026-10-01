@@ -182,8 +182,11 @@ pub struct Settings {
     pub waveform_mixer: bool,
     /// The scrolling waveform dims with the channel fader and crossfader.
     pub waveform_fader_dim: bool,
-    /// Analyze new tracks in the background.
+    /// Analyze new tracks in the background. Cancelling the analysis turns
+    /// it off.
     pub background_analysis: bool,
+    /// The analysis queue is paused (kept over restarts until resumed).
+    pub analysis_paused: bool,
     /// Main output meter in the title bar.
     pub header_meter: bool,
     /// The on-screen mixer and crossfader; off leaves the room to the decks
@@ -196,11 +199,19 @@ pub struct Settings {
     /// The browser's track columns as JSON (`[{"key":…,"width":…}]` in
     /// display order); empty = the default layout.
     pub browser_columns: String,
+    /// Height of the browser's track rows and their covers: 0 compact,
+    /// 1 medium, 2 large.
+    pub browser_row_size: u8,
+    /// Width of the browser's source tree (left column) in pixels.
+    pub browser_sidebar_width: u16,
+    /// The browser lists tracks that fit the playing one (tempo, key,
+    /// genre) under "Suggestions".
+    pub suggestions: bool,
     /// Beatport streaming quality: "lossless" (FLAC), "high" (AAC 256) or
     /// "medium" (AAC 128).
     pub beatport_quality: String,
-    /// Streamed tracks kept in the cache, in megabytes; the least recently
-    /// played go first.
+    /// Streamed tracks kept on disk, in megabytes; the least recently
+    /// played go first, never those downloaded for offline use.
     pub beatport_cache_mb: u32,
 }
 
@@ -229,10 +240,14 @@ impl Default for Settings {
             waveform_mixer: false,
             waveform_fader_dim: false,
             background_analysis: true,
+            analysis_paused: false,
             header_meter: false,
             show_mixer: true,
             midi_mappings: BTreeMap::new(),
             browser_columns: String::new(),
+            browser_row_size: 0,
+            browser_sidebar_width: 250,
+            suggestions: false,
             beatport_quality: "lossless".into(),
             beatport_cache_mb: 20 * 1024,
         }
@@ -300,6 +315,7 @@ mod tests {
         std::fs::write(&p, "tempo_range = 0.5\nbogus = 1\n").unwrap();
         assert_eq!(Settings::load(&p).tempo_range, 0.5);
         assert!(Settings::load(&p).show_mixer, "older files keep the mixer");
+        assert!(!Settings::load(&p).suggestions, "suggestions are opt-in");
     }
 
     #[test]

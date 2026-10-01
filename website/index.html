@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rille — dj software for linux</title>
-<meta name="description" content="rille is free, native DJ software for Linux: four decks, remix decks, beat-locked sync, automatic beatgrids and controller support. PipeWire, JACK and ALSA.">
+<meta name="description" content="rille is free, open source DJ software for Linux with four decks, remix decks, sync, automatic beatgrids and controller support. Supports PipeWire, JACK and ALSA.">
 <meta name="theme-color" content="#F4F3EF" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">
 <script>
@@ -22,7 +22,7 @@ try {
 <link rel="stylesheet" href="style.css">
 <meta property="og:type" content="website">
 <meta property="og:title" content="rille — dj software for linux">
-<meta property="og:description" content="Four decks, remix decks, beat-locked sync and automatic beatgrids. Native on Linux, free and open source.">
+<meta property="og:description" content="DJ software for Linux with four decks, remix decks, sync and automatic beatgrids. Free and open source.">
 <meta property="og:image" content="assets/img/og.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
@@ -38,7 +38,7 @@ try {
     </a>
     <div class="nav-links">
       <a href="#features">Features</a>
-      <a href="#sync">Sync</a>
+      <a href="#sync">Beatgrids</a>
       <a href="#controllers">Controllers</a>
       <a href="https://github.com/birkmann/rille-01">Source</a>
       <button class="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="false">
@@ -55,7 +55,7 @@ try {
 <section class="wrap hero" id="top">
   <span class="label">dj software for linux · v0.1.0 · free &amp; open source</span>
   <h1>Drop the needle.<br>On Linux.</h1>
-  <p class="lead">Four decks, remix decks, sync and key lock — a native DJ setup for the system you already run. No dual boot, no workarounds.</p>
+  <p class="lead">Four decks, remix decks, sync and key lock. Runs natively on Linux with PipeWire, JACK or ALSA.</p>
   <div class="actions">
     <a class="pill pill-signal" href="#install">Install for Linux</a>
     <a class="pill pill-outline" href="https://github.com/birkmann/rille-01">View source</a>
@@ -69,32 +69,32 @@ try {
   </picture>
 </figure>
 
-<section class="wrap proof" aria-label="Measured results">
-  <div><span class="num">0.016&nbsp;ms</span><span class="what">worst phase error of a synced deck over 60&nbsp;s of rendered audio</span></div>
-  <div><span class="num">1&nbsp;sample</span><span class="what">loop length accuracy over 125 wraps, with and without key lock</span></div>
-  <div><span class="num">&lt;&nbsp;1&nbsp;ms</span><span class="what">follower phase after seeks, jumps, loops and scratches (torture test)</span></div>
-  <div><span class="num">exact</span><span class="what">BPM on synthetic tracks from 95 to 174 BPM, incl. 126.37 and 133.33</span></div>
+<section class="wrap proof" aria-label="At a glance">
+  <div><span class="num">4&nbsp;decks</span><span class="what">with sync, key lock, loops and eight hotcues each</span></div>
+  <div><span class="num">6&nbsp;FX</span><span class="what">tempo-synced, across two units with three slots</span></div>
+  <div><span class="num">MIDI&nbsp;+&nbsp;HID</span><span class="what">controller mappings with LED feedback and MIDI learn</span></div>
+  <div><span class="num">GPL&#8209;3.0</span><span class="what">free and open source, native on Linux</span></div>
 </section>
 
 <section class="wrap section" id="features">
-  <h2>Everything a set needs. Nothing it doesn't.</h2>
+  <h2>Features</h2>
   <div class="grid features">
-    <article><span class="idx">01</span><h3>Automatic beatgrids</h3><p>Every track is analyzed once: exact tempo, bar start, key, loudness and a spectral waveform. Real doubts are flagged on the deck, not hidden.</p></article>
-    <article><span class="idx">02</span><h3>Beat-locked sync</h3><p>Synced decks follow the beat you hear from the master, not a BPM number — through loops, hotcue jumps, seeks and scratches.</p></article>
-    <article><span class="idx">03</span><h3>Four decks</h3><p>Play, cue, eight hotcues, auto loops from 1/32 to 32 beats, beatjump, flux, reverse, key lock and key shift on every deck.</p></article>
-    <article><span class="idx">04</span><h3>Remix decks</h3><p>Four slots of sixteen cells: capture loops from any deck or load one-shots, then trigger them quantized and in time.</p></article>
+    <article><span class="idx">01</span><h3>Automatic beatgrids</h3><p>Each track is analyzed once for tempo, bar start, key, loudness and waveform. Tracks with an uncertain grid are marked on the deck.</p></article>
+    <article><span class="idx">02</span><h3>Sync</h3><p>Synced decks stay in phase with the master deck, including after loops, hotcue jumps, seeks and scratches.</p></article>
+    <article><span class="idx">03</span><h3>Four decks</h3><p>Each deck has play, cue, eight hotcues, loops from 1/32 to 32 beats, beatjump, flux, reverse, key lock and key shift.</p></article>
+    <article><span class="idx">04</span><h3>Remix decks</h3><p>Four slots with sixteen cells each. Capture loops from any deck or load one-shots, and trigger them quantized.</p></article>
     <article><span class="idx">05</span><h3>Mixer</h3><p>Gain with auto-gain, 3-band isolator EQ with full kill, DJ filter, crossfader, headphone cue and a master limiter.</p></article>
-    <article><span class="idx">06</span><h3>FX</h3><p>Two units with three slots — delay, reverb, LFO filter, flanger, gater and beatmasher, all tempo-synced.</p></article>
-    <article><span class="idx">07</span><h3>Library &amp; explorer</h3><p>Music folders, tags and cover art, search, ratings, colors, playlists, history — and Traktor collection import.</p></article>
-    <article><span class="idx">08</span><h3>Controllers</h3><p>MIDI and HID mappings with LED feedback, MIDI learn, soft takeover and hotplug — remembered per device.</p></article>
+    <article><span class="idx">06</span><h3>FX</h3><p>Two FX units with three slots each. Delay, reverb, LFO filter, flanger, gater and beatmasher, all tempo-synced.</p></article>
+    <article><span class="idx">07</span><h3>Library &amp; explorer</h3><p>Music folders, tags, cover art, search, ratings, colors, playlists, history and Traktor collection import.</p></article>
+    <article><span class="idx">08</span><h3>Controllers</h3><p>MIDI and HID mappings with LED feedback, MIDI learn, soft takeover and hotplug. Settings are saved per device.</p></article>
   </div>
 </section>
 
 <section class="wrap section split" id="sync">
   <div class="copy">
-    <h2>Grids you don't have to fix.</h2>
-    <p>Grid lines sit on the start of the kick, measured from the average of all beats, so the tempo comes out exact — 144.000, not 144.002. Produced music gets a constant grid, tempo changes a piecewise one, live-played music a per-beat map.</p>
-    <p>Press <span class="kbd">TICK</span> on a deck to hear a click on every beat, and check any grid by ear. If one is off, the grid editor fixes it in two clicks and remembers.</p>
+    <h2>Beatgrids</h2>
+    <p>Grid lines are placed on the start of the kick, and the tempo is calculated from the average of all beats. Tracks with a steady tempo get a constant grid, tracks with tempo changes a piecewise grid, and live-played music a per-beat grid.</p>
+    <p><span class="kbd">TICK</span> on a deck plays a click on every beat to check the grid by ear. Grids can be corrected in the grid editor, and corrections are saved.</p>
   </div>
   <figure class="shot shot-detail">
     <picture>
@@ -113,9 +113,9 @@ try {
       </picture>
     </figure>
     <div class="copy">
-      <h2>Built for Linux, not ported to it.</h2>
-      <p>rille talks to PipeWire natively, or to JACK and ALSA. Headphone cue on outputs 3/4 of a four-channel interface, or split mono on two. A real-time audio thread that never allocates, locks or waits.</p>
-      <p>Running a hardware mixer like the Allen &amp; Heath Xone:96? External mixer mode puts every deck on its own channel.</p>
+      <h2>Audio</h2>
+      <p>rille supports PipeWire, JACK and ALSA. Headphone cue goes to outputs 3/4 of a four-channel interface, or to split mono on a two-channel one.</p>
+      <p>External mixer mode sends each deck to its own output channel, for use with a hardware mixer such as the Allen &amp; Heath Xone:96.</p>
       <ul class="tags">
         <li>PipeWire</li><li>JACK</li><li>ALSA</li><li>Wayland</li><li>X11</li><li>GPL-3.0</li>
       </ul>
@@ -124,8 +124,8 @@ try {
 </section>
 
 <section class="wrap section" id="controllers">
-  <h2>Bring your controller.</h2>
-  <p class="lead narrow">Mappings for these ship with rille. Anything else with MIDI works through MIDI learn — click a control on screen, move it on the hardware, done.</p>
+  <h2>Controllers</h2>
+  <p class="lead narrow">rille includes mappings for these controllers. Other MIDI controllers can be mapped with MIDI learn.</p>
   <ul class="grid hardware">
     <li><span class="hw">Allen &amp; Heath Xone:K2</span><span class="proto">midi · 4 decks</span></li>
     <li><span class="hw">Allen &amp; Heath Xone:96</span><span class="proto">audio · external mixer</span></li>
@@ -142,8 +142,8 @@ try {
 <section class="install" id="install">
   <div class="wrap section">
     <svg class="mark mark-lg" viewBox="0 0 100 100" fill="none" aria-hidden="true"><circle cx="50" cy="50" r="36" stroke="#F4F3EF" stroke-width="6"/><circle cx="77.6" cy="26.9" r="9" fill="#FF4A1C"/></svg>
-    <h2>Get rille.</h2>
-    <p class="lead">Builds from source in a few minutes and installs into <code>~/.local</code> — no root needed.</p>
+    <h2>Install</h2>
+    <p class="lead">Build from source and install into <code>~/.local</code>. No root access needed.</p>
     <div class="code" role="group" aria-label="Install commands">
       <pre><code><span class="prompt">$</span> git clone https://github.com/birkmann/rille-01.git rille
 <span class="prompt">$</span> cd rille &amp;&amp; ./scripts/install.sh

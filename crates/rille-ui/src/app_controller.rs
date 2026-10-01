@@ -68,6 +68,10 @@ pub mod qobject {
         #[qproperty(i32, battery_percent, cxx_name = "batteryPercent")]
         /// Estimated runtime left on battery, -1 when unknown.
         #[qproperty(i32, battery_minutes, cxx_name = "batteryMinutes")]
+        /// Settings → Library: the browser shows track suggestions.
+        #[qproperty(bool, suggestions_enabled, cxx_name = "suggestionsEnabled")]
+        /// Bumped when the suggestions are for another track.
+        #[qproperty(i32, suggestions_revision, cxx_name = "suggestionsRevision")]
         /// Bumped when Beatport sign-in, a Beatport list or the playlists
         /// changed.
         #[qproperty(i32, beatport_revision, cxx_name = "beatportRevision")]
@@ -193,8 +197,8 @@ pub mod qobject {
         #[qinvokable]
         fn eject(self: &AppController, deck: i32);
 
-        /// "move" (arg ms), "double", "halve", "beat", "downbeat", "tap",
-        /// "lock" (arg 0/1), "reset".
+        /// "move" (arg ms), "double", "halve", "beat", "downbeat", "barstart",
+        /// "tap", "lock" (arg 0/1), "reset".
         #[qinvokable]
         #[cxx_name = "gridEdit"]
         fn grid_edit(self: &AppController, deck: i32, op: &QString, arg: f64);
@@ -375,6 +379,8 @@ pub struct AppControllerRust {
     on_battery: bool,
     battery_percent: i32,
     battery_minutes: i32,
+    suggestions_enabled: bool,
+    suggestions_revision: i32,
     beatport_revision: i32,
     beatport_download_revision: i32,
     beatport_account: QString,
@@ -590,6 +596,7 @@ impl qobject::AppController {
         self.as_mut().set_deck_count(i32::from(settings.deck_count));
         self.as_mut().set_header_meter(settings.header_meter);
         self.as_mut().set_mixer_hidden(!settings.show_mixer);
+        self.as_mut().set_suggestions_enabled(settings.suggestions);
         let channels = if external { settings.mixer_channels.to_uppercase() } else { String::new() };
         if *self.mixer_channels() != QString::from(&channels) {
             self.as_mut().set_mixer_channels(QString::from(channels));
@@ -681,6 +688,10 @@ impl qobject::AppController {
                     let seq = *self.browser_action_seq() + 1;
                     self.as_mut().set_browser_action_seq(seq);
                 }
+                UiEvent::SuggestionsChanged => {
+                    let r = *self.suggestions_revision() + 1;
+                    self.as_mut().set_suggestions_revision(r);
+                }
                 UiEvent::DeckChanged(_) | UiEvent::AudioChanged => {}
             }
         }
@@ -733,6 +744,7 @@ impl qobject::AppController {
             "halve" => GridEdit::HalveTempo,
             "beat" => GridEdit::BeatHere,
             "downbeat" => GridEdit::DownbeatHere,
+            "barstart" => GridEdit::BarStartHere,
             "tap" => GridEdit::Tap,
             "lock" => GridEdit::Lock(arg > 0.5),
             "reset" => GridEdit::Reset,
@@ -785,7 +797,7 @@ impl qobject::AppController {
         let s = app.settings();
         let roots: Vec<String> = s.library_roots.iter().map(|r| json_str(&r.display().to_string())).collect();
         QString::from(format!(
-            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"beatport_quality":{},"beatport_cache_mb":{}}}"#,
+            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{},"beatport_quality":{},"beatport_cache_mb":{}}}"#,
             s.audio_device.as_deref().map_or("null".into(), json_str),
             s.buffer_frames.map_or("null".into(), |b| b.to_string()),
             s.tempo_range,
@@ -815,6 +827,9 @@ impl qobject::AppController {
             json_str(&s.remix_decks),
             s.mixing.name(),
             json_str(&s.mixer_channels),
+            s.suggestions,
+            s.browser_row_size,
+            s.browser_sidebar_width,
             json_str(&s.beatport_quality),
             s.beatport_cache_mb
         ))
@@ -843,6 +858,10 @@ impl qobject::AppController {
                 s.mixer_channels = seen;
             }
             "browser_columns" => s.browser_columns = v.clone(),
+            "browser_row_size" => s.browser_row_size = v.parse::<u8>().unwrap_or(0).min(2),
+            "browser_sidebar_width" => {
+                s.browser_sidebar_width = f.map_or(s.browser_sidebar_width, |w| w.round().clamp(160.0, 800.0) as u16);
+            }
             "remix_decks" => s.remix_decks = v.to_uppercase().chars().filter(|c| ('A'..='D').contains(c)).collect(),
             "bpm_min" => s.bpm_min = f.unwrap_or(s.bpm_min),
             "bpm_max" => s.bpm_max = f.unwrap_or(s.bpm_max),
@@ -865,6 +884,7 @@ impl qobject::AppController {
             "background_analysis" => s.background_analysis = b,
             "header_meter" => s.header_meter = b,
             "show_mixer" => s.show_mixer = b,
+            "suggestions" => s.suggestions = b,
             "beatport_quality" => s.beatport_quality = rille_app::BeatportQuality::from_name(&v).name().to_owned(),
             "beatport_cache_mb" => {
                 s.beatport_cache_mb = v.parse::<u32>().unwrap_or(s.beatport_cache_mb).clamp(512, 1 << 20)

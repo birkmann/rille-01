@@ -33,7 +33,8 @@ pub mod qobject {
         fn toggle(self: Pin<&mut BrowserTreeModel>, row: i32);
 
         /// Kind of `row`: 0 collection, 1 playlist, 2 history session,
-        /// 3 folder, 4 group, 5 playlist folder, −1 none.
+        /// 3 folder, 4 group, 5 playlist folder, 6 suggestions, 7–10
+        /// Beatport (see the `KIND_BEATPORT_*` constants), −1 none.
         #[qinvokable]
         #[cxx_name = "kindAt"]
         fn kind_at(self: &BrowserTreeModel, row: i32) -> i32;
@@ -93,14 +94,15 @@ pub const KIND_HISTORY: i32 = 2;
 pub const KIND_FOLDER: i32 = 3;
 pub const KIND_GROUP: i32 = 4;
 pub const KIND_PLAYLIST_FOLDER: i32 = 5;
+pub const KIND_SUGGESTIONS: i32 = 6;
 /// Beatport search (or "Sign in" while signed out).
-pub const KIND_BEATPORT_SEARCH: i32 = 6;
-pub const KIND_BEATPORT_RECENT: i32 = 7;
+pub const KIND_BEATPORT_SEARCH: i32 = 7;
+pub const KIND_BEATPORT_RECENT: i32 = 8;
 /// One of the user's Beatport playlists (id = Beatport's).
-pub const KIND_BEATPORT_PLAYLIST: i32 = 8;
+pub const KIND_BEATPORT_PLAYLIST: i32 = 9;
 /// A Beatport chart: id [`BP_TOP100`], [`BP_PURCHASES`], or a genre id for
 /// that genre's Top 100.
-pub const KIND_BEATPORT_LIST: i32 = 9;
+pub const KIND_BEATPORT_LIST: i32 = 10;
 pub const BP_TOP100: i64 = 0;
 pub const BP_PURCHASES: i64 = -1;
 /// Id of the "Offline" node (kind [`KIND_BEATPORT_RECENT`]; 0 = all streamed).
@@ -169,6 +171,18 @@ impl BrowserTreeRust {
             icon: "library",
             detail: total.to_string(),
         });
+        if app.settings().suggestions {
+            out.push(Node {
+                label: "Suggestions".into(),
+                kind: KIND_SUGGESTIONS,
+                id: 0,
+                depth: 0,
+                expandable: false,
+                key: "suggestions".into(),
+                icon: "suggest",
+                detail: String::new(),
+            });
+        }
 
         out.push(group("Playlists", "g:playlists", "list"));
         if self.expanded.contains("g:playlists") {

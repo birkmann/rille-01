@@ -2,3 +2,4 @@
 *.qsb
 .qmlls.ini
 .vscode/
+.claude/worktrees/

@@ -14,13 +14,19 @@ Item {
     property int sourceRow: 0
     property string sourceTitle: "Track Collection"
     readonly property bool folderMode: tracks.sourceKind === 3
-    // Beatport: the search box searches the catalog (kind 6); playlists
-    // (kind 8) and charts (9: Top 100s, purchases) are Beatport's; kind 7
-    // lists the tracks streamed so far.
-    readonly property bool beatportSearch: tracks.sourceKind === 6
-    readonly property bool beatportMode: tracks.sourceKind >= 6 && tracks.sourceKind <= 9
+    // Beatport's tree kinds (KIND_BEATPORT_* in tree_model.rs): the search
+    // box searches the catalog; playlists and charts (Top 100s, purchases)
+    // are Beatport's; "recent" lists the tracks streamed so far (or offline).
+    readonly property int kindBeatportSearch: 7
+    readonly property int kindBeatportRecent: 8
+    readonly property int kindBeatportPlaylist: 9
+    readonly property int kindBeatportList: 10
+    // Settings → Beatport.
+    readonly property int beatportSettingsPage: 5
+    readonly property bool beatportSearch: tracks.sourceKind === kindBeatportSearch
+    readonly property bool beatportMode: tracks.sourceKind >= kindBeatportSearch && tracks.sourceKind <= kindBeatportList
     // Lists that come from Beatport's servers (reloadable, not analyzable).
-    readonly property bool beatportRemote: beatportMode && tracks.sourceKind !== 7
+    readonly property bool beatportRemote: beatportMode && tracks.sourceKind !== kindBeatportRecent
     // Beatport tracks of the list (or the selection) not downloaded yet.
     property int toDownload: 0
     function updateToDownload() {
@@ -56,6 +62,7 @@ Item {
         { key: "added", title: "Added", kind: "text", role: "dateAdded", width: 92, sort: "added", tone: "dim" },
         { key: "played", title: "Last played", kind: "text", role: "lastPlayed", width: 120, sort: "played", tone: "dim" },
         { key: "plays", title: "Plays", kind: "text", role: "playCount", width: 56, sort: "plays", tone: "dim", align: "right" },
+        { key: "match", title: "Match", name: "Match (suggestions)", kind: "text", role: "match", width: 60, sort: "", tone: "dim", align: "right" },
         { key: "file", title: "File", flex: true, kind: "text", role: "fileName", width: 240, sort: "file", tone: "faint" },
         { key: "path", title: "Path", flex: true, kind: "text", role: "filePath", width: 340, sort: "path", tone: "faint" }
     ]
@@ -67,7 +74,17 @@ Item {
     ]
     // Shown columns in order: [{ key, width }], saved in the settings.
     property var layout: []
+    // Row size: 0 compact, 1 medium, 2 large (rows and cover art grow).
+    property int rowSize: 0
+    readonly property var rowHeights: [30, 44, 68]
+    readonly property var coverSizes: [26, 40, 64]
+    readonly property int rowHeight: rowHeights[rowSize] || 30
+    readonly property int coverSize: coverSizes[rowSize] || 26
     property real viewWidth: 800
+    // Width of the source tree; drag the gap next to it, saved in the settings.
+    property real sidebarWidth: 250
+    readonly property real sidebarMin: 160
+    readonly property real sidebarMax: Math.max(sidebarMin, Math.min(800, width - 400))
     // The shown columns with their definitions. Text columns (flex) share any
     // spare width in proportion to their set widths, so the table looks
     // the same at every window size; the others keep their width.
@@ -80,7 +97,7 @@ Item {
             if (!def)
                 continue
             var c = Object.assign({}, def)
-            c.width = layout[i].width
+            c.width = setWidth(layout[i])
             if (c.flex)
                 flex += c.width
             else
@@ -101,6 +118,14 @@ Item {
         return Math.max(w, viewWidth)
     }
 
+    // A column's set width; the cover column fits the cover size.
+    function setWidth(l) {
+        return l.key === "cover" ? coverSize + 12 : l.width
+    }
+    function setRowSize(size) {
+        rowSize = size
+        AppController.setSetting("browser_row_size", String(size))
+    }
     function columnDef(key) {
         for (var i = 0; i < allColumns.length; i++)
             if (allColumns[i].key === key)
@@ -122,6 +147,8 @@ Item {
         }
         saved = saved.filter(l => l && columnDef(l.key))
         layout = saved.length ? saved : defaultColumns()
+        rowSize = Number(JSON.parse(AppController.settingsJson()).browser_row_size) || 0
+        sidebarWidth = Number(JSON.parse(AppController.settingsJson()).browser_sidebar_width) || 250
     }
     function saveLayout() {
         AppController.setSetting("browser_columns", JSON.stringify(layout))
@@ -153,7 +180,7 @@ Item {
             if (!def)
                 continue
             if (!def.flex)
-                fixed += j === i ? 0 : layout[j].width
+                fixed += j === i ? 0 : setWidth(layout[j])
             else if (j !== i)
                 otherFlex += layout[j].width
         }
@@ -193,6 +220,20 @@ Item {
             tracks.loadRow(list.currentIndex, deck)
     }
 
+    // The tree row of the open source again, after the tree changed (rows
+    // added or removed above it); -1 when it is not shown.
+    function syncSourceRow() {
+        if (sourceRow < 0 && folderMode)
+            return
+        for (var r = 0; r < tree.count; r++) {
+            if (tree.kindAt(r) === tracks.sourceKind && tree.idAt(r) === tracks.sourceId) {
+                sourceRow = r
+                return
+            }
+        }
+        sourceRow = -1
+    }
+
     function openSource(row) {
         var kind = tree.kindAt(row)
         if (kind === 4 || kind === 5) {
@@ -201,18 +242,18 @@ Item {
         }
         if (kind < 0)
             return
-        if (kind === 6 && AppController.beatportAccount.length === 0) {
+        if (kind === kindBeatportSearch && AppController.beatportAccount.length === 0) {
             // Signed out: "Sign in to Beatport…".
-            browser.settingsRequested(5)
+            browser.settingsRequested(beatportSettingsPage)
             return
         }
         sourceRow = row
-        sourceTitle = kind === 3 ? tree.pathTextAt(row) : (kind === 6 ? "Beatport" : tree.labelAt(row))
+        sourceTitle = kind === 3 ? tree.pathTextAt(row) : (kind === kindBeatportSearch ? "Beatport" : tree.labelAt(row))
         tracks.sourceKind = kind
         tracks.sourceId = tree.idAt(row)
         tracks.refresh()
         list.currentIndex = -1
-        if (kind === 6)
+        if (kind === kindBeatportSearch)
             search.forceActiveFocus()
     }
 
@@ -259,12 +300,20 @@ Item {
     BrowserTreeModel {
         id: tree
         Component.onCompleted: refresh()
+        onModelReset: browser.syncSourceRow()
     }
     Connections {
         target: AppController
         function onLibraryRevisionChanged() {
             tracks.refresh()
             tree.refresh()
+            // Suggestions switched off while showing them.
+            if (tracks.sourceKind === 6 && !AppController.suggestionsEnabled)
+                browser.openSource(0)
+        }
+        function onSuggestionsRevisionChanged() {
+            if (tracks.sourceKind === 6)
+                tracks.refresh()
         }
         function onTracksRevisionChanged() {
             tracks.updateChanged()
@@ -314,11 +363,11 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: Theme.gap
+            spacing: 0
 
             // --- Source tree ------------------------------------------------
             Panel {
-                Layout.preferredWidth: 250
+                Layout.preferredWidth: Math.max(browser.sidebarMin, Math.min(browser.sidebarMax, browser.sidebarWidth))
                 Layout.fillHeight: true
 
                 ColumnLayout {
@@ -474,6 +523,44 @@ Item {
                 }
             }
 
+            // Drag to resize the source tree; double-click for the default width.
+            Item {
+                Layout.preferredWidth: Theme.gap
+                Layout.fillHeight: true
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 2
+                    height: parent.height
+                    radius: 1
+                    color: splitter.pressed ? Theme.textDim : Theme.knobEdge
+                    visible: splitter.containsMouse || splitter.pressed
+                }
+                MouseArea {
+                    id: splitter
+                    property real startX: 0
+                    property real startWidth: 0
+                    anchors.fill: parent
+                    anchors.leftMargin: -3
+                    anchors.rightMargin: -3
+                    hoverEnabled: true
+                    cursorShape: Qt.SplitHCursor
+                    onPressed: mouse => {
+                        startX = mapToItem(browser, mouse.x, 0).x
+                        startWidth = Math.max(browser.sidebarMin, Math.min(browser.sidebarMax, browser.sidebarWidth))
+                    }
+                    onPositionChanged: mouse => {
+                        if (pressed)
+                            browser.sidebarWidth = Math.max(browser.sidebarMin, Math.min(browser.sidebarMax,
+                                startWidth + mapToItem(browser, mouse.x, 0).x - startX))
+                    }
+                    onReleased: AppController.setSetting("browser_sidebar_width", String(Math.round(browser.sidebarWidth)))
+                    onDoubleClicked: {
+                        browser.sidebarWidth = 250
+                        AppController.setSetting("browser_sidebar_width", "250")
+                    }
+                }
+            }
+
             // --- Tracks -------------------------------------------------------
             Panel {
                 Layout.fillWidth: true
@@ -490,7 +577,7 @@ Item {
                         Layout.preferredHeight: 28
                         spacing: 4
                         Icon {
-                            name: browser.folderMode ? "folder" : (browser.beatportMode ? "cloud" : (tracks.sourceKind === 1 ? "list" : (tracks.sourceKind === 2 ? "clock" : "library")))
+                            name: browser.folderMode ? "folder" : (browser.beatportMode ? "cloud" : (tracks.sourceKind === 1 ? "list" : (tracks.sourceKind === 2 ? "clock" : (tracks.sourceKind === 6 ? "suggest" : "library"))))
                             size: 16
                             color: Theme.sync
                         }
@@ -522,6 +609,27 @@ Item {
                             text: browser.toDownload === 0 ? "ALL OFFLINE" : (tracks.selectedCount > 0 ? "DOWNLOAD " + browser.toDownload : "DOWNLOAD ALL " + browser.toDownload)
                             tip: "Download for offline use: the tracks stay on this computer and play without a connection"
                             onClicked: tracks.downloadBeatport()
+                        }
+                        // Row size: compact, medium, large.
+                        Row {
+                            spacing: 0
+                            Repeater {
+                                model: [
+                                    { text: "S", tip: "Compact rows" },
+                                    { text: "M", tip: "Taller rows with larger cover art" },
+                                    { text: "L", tip: "Large rows with big cover art" }
+                                ]
+                                DjButton {
+                                    required property int index
+                                    required property var modelData
+                                    flat: true
+                                    text: modelData.text
+                                    tip: modelData.tip
+                                    implicitWidth: 24
+                                    lit: browser.rowSize === index
+                                    onClicked: browser.setRowSize(index)
+                                }
+                            }
                         }
                         DjButton {
                             icon: "columns"
@@ -628,6 +736,8 @@ Item {
                         delegate: TrackRow {
                             width: browser.tableWidth
                             columns: browser.columns
+                            rowHeight: browser.rowHeight
+                            coverSize: browser.coverSize
                             onPressedRow: (row, mods, button) => {
                                 list.currentIndex = row
                                 list.forceActiveFocus()
@@ -695,14 +805,14 @@ Item {
                         icon: AppController.analysisPaused ? "play" : "pause"
                         implicitWidth: 24
                         implicitHeight: 20
-                        tip: AppController.analysisPaused ? "Resume the analysis" : "Pause the analysis"
+                        tip: AppController.analysisPaused ? "Resume the analysis" : "Pause the analysis (stays paused after a restart until resumed)"
                         onClicked: AppController.pauseAnalysis(!AppController.analysisPaused)
                     }
                     DjButton {
                         icon: "x"
                         implicitWidth: 24
                         implicitHeight: 20
-                        tip: "Cancel the analysis"
+                        tip: "Cancel the analysis and turn off background analysis (Settings → Analyze in the background turns it on again)"
                         onClicked: AppController.cancelAnalysis()
                     }
                 }
@@ -971,6 +1081,12 @@ Item {
             height: visible ? implicitHeight : 0
             onTriggered: AppController.rescan()
         }
+        StyledMenuItem {
+            text: "Turn off suggestions"
+            visible: treeMenu.kind === 6
+            height: visible ? implicitHeight : 0
+            onTriggered: AppController.setSetting("suggestions", "false")
+        }
         // Beatport: "My playlists" (a playlist folder with id −1), a playlist, search.
         StyledMenuItem {
             text: "Refresh Beatport playlists"
@@ -980,21 +1096,21 @@ Item {
         }
         StyledMenuItem {
             text: "Download playlist for offline use"
-            visible: treeMenu.kind === 8
+            visible: treeMenu.kind === browser.kindBeatportPlaylist
             height: visible ? implicitHeight : 0
             onTriggered: AppController.downloadBeatportPlaylist(treeMenu.nodeId)
         }
         StyledMenuItem {
             text: "Open on beatport.com"
-            visible: treeMenu.kind === 8
+            visible: treeMenu.kind === browser.kindBeatportPlaylist
             height: visible ? implicitHeight : 0
             onTriggered: AppController.openWebPage("https://www.beatport.com/library/playlists/" + treeMenu.nodeId)
         }
         StyledMenuItem {
             text: "Beatport settings…"
-            visible: treeMenu.kind === 6
+            visible: treeMenu.kind === browser.kindBeatportSearch
             height: visible ? implicitHeight : 0
-            onTriggered: browser.settingsRequested(5)
+            onTriggered: browser.settingsRequested(browser.beatportSettingsPage)
         }
     }
 }

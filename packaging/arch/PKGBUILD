@@ -1,4 +1,4 @@
-# Maintainer: Rafael Birkmann
+# Maintainer: The rille contributors
 # Build from a checkout: cd packaging/arch && makepkg -si
 pkgname=rille
 pkgver=0.1.0

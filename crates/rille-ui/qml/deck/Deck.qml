@@ -545,6 +545,7 @@ Rectangle {
             DjButton { implicitHeight: 26; text: "÷2"; tip: "Halve the BPM"; onClicked: AppController.gridEdit(deck.dc.deck, "halve", 0) }
             DjButton { implicitHeight: 26; text: "BEAT HERE"; tip: "Move the grid so the nearest beat sits on the play position"; onClicked: AppController.gridEdit(deck.dc.deck, "beat", 0) }
             DjButton { implicitHeight: 26; text: "BAR START"; tip: "Make the beat nearest to the play position beat 1 of the bar"; onClicked: AppController.gridEdit(deck.dc.deck, "downbeat", 0) }
+            DjButton { implicitHeight: 26; text: "GRID START"; tip: "Start the grid here: the kick at the play position becomes beat 1 of a bar (move the play position onto the first kick first)"; onClicked: AppController.gridEdit(deck.dc.deck, "barstart", 0) }
             DjButton { implicitHeight: 26; text: "TAP"; tip: "Tap along with the beat; four or more taps set the BPM"; onClicked: AppController.gridEdit(deck.dc.deck, "tap", 0) }
             DjButton { implicitHeight: 26; icon: "lock"; lit: deck.dc.gridLocked; litColor: Theme.warn; tip: "Lock the grid: re-analysis will not change it"; onClicked: AppController.gridEdit(deck.dc.deck, "lock", deck.dc.gridLocked ? 0 : 1) }
             DjButton { implicitHeight: 26; icon: "refresh"; text: "RESET"; tip: "Back to the analyzed grid"; onClicked: AppController.gridEdit(deck.dc.deck, "reset", 0) }

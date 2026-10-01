@@ -177,6 +177,10 @@ ApplicationWindow {
             Browser {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                onSettingsRequested: page => {
+                    settings.page = page
+                    settings.open()
+                }
             }
         }
     }

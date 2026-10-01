@@ -24,13 +24,17 @@ Popup {
         { name: "Decks & Analysis", icon: "analyze" },
         { name: "Waveform", icon: "palette" },
         { name: "Library", icon: "library" },
-        { name: "Controllers", icon: "midi" }
+        { name: "Controllers", icon: "midi" },
+        { name: "Beatport", icon: "cloud" }
     ]
+    // "12 tracks · 480 MB" in the Beatport cache.
+    property string cacheText: ""
 
     function reload() {
         s = JSON.parse(AppController.settingsJson())
         devices = JSON.parse(AppController.audioDevicesJson())
         midi = JSON.parse(AppController.midiJson())
+        cacheText = AppController.beatportCacheText()
     }
     function set(name, value) {
         AppController.setSetting(name, String(value))
@@ -525,6 +529,160 @@ Popup {
                                 text: AppController.learnText
                                 color: Theme.warn
                                 elide: Text.ElideRight
+                            }
+                        }
+                    }
+                }
+
+                // Beatport
+                Flickable {
+                    clip: true
+                    contentHeight: beatportPage.implicitHeight + 40
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: StyledScrollBar {}
+                    ColumnLayout {
+                        id: beatportPage
+                        readonly property bool signedIn: AppController.beatportAccount.length > 0
+                        x: 20; y: 20
+                        width: parent.width - 40
+                        spacing: 14
+                        SettingsSection {
+                            title: "Account"
+                            UiText {
+                                Layout.fillWidth: true
+                                text: "Stream tracks from the Beatport catalog and your Beatport playlists onto the decks. Needs a Beatport streaming subscription. rille keeps the sign-in, never your password."
+                                color: Theme.textDim
+                                wrapMode: Text.WordWrap
+                            }
+                            RowLayout {
+                                visible: beatportPage.signedIn
+                                spacing: 8
+                                Rectangle { implicitWidth: 8; implicitHeight: 8; radius: 4; color: Theme.play }
+                                UiText { Layout.fillWidth: true; text: "Signed in as " + AppController.beatportAccount; font.bold: true; elide: Text.ElideRight }
+                                DjButton { icon: "x"; text: "SIGN OUT"; onClicked: AppController.beatportLogout() }
+                            }
+                            RowLayout {
+                                visible: !beatportPage.signedIn
+                                spacing: 6
+                                TextField {
+                                    id: bpUser
+                                    Layout.preferredWidth: 220
+                                    implicitHeight: 28
+                                    placeholderText: "Email or username"
+                                    placeholderTextColor: Theme.textFaint
+                                    color: Theme.text
+                                    font.pixelSize: Theme.fontNormal
+                                    background: Rectangle { color: Theme.bg; radius: Theme.radius; border.color: bpUser.activeFocus ? Theme.sync : Theme.border }
+                                    onAccepted: bpPassword.forceActiveFocus()
+                                }
+                                TextField {
+                                    id: bpPassword
+                                    Layout.preferredWidth: 180
+                                    implicitHeight: 28
+                                    placeholderText: "Password"
+                                    placeholderTextColor: Theme.textFaint
+                                    // The eye shows the typed password to check it.
+                                    property bool revealed: false
+                                    echoMode: revealed ? TextInput.Normal : TextInput.Password
+                                    rightPadding: 30
+                                    color: Theme.text
+                                    font.pixelSize: Theme.fontNormal
+                                    background: Rectangle { color: Theme.bg; radius: Theme.radius; border.color: bpPassword.activeFocus ? Theme.sync : Theme.border }
+                                    onAccepted: signIn.clicked()
+                                    Icon {
+                                        anchors.right: parent.right
+                                        anchors.rightMargin: 8
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        name: bpPassword.revealed ? "eye-off" : "eye"
+                                        size: 15
+                                        color: eyeArea.containsMouse || bpPassword.revealed ? Theme.text : Theme.textDim
+                                        MouseArea {
+                                            id: eyeArea
+                                            anchors.fill: parent
+                                            anchors.margins: -6
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: bpPassword.revealed = !bpPassword.revealed
+                                        }
+                                        Tip { text: bpPassword.revealed ? "Hide the password" : "Show the password"; visible: eyeArea.containsMouse }
+                                    }
+                                }
+                                DjButton {
+                                    id: signIn
+                                    icon: "check"
+                                    text: "SIGN IN"
+                                    enabled: bpUser.text.length > 0 && bpPassword.text.length > 0
+                                    onClicked: {
+                                        AppController.beatportLogin(bpUser.text, bpPassword.text)
+                                        bpPassword.text = ""
+                                    }
+                                }
+                            }
+                            UiText {
+                                visible: AppController.status.indexOf("Beatport") >= 0
+                                Layout.fillWidth: true
+                                text: AppController.status
+                                color: Theme.textDim
+                                elide: Text.ElideRight
+                            }
+                        }
+                        SettingsSection {
+                            title: "Streaming"
+                            SettingRow {
+                                label: "Quality"
+                                hint: "Lossless FLAC and AAC 256 need a Professional plan, AAC 128 an Advanced one. Applies to tracks downloaded afterwards."
+                                StyledCombo {
+                                    id: qualityCombo
+                                    readonly property var values: ["lossless", "high", "medium"]
+                                    width: 200
+                                    model: ["Lossless (FLAC)", "AAC 256 kbps", "AAC 128 kbps"]
+                                    currentIndex: Math.max(0, qualityCombo.values.indexOf(dialog.s.beatport_quality))
+                                    onActivated: idx => dialog.set("beatport_quality", qualityCombo.values[idx])
+                                }
+                            }
+                        }
+                        SettingsSection {
+                            title: "Offline storage"
+                            SettingRow {
+                                label: "Storage limit"
+                                hint: "Every streamed track stays on disk, so it loads at once next time and plays without a connection. When the limit is reached, the least recently played make room, never the ones you downloaded for offline use. Cues, beatgrids and analysis are kept either way."
+                                StyledSpin {
+                                    from: 1; to: 500
+                                    suffix: "GB"
+                                    value: Math.max(1, Math.round((dialog.s.beatport_cache_mb || 20480) / 1024))
+                                    onValueModified: dialog.set("beatport_cache_mb", value * 1024)
+                                }
+                            }
+                            SettingRow {
+                                label: "On this computer"
+                                hint: dialog.cacheText
+                                Row {
+                                    spacing: 6
+                                    DjButton {
+                                        icon: "trash"
+                                        text: "CLEAR STREAMED"
+                                        tip: "Delete the files of streamed tracks you did not download for offline use (not those on a deck); they download again when loaded"
+                                        onClicked: {
+                                            AppController.clearBeatportCache(false)
+                                            dialog.cacheText = AppController.beatportCacheText()
+                                        }
+                                    }
+                                    DjButton {
+                                        icon: "x"
+                                        text: "REMOVE ALL"
+                                        tip: "Delete every Beatport file, also the offline downloads (not those on a deck)"
+                                        onClicked: {
+                                            AppController.clearBeatportCache(true)
+                                            dialog.cacheText = AppController.beatportCacheText()
+                                        }
+                                    }
+                                }
+                            }
+                            UiText {
+                                Layout.fillWidth: true
+                                text: "Download a playlist for offline use: right-click it in the browser, or DOWNLOAD ALL above any Beatport list. A green check marks downloaded tracks."
+                                color: Theme.textDim
+                                wrapMode: Text.WordWrap
                             }
                         }
                     }

@@ -54,7 +54,11 @@ fn demo_loads(app: &std::sync::Arc<App>, args: &[String]) {
             && let Some((d, path)) = spec.split_once(':')
             && let Some(deck) = deck_of(d)
         {
-            app.load_file(deck, std::path::Path::new(path));
+            // `--load=A:beatport:<track id>` streams a Beatport track.
+            match path.strip_prefix("beatport:").and_then(|id| id.parse().ok()) {
+                Some(id) => app.load_beatport(deck, id),
+                None => app.load_file(deck, std::path::Path::new(path)),
+            }
         }
         if let Some(d) = a.strip_prefix("--play=").and_then(deck_of) {
             play.push(d);

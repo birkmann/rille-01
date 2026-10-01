@@ -24,9 +24,12 @@ pub mod qobject {
         #[qml_element]
         #[base = QAbstractListModel]
         #[qproperty(QString, search)]
-        /// 0 collection, 1 playlist, 2 history session, 3 explorer folder.
+        /// 0 collection, 1 playlist, 2 history session, 3 explorer folder,
+        /// 6 Beatport search, 7 streamed tracks, 8 Beatport playlist,
+        /// 9 Beatport chart (the browser tree's kinds).
         #[qproperty(i32, source_kind, cxx_name = "sourceKind")]
-        /// Playlist or session id, or the folder's path token.
+        /// Playlist or session id, the folder's path token, or the Beatport
+        /// playlist id.
         #[qproperty(i64, source_id, cxx_name = "sourceId")]
         #[qproperty(QString, sort_key, cxx_name = "sortKey")]
         #[qproperty(bool, descending)]
@@ -120,6 +123,40 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "selectionTitle"]
         fn selection_title(self: &TrackListModel, row: i32) -> QString;
+
+        /// Fetches the shown Beatport list again.
+        #[qinvokable]
+        #[cxx_name = "reloadBeatport"]
+        fn reload_beatport(self: &TrackListModel);
+
+        /// The Beatport page of `row`'s track, or empty.
+        #[qinvokable]
+        #[cxx_name = "beatportUrl"]
+        fn beatport_url(self: &TrackListModel, row: i32) -> QString;
+
+        /// Downloads the selected Beatport tracks (all of the list when
+        /// none is selected) and keeps them offline.
+        #[qinvokable]
+        #[cxx_name = "downloadBeatport"]
+        fn download_beatport(self: &TrackListModel);
+
+        /// The selected streamed tracks are no longer kept offline; their
+        /// files are deleted.
+        #[qinvokable]
+        #[cxx_name = "removeDownloadsSelected"]
+        fn remove_downloads_selected(self: &TrackListModel);
+
+        /// Beatport tracks of the list not downloaded yet (all of them, or
+        /// the selected ones).
+        #[qinvokable]
+        #[cxx_name = "notDownloadedCount"]
+        fn not_downloaded_count(self: &TrackListModel, selected_only: bool) -> i32;
+
+        /// Repaints the rows' download indicators (no reset, keeps the
+        /// scroll position).
+        #[qinvokable]
+        #[cxx_name = "updateDownloads"]
+        fn update_downloads(self: Pin<&mut TrackListModel>);
     }
 
     unsafe extern "RustQt" {
@@ -158,7 +195,7 @@ use std::path::PathBuf;
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant};
-use rille_app::{AnalysisState, SortKey, Source};
+use rille_app::{AnalysisState, App, BeatportList, DownloadState, SortKey, Source};
 use rille_core::GridFlags;
 use rille_library::{CoverSize, TrackRow};
 
@@ -200,6 +237,10 @@ const TRACK_ROLES: &[&str] = &[
     "dateAdded",
     "lastPlayed",
     "filePath",
+    "beatportId",
+    "streamed",
+    "offlineState",
+    "downloadProgress",
 ];
 
 #[derive(Default)]
@@ -275,6 +316,25 @@ fn state_text(s: AnalysisState) -> &'static str {
     }
 }
 
+/// A streamed track kept offline with its file here.
+fn is_offline(r: &TrackRow) -> bool {
+    r.id >= 0 && r.beatport_offline && !r.missing
+}
+
+/// A Beatport track's availability for the row's indicator: "" (not from
+/// Beatport), "stream" (stream only), "cached" (file here, may make room),
+/// "offline" (kept offline), "queued" or "downloading".
+fn offline_state(app: &App, r: &TrackRow) -> &'static str {
+    let Some(bp) = r.beatport_id else { return "" };
+    match app.beatport_download_state(bp) {
+        DownloadState::Downloading(_) => "downloading",
+        DownloadState::Queued => "queued",
+        DownloadState::Idle if is_offline(r) => "offline",
+        DownloadState::Idle if r.id >= 0 && !r.missing => "cached",
+        DownloadState::Idle => "stream",
+    }
+}
+
 /// Whether the grid should be checked by the DJ: tempo or bar start flagged.
 fn grid_attention(r: &TrackRow) -> &'static str {
     let f = r.grid_flags();
@@ -297,13 +357,40 @@ impl TrackListRust {
     fn selected_ids(&self) -> Vec<i64> {
         self.selected_rows().iter().filter(|r| r.id >= 0).map(|r| r.id).collect()
     }
+
+    /// The Beatport list shown: the search box searches Beatport (kind 6);
+    /// playlists (kind 8) and charts (kind 9) are filtered locally.
+    fn beatport_list(&self) -> Option<BeatportList> {
+        use crate::tree_model::{BP_PURCHASES, BP_TOP100};
+        match (self.source_kind, self.source_id) {
+            (6, _) => Some(BeatportList::Search(self.search.to_string().trim().to_owned())),
+            (8, id) => Some(BeatportList::Playlist(id)),
+            (9, BP_TOP100) => Some(BeatportList::Top100),
+            (9, BP_PURCHASES) => Some(BeatportList::Purchases),
+            (9, genre) => Some(BeatportList::Genre(genre)),
+            _ => None,
+        }
+    }
 }
 
 impl qobject::TrackListModel {
     fn refresh(mut self: Pin<&mut Self>) {
         let Some(app) = app() else { return };
         let search = self.search().to_string();
+        let beatport = self.rust().beatport_list();
+        if let Some(list) = &beatport {
+            // Fetched in the background unless already shown.
+            app.beatport_open(list.clone(), false);
+        }
         let mut rows = match *self.source_kind() {
+            6 | 8 | 9 => app.beatport_rows(beatport.as_ref().expect("beatport list")),
+            // Id 1: only the tracks kept offline.
+            7 => app.tracks(
+                if *self.source_id() == 1 { Source::BeatportOffline } else { Source::BeatportRecent },
+                &search,
+                sort_key(&self.sort_key().to_string()),
+                *self.descending(),
+            ),
             1 => app.tracks(
                 Source::Playlist(*self.source_id()),
                 &search,
@@ -332,12 +419,35 @@ impl qobject::TrackListModel {
                 rille_app::sort_rows(&mut rows, sort_key(&self.sort_key().to_string()), *self.descending());
             }
         }
+        if matches!(*self.source_kind(), 8 | 9) {
+            let needle = search.to_lowercase();
+            if !needle.is_empty() {
+                rows.retain(|r| {
+                    [&r.title, &r.artist, &r.label, &r.genre].iter().any(|f| f.to_lowercase().contains(&needle))
+                });
+            }
+        }
+        if beatport.is_some() && (self.sort_key().to_string() != "artist" || *self.descending()) {
+            // Beatport's order (relevance, playlist order) unless sorted.
+            rille_app::sort_rows(&mut rows, sort_key(&self.sort_key().to_string()), *self.descending());
+        }
         let total_secs: f64 = rows.iter().map(|r| r.duration_secs).sum();
         let new = rows.iter().filter(|r| r.id < 0).count();
-        let summary = if *self.source_kind() == 3 {
-            format!("{} files, {} not in the collection", rows.len(), new)
-        } else {
-            format!("{} tracks, {:.1} hours", rows.len(), total_secs / 3600.0 + 0.0)
+        let tracks = format!("{} tracks, {:.1} hours", rows.len(), total_secs / 3600.0 + 0.0);
+        let summary = match (*self.source_kind(), &beatport) {
+            (3, _) => format!("{} files, {} not in the collection", rows.len(), new),
+            (_, Some(list)) => {
+                let status = app.beatport_status(list);
+                match (status.loading, status.error, list) {
+                    (true, _, _) => "Loading from Beatport…".to_string(),
+                    (_, Some(e), _) => e,
+                    (_, None, BeatportList::Search(q)) if q.is_empty() => {
+                        "Search Beatport, or paste a beatport.com link".to_string()
+                    }
+                    _ => tracks,
+                }
+            }
+            _ => tracks,
         };
         let seen = changes_seq();
         self.as_mut().begin_reset_model();
@@ -466,37 +576,46 @@ impl qobject::TrackListModel {
     fn load_row_to_cell(&self, row: i32, deck: i32, cell: i32) {
         let (Some(app), Some(r)) = (app(), self.rust().rows.get(row.max(0) as usize)) else { return };
         let (deck, cell) = (deck.clamp(0, 3) as u8, usize::try_from(cell).ok());
-        if r.id >= 0 {
-            app.load_remix_cell(deck, cell, r.id);
-        } else {
-            app.load_remix_file(deck, cell, &r.path);
+        match (r.id, r.beatport_id) {
+            (id, _) if id >= 0 => app.load_remix_cell(deck, cell, id),
+            // A catalog track joins the collection first, then fills a free cell.
+            (_, Some(bp)) => app.load_beatport(deck, bp),
+            _ => app.load_remix_file(deck, cell, &r.path),
         }
     }
 
     fn load_row(&self, row: i32, deck: i32) {
         let (Some(app), Some(r)) = (app(), self.rust().rows.get(row.max(0) as usize)) else { return };
         let deck = deck.clamp(0, 3) as u8;
-        if r.id >= 0 {
-            app.load_track(deck, r.id);
-        } else {
-            app.load_file(deck, &r.path);
+        match (r.id, r.beatport_id) {
+            (id, _) if id >= 0 => app.load_track(deck, id),
+            (_, Some(bp)) => app.load_beatport(deck, bp),
+            _ => app.load_file(deck, &r.path),
         }
     }
 
     fn analyze_selected(&self, force: bool) {
         let Some(app) = app() else { return };
-        let paths: Vec<PathBuf> = self.rust().selected_rows().iter().map(|r| r.path.clone()).collect();
+        // Catalog tracks are analyzed when they are loaded.
+        let paths: Vec<PathBuf> = self
+            .rust()
+            .selected_rows()
+            .iter()
+            .filter(|r| r.id >= 0 || r.beatport_id.is_none())
+            .map(|r| r.path.clone())
+            .collect();
         app.analyze_paths(paths, force);
     }
 
     fn import_selected(&self, analyze: bool) {
         let Some(app) = app() else { return };
         let rows = self.rust().selected_rows();
+        let new_file = |r: &TrackRow| r.id < 0 && r.beatport_id.is_none();
         let paths: Vec<PathBuf> = if rows.is_empty() {
             // Nothing selected: the whole folder.
-            self.rust().rows.iter().filter(|r| r.id < 0).map(|r| r.path.clone()).collect()
+            self.rust().rows.iter().filter(|r| new_file(r)).map(|r| r.path.clone()).collect()
         } else {
-            rows.iter().filter(|r| r.id < 0).map(|r| r.path.clone()).collect()
+            rows.iter().filter(|r| new_file(r)).map(|r| r.path.clone()).collect()
         };
         if !paths.is_empty() {
             app.import_paths(paths, analyze);
@@ -509,9 +628,66 @@ impl qobject::TrackListModel {
         app.set_track_color(&self.rust().selected_ids(), c);
     }
 
+    /// Streamed tracks also leave the cache.
     fn remove_selected(&self) {
         let Some(app) = app() else { return };
-        app.remove_tracks(&self.rust().selected_ids());
+        let rows = self.rust().selected_rows();
+        let (streamed, local): (Vec<&TrackRow>, Vec<&TrackRow>) =
+            rows.into_iter().filter(|r| r.id >= 0).partition(|r| r.beatport_id.is_some());
+        if !streamed.is_empty() {
+            app.remove_streamed(&streamed.iter().map(|r| r.id).collect::<Vec<_>>());
+        }
+        if !local.is_empty() {
+            app.remove_tracks(&local.iter().map(|r| r.id).collect::<Vec<_>>());
+        }
+    }
+
+    fn reload_beatport(&self) {
+        let (Some(app), Some(list)) = (app(), self.rust().beatport_list()) else { return };
+        app.beatport_open(list, true);
+    }
+
+    fn beatport_url(&self, row: i32) -> QString {
+        let bp = self.rust().rows.get(row.max(0) as usize).and_then(|r| r.beatport_id);
+        QString::from(bp.map_or_else(String::new, |id| format!("https://www.beatport.com/track/-/{id}")))
+    }
+
+    fn download_beatport(&self) {
+        let Some(app) = app() else { return };
+        let r = self.rust();
+        let rows = if r.selected.is_empty() { r.rows.iter().collect() } else { r.selected_rows() };
+        let ids: Vec<i64> = rows.iter().filter(|r| !is_offline(r)).filter_map(|r| r.beatport_id).collect();
+        if !ids.is_empty() {
+            app.beatport_download(ids);
+        }
+    }
+
+    fn remove_downloads_selected(&self) {
+        let Some(app) = app() else { return };
+        let ids: Vec<i64> =
+            self.rust().selected_rows().iter().filter(|r| r.id >= 0 && r.beatport_id.is_some()).map(|r| r.id).collect();
+        app.beatport_remove_downloads(&ids);
+    }
+
+    fn not_downloaded_count(&self, selected_only: bool) -> i32 {
+        let r = self.rust();
+        let rows: Vec<&TrackRow> = if selected_only { r.selected_rows() } else { r.rows.iter().collect() };
+        rows.iter().filter(|r| r.beatport_id.is_some() && !is_offline(r)).count() as i32
+    }
+
+    fn update_downloads(mut self: Pin<&mut Self>) {
+        // Rows whose download finished are collection rows now.
+        if let Some(app) = app() {
+            for i in 0..self.rust().rows.len() {
+                let id = self.rust().rows[i].id;
+                if id >= 0
+                    && let Some(row) = app.track_row(id)
+                {
+                    self.as_mut().rust_mut().rows[i] = row;
+                }
+            }
+        }
+        self.emit_all_changed();
     }
 
     fn add_selected_to_playlist(&self, playlist: i64) {
@@ -571,11 +747,15 @@ impl qobject::TrackListModel {
                 .cover
                 .as_deref()
                 .and_then(|c| app.cover_file(c, CoverSize::Small))
-                .map_or(String::new(), |p| format!("file://{}", p.display()))),
+                .map(|p| format!("file://{}", p.display()))
+                // Catalog tracks: Beatport's image.
+                .or_else(|| r.beatport_id.filter(|_| r.id < 0).and_then(|bp| app.beatport_cover_url(bp, 100)))
+                .unwrap_or_default()),
             "analyzed" => QVariant::from(&r.analyzed),
             "gridNote" | "gridAttention" => s(if r.analyzed { grid_attention(r) } else { "" }),
             "playCount" => QVariant::from(&(r.play_count as i32)),
-            "missing" => QVariant::from(&r.missing),
+            // A streamed track out of the cache is downloaded again, not lost.
+            "missing" => QVariant::from(&(r.missing && r.beatport_id.is_none())),
             "deckMark" => {
                 let marks: String = (0..4u8)
                     .filter(|d| r.id >= 0 && app.deck(*d).track_id == Some(r.id))
@@ -602,6 +782,13 @@ impl qobject::TrackListModel {
             }),
             "lastPlayed" => s(&r.last_played.map_or(String::new(), crate::tree_model::format_date)),
             "filePath" => s(&r.path.display().to_string()),
+            "beatportId" => QVariant::from(&r.beatport_id.unwrap_or(-1)),
+            "streamed" => QVariant::from(&r.beatport_id.is_some()),
+            "offlineState" => s(offline_state(app, r)),
+            "downloadProgress" => QVariant::from(&match r.beatport_id.map(|b| app.beatport_download_state(b)) {
+                Some(DownloadState::Downloading(f)) => f64::from(f),
+                _ => -1.0,
+            }),
             _ => QVariant::default(),
         }
     }

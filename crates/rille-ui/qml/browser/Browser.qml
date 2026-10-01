@@ -14,6 +14,20 @@ Item {
     property int sourceRow: 0
     property string sourceTitle: "Track Collection"
     readonly property bool folderMode: tracks.sourceKind === 3
+    // Beatport: the search box searches the catalog (kind 6); playlists
+    // (kind 8) and charts (9: Top 100s, purchases) are Beatport's; kind 7
+    // lists the tracks streamed so far.
+    readonly property bool beatportSearch: tracks.sourceKind === 6
+    readonly property bool beatportMode: tracks.sourceKind >= 6 && tracks.sourceKind <= 9
+    // Lists that come from Beatport's servers (reloadable, not analyzable).
+    readonly property bool beatportRemote: beatportMode && tracks.sourceKind !== 7
+    // Beatport tracks of the list (or the selection) not downloaded yet.
+    property int toDownload: 0
+    function updateToDownload() {
+        toDownload = beatportMode ? tracks.notDownloadedCount(tracks.selectedCount > 0) : 0
+    }
+    // The settings page with the Beatport sign-in.
+    signal settingsRequested(int page)
     readonly property var trackColors: ["#e0565b", "#f5a524", "#f2c94c", "#5fd068", "#2ec4b6", "#4fb3e8", "#7b8cff", "#d96bd6"]
     readonly property var trackColorNames: ["Red", "Orange", "Yellow", "Green", "Teal", "Blue", "Violet", "Pink"]
 
@@ -187,12 +201,19 @@ Item {
         }
         if (kind < 0)
             return
+        if (kind === 6 && AppController.beatportAccount.length === 0) {
+            // Signed out: "Sign in to Beatport…".
+            browser.settingsRequested(5)
+            return
+        }
         sourceRow = row
-        sourceTitle = kind === 3 ? tree.pathTextAt(row) : tree.labelAt(row)
+        sourceTitle = kind === 3 ? tree.pathTextAt(row) : (kind === 6 ? "Beatport" : tree.labelAt(row))
         tracks.sourceKind = kind
         tracks.sourceId = tree.idAt(row)
         tracks.refresh()
         list.currentIndex = -1
+        if (kind === 6)
+            search.forceActiveFocus()
     }
 
     // `rille --browse=<folder>`: start in that folder.
@@ -230,6 +251,10 @@ Item {
         id: tracks
         sortKey: "artist"
         Component.onCompleted: refresh()
+        onCountChanged: browser.updateToDownload()
+        onSelectedCountChanged: browser.updateToDownload()
+        onSourceKindChanged: browser.updateToDownload()
+        onSummaryChanged: browser.updateToDownload()
     }
     BrowserTreeModel {
         id: tree
@@ -243,6 +268,23 @@ Item {
         }
         function onTracksRevisionChanged() {
             tracks.updateChanged()
+        }
+        function onBeatportRevisionChanged() {
+            if (browser.beatportMode)
+                tracks.refresh()
+            tree.refresh()
+        }
+        function onBeatportAccountChanged() {
+            tree.refresh()
+        }
+        function onBeatportDownloadRevisionChanged() {
+            tracks.updateDownloads()
+            browser.updateToDownload()
+        }
+        function onBeatportDownloadingChanged() {
+            // A batch finished: the Offline count in the tree.
+            if (!AppController.beatportDownloading)
+                tree.refresh()
         }
         // Browser controls from a MIDI controller.
         function onBrowserActionSeqChanged() {
@@ -287,11 +329,17 @@ Item {
                     SearchField {
                         id: search
                         Layout.fillWidth: true
+                        placeholderText: browser.beatportSearch ? "Search Beatport or paste a link" : "Search"
                         onTextEdited: searchDelay.restart()
+                        onAccepted: {
+                            searchDelay.stop()
+                            searchDelay.triggered()
+                        }
                         Keys.onDownPressed: list.forceActiveFocus()
                         Timer {
                             id: searchDelay
-                            interval: 150
+                            // Each Beatport search asks the server: wait for a pause in typing.
+                            interval: browser.beatportSearch ? 450 : 150
                             onTriggered: {
                                 tracks.search = search.text
                                 tracks.refresh()
@@ -442,7 +490,7 @@ Item {
                         Layout.preferredHeight: 28
                         spacing: 4
                         Icon {
-                            name: browser.folderMode ? "folder" : (tracks.sourceKind === 1 ? "list" : (tracks.sourceKind === 2 ? "clock" : "library"))
+                            name: browser.folderMode ? "folder" : (browser.beatportMode ? "cloud" : (tracks.sourceKind === 1 ? "list" : (tracks.sourceKind === 2 ? "clock" : "library")))
                             size: 16
                             color: Theme.sync
                         }
@@ -454,9 +502,26 @@ Item {
                             font.bold: true
                         }
                         UiText {
+                            Layout.maximumWidth: 420
                             text: tracks.summary
                             color: Theme.textDim
                             font.pixelSize: Theme.fontSmall
+                            elide: Text.ElideRight
+                        }
+                        DjButton {
+                            visible: browser.beatportRemote
+                            icon: "refresh"
+                            tip: "Load the list from Beatport again"
+                            implicitWidth: 28
+                            onClicked: tracks.reloadBeatport()
+                        }
+                        DjButton {
+                            visible: browser.beatportMode && AppController.beatportAccount.length > 0
+                            enabled: browser.toDownload > 0
+                            icon: "import"
+                            text: browser.toDownload === 0 ? "ALL OFFLINE" : (tracks.selectedCount > 0 ? "DOWNLOAD " + browser.toDownload : "DOWNLOAD ALL " + browser.toDownload)
+                            tip: "Download for offline use: the tracks stay on this computer and play without a connection"
+                            onClicked: tracks.downloadBeatport()
                         }
                         DjButton {
                             icon: "columns"
@@ -493,7 +558,7 @@ Item {
                             onClicked: AppController.openFolder(tracks.sourceId)
                         }
                         DjButton {
-                            visible: !browser.folderMode && tracks.selectedCount > 0
+                            visible: !browser.folderMode && !browser.beatportRemote && tracks.selectedCount > 0
                             icon: "analyze"
                             text: "ANALYZE " + tracks.selectedCount
                             onClicked: tracks.analyzeSelected(false)
@@ -647,6 +712,37 @@ Item {
                     color: Theme.danger
                     font.pixelSize: Theme.fontSmall
                 }
+                // Beatport downloads for offline use.
+                RowLayout {
+                    visible: AppController.beatportDownloading
+                    spacing: 6
+                    Icon { name: "cloud"; size: 14; color: Theme.sync }
+                    UiText {
+                        text: AppController.beatportDownloadText
+                        font.pixelSize: Theme.fontSmall
+                        font.bold: true
+                    }
+                    Rectangle {
+                        implicitWidth: 120
+                        implicitHeight: 6
+                        radius: 3
+                        color: Theme.control
+                        Rectangle {
+                            width: parent.width * AppController.beatportDownloadFraction
+                            height: parent.height
+                            radius: 3
+                            color: Theme.sync
+                            Behavior on width { NumberAnimation { duration: 250 } }
+                        }
+                    }
+                    DjButton {
+                        icon: "x"
+                        implicitWidth: 24
+                        implicitHeight: 20
+                        tip: "Stop downloading (finished tracks stay offline)"
+                        onClicked: AppController.cancelBeatportDownloads()
+                    }
+                }
                 UiText {
                     visible: AppController.importText.length > 0
                     text: AppController.importText
@@ -671,6 +767,9 @@ Item {
         id: rowMenu
         property int row: -1
         readonly property bool inCollection: tracks.trackId(row) >= 0
+        // Beatport page of a streamed or catalog track, else empty.
+        readonly property string beatportUrl: tracks.beatportUrl(row)
+        readonly property bool streamed: beatportUrl.length > 0
         function open(r) {
             row = r
             popup()
@@ -681,8 +780,9 @@ Item {
         StyledMenuItem { iconName: "play"; text: "Load on deck C"; visible: AppController.deckCount === 4; height: visible ? implicitHeight : 0; onTriggered: tracks.loadRow(rowMenu.row, 2) }
         StyledMenuItem { iconName: "play"; text: "Load on deck D"; visible: AppController.deckCount === 4; height: visible ? implicitHeight : 0; onTriggered: tracks.loadRow(rowMenu.row, 3) }
         StyledMenuSeparator {}
-        StyledMenuItem { iconName: "analyze"; text: tracks.selectedCount > 1 ? "Analyze " + tracks.selectedCount + " tracks" : "Analyze"; onTriggered: tracks.analyzeSelected(false) }
-        StyledMenuItem { iconName: "refresh"; text: "Analyze again"; onTriggered: tracks.analyzeSelected(true) }
+        // Catalog tracks are analyzed when they are first loaded.
+        StyledMenuItem { iconName: "analyze"; enabled: rowMenu.inCollection || !rowMenu.streamed; text: tracks.selectedCount > 1 ? "Analyze " + tracks.selectedCount + " tracks" : "Analyze"; onTriggered: tracks.analyzeSelected(false) }
+        StyledMenuItem { iconName: "refresh"; enabled: rowMenu.inCollection || !rowMenu.streamed; text: "Analyze again"; onTriggered: tracks.analyzeSelected(true) }
         StyledMenuItem { iconName: "grid"; text: "Reset beatgrid"; enabled: rowMenu.inCollection; onTriggered: tracks.resetGridSelected() }
         StyledMenuSeparator {}
         StyledMenu {
@@ -745,24 +845,55 @@ Item {
         }
         StyledMenuSeparator {}
         StyledMenuItem {
+            iconName: "import"
+            text: tracks.selectedCount > 1 ? "Download " + tracks.selectedCount + " tracks for offline use" : "Download for offline use"
+            visible: rowMenu.streamed && AppController.beatportAccount.length > 0
+            height: visible ? implicitHeight : 0
+            onTriggered: tracks.downloadBeatport()
+        }
+        StyledMenuItem {
+            iconName: "x"
+            text: "Remove the download (keep cues and grid)"
+            visible: rowMenu.streamed && rowMenu.inCollection
+            height: visible ? implicitHeight : 0
+            onTriggered: tracks.removeDownloadsSelected()
+        }
+        StyledMenuItem {
+            iconName: "external"
+            text: "Open on beatport.com"
+            visible: rowMenu.streamed
+            height: visible ? implicitHeight : 0
+            onTriggered: AppController.openWebPage(rowMenu.beatportUrl)
+        }
+        StyledMenuItem {
             iconName: "folder"
             text: "Show in Explorer"
+            visible: !rowMenu.streamed
+            height: visible ? implicitHeight : 0
             onTriggered: browser.showFolder(tracks.folderToken(rowMenu.row))
         }
         StyledMenuItem {
             iconName: "external"
             text: "Open folder in file manager"
+            visible: !rowMenu.streamed
+            height: visible ? implicitHeight : 0
             onTriggered: AppController.openFolder(tracks.folderToken(rowMenu.row))
         }
         StyledMenuItem {
             iconName: "import"
             text: "Import to collection"
-            visible: !rowMenu.inCollection
+            visible: !rowMenu.inCollection && !rowMenu.streamed
             height: visible ? implicitHeight : 0
             onTriggered: tracks.importSelected(false)
         }
         StyledMenuSeparator {}
-        StyledMenuItem { iconName: "trash"; danger: true; text: "Remove from collection"; enabled: rowMenu.inCollection; onTriggered: tracks.removeSelected() }
+        StyledMenuItem {
+            iconName: "trash"
+            danger: true
+            text: rowMenu.streamed ? "Remove streamed track (and its cached file)" : "Remove from collection"
+            enabled: rowMenu.inCollection
+            onTriggered: tracks.removeSelected()
+        }
     }
 
     // --- Column chooser ---------------------------------------------------------
@@ -839,6 +970,31 @@ Item {
             visible: treeMenu.kind === 0
             height: visible ? implicitHeight : 0
             onTriggered: AppController.rescan()
+        }
+        // Beatport: "My playlists" (a playlist folder with id −1), a playlist, search.
+        StyledMenuItem {
+            text: "Refresh Beatport playlists"
+            visible: treeMenu.kind === 5 && treeMenu.nodeId === -1
+            height: visible ? implicitHeight : 0
+            onTriggered: AppController.refreshBeatportPlaylists()
+        }
+        StyledMenuItem {
+            text: "Download playlist for offline use"
+            visible: treeMenu.kind === 8
+            height: visible ? implicitHeight : 0
+            onTriggered: AppController.downloadBeatportPlaylist(treeMenu.nodeId)
+        }
+        StyledMenuItem {
+            text: "Open on beatport.com"
+            visible: treeMenu.kind === 8
+            height: visible ? implicitHeight : 0
+            onTriggered: AppController.openWebPage("https://www.beatport.com/library/playlists/" + treeMenu.nodeId)
+        }
+        StyledMenuItem {
+            text: "Beatport settings…"
+            visible: treeMenu.kind === 6
+            height: visible ? implicitHeight : 0
+            onTriggered: browser.settingsRequested(5)
         }
     }
 }

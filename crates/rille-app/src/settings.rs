@@ -57,6 +57,16 @@ impl Paths {
     pub fn user_mappings(&self) -> PathBuf {
         self.config.join("mappings")
     }
+
+    /// Files of tracks streamed from Beatport.
+    pub fn beatport_cache(&self) -> PathBuf {
+        self.cache.join("beatport")
+    }
+
+    /// The Beatport sign-in (tokens only, never the password).
+    pub fn beatport_token(&self) -> PathBuf {
+        self.data.join("beatport-token.json")
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -186,6 +196,12 @@ pub struct Settings {
     /// The browser's track columns as JSON (`[{"key":…,"width":…}]` in
     /// display order); empty = the default layout.
     pub browser_columns: String,
+    /// Beatport streaming quality: "lossless" (FLAC), "high" (AAC 256) or
+    /// "medium" (AAC 128).
+    pub beatport_quality: String,
+    /// Streamed tracks kept in the cache, in megabytes; the least recently
+    /// played go first.
+    pub beatport_cache_mb: u32,
 }
 
 impl Default for Settings {
@@ -217,6 +233,8 @@ impl Default for Settings {
             show_mixer: true,
             midi_mappings: BTreeMap::new(),
             browser_columns: String::new(),
+            beatport_quality: "lossless".into(),
+            beatport_cache_mb: 20 * 1024,
         }
     }
 }

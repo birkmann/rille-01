@@ -15,6 +15,13 @@ pub mod qobject {
         #[qproperty(i32, deck)]
         #[qproperty(bool, loaded)]
         #[qproperty(bool, loading)]
+        /// What loading does now: "Streaming from Beatport", "Preparing
+        /// the track"…
+        #[qproperty(QString, loading_text, cxx_name = "loadingText")]
+        /// Download of a streamed track 0..1; −1 when not downloading.
+        #[qproperty(f64, download_progress, cxx_name = "downloadProgress")]
+        /// "42 % · 3.4 MB/s · 9 s left".
+        #[qproperty(QString, download_text, cxx_name = "downloadText")]
         #[qproperty(bool, analyzing)]
         #[qproperty(QString, title)]
         #[qproperty(QString, artist)]
@@ -162,6 +169,9 @@ pub struct DeckControllerRust {
     deck: i32,
     loaded: bool,
     loading: bool,
+    loading_text: QString,
+    download_progress: f64,
+    download_text: QString,
     analyzing: bool,
     title: QString,
     artist: QString,
@@ -301,6 +311,18 @@ impl qobject::DeckController {
             self.as_mut().set_key_text(QString::from(info.key.map_or(String::new(), |k| settings.key_text(k))));
             self.as_mut().set_key_color(QString::from(info.key.map_or("#8a9099".into(), key_color)));
             self.as_mut().set_loading(info.loading);
+            let (text, progress, detail) = match info.download {
+                Some(d) if d.total_bytes == 0 => ("Connecting to Beatport…", 0.0, String::new()),
+                Some(d) => (
+                    "Streaming from Beatport",
+                    f64::from(d.fraction),
+                    format!("{} % · {}", (d.fraction * 100.0).floor() as i32, d.describe()),
+                ),
+                None => ("Preparing the track…", -1.0, String::new()),
+            };
+            self.as_mut().set_loading_text(QString::from(text));
+            self.as_mut().set_download_progress(progress);
+            self.as_mut().set_download_text(QString::from(detail));
             self.as_mut().set_analyzing(info.analyzing);
             self.as_mut().set_error(QString::from(info.error.clone().unwrap_or_default()));
             self.as_mut().set_remix_cells_json(QString::from(info.remix.as_deref().map_or("[]".into(), cells_json)));

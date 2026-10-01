@@ -27,7 +27,9 @@ Rectangle {
     Drag.supportedActions: Qt.CopyAction
     Drag.mimeData: row.model.inCollection
         ? { "application/x-rille-track": String(row.model.trackId) }
-        : { "application/x-rille-path": String(row.dragToken ? row.dragToken(row.index) : -1) }
+        : (row.model.streamed
+            ? { "application/x-rille-beatport": String(row.model.beatportId) }
+            : { "application/x-rille-path": String(row.dragToken ? row.dragToken(row.index) : -1) })
 
     HoverHandler { id: rowHover }
     MouseArea {
@@ -96,7 +98,7 @@ Rectangle {
                 rightPadding: hoverLoad.visible ? hoverLoad.width + 8 : 6
                 text: row.model.title
                 elide: Text.ElideRight
-                color: row.model.missing ? Theme.danger : (row.model.inCollection ? Theme.text : Theme.textDim)
+                color: row.model.missing ? Theme.danger : (row.model.inCollection || row.model.streamed ? Theme.text : Theme.textDim)
                 font.bold: row.model.selected
             }
             Row {
@@ -120,6 +122,70 @@ Rectangle {
             Row {
                 anchors.centerIn: parent
                 spacing: 3
+                // Beatport: stream only, cached, kept offline, queued, downloading.
+                Item {
+                    id: offlineMark
+                    readonly property string state_: row.model.offlineState
+                    visible: state_.length > 0
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 14
+                    height: 14
+                    Icon {
+                        id: offlineIcon
+                        anchors.centerIn: parent
+                        size: 13
+                        name: {
+                            switch (offlineMark.state_) {
+                            case "offline": return "check"
+                            case "cached": return "check"
+                            case "queued": return "clock"
+                            default: return "cloud"
+                            }
+                        }
+                        color: {
+                            switch (offlineMark.state_) {
+                            case "offline": return Theme.play
+                            case "downloading": return Theme.sync
+                            case "cached": return Theme.textDim
+                            default: return Theme.textFaint
+                            }
+                        }
+                        SequentialAnimation on opacity {
+                            running: offlineMark.state_ === "downloading"
+                            loops: Animation.Infinite
+                            onStopped: offlineIcon.opacity = 1
+                            NumberAnimation { from: 1; to: 0.4; duration: 600 }
+                            NumberAnimation { from: 0.4; to: 1; duration: 600 }
+                        }
+                    }
+                    // How far the download is.
+                    Rectangle {
+                        visible: offlineMark.state_ === "downloading"
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: -2
+                        width: parent.width
+                        height: 2
+                        color: Theme.control
+                        Rectangle {
+                            width: parent.width * Math.max(0, row.model.downloadProgress)
+                            height: parent.height
+                            color: Theme.sync
+                        }
+                    }
+                    HoverHandler { id: offlineHover }
+                    Tip {
+                        visible: offlineHover.hovered
+                        text: {
+                            switch (offlineMark.state_) {
+                            case "offline": return "Downloaded: plays offline, kept until you remove it"
+                            case "cached": return "In the cache: plays offline, may be removed to make room"
+                            case "queued": return "Waiting to download"
+                            case "downloading": return "Downloading " + Math.floor(row.model.downloadProgress * 100) + " %"
+                            default: return "Streams from Beatport (downloads when loaded)"
+                            }
+                        }
+                    }
+                }
                 UiText {
                     visible: row.model.deckMark.length > 0
                     text: row.model.deckMark
@@ -128,7 +194,8 @@ Rectangle {
                     font.pixelSize: Theme.fontSmall
                 }
                 Icon {
-                    visible: row.model.deckMark.length === 0 && row.model.analysisState !== "done"
+                    // Catalog tracks are analyzed when they are loaded.
+                    visible: row.model.deckMark.length === 0 && row.model.analysisState !== "done" && !(row.model.streamed && !row.model.inCollection)
                     anchors.verticalCenter: parent.verticalCenter
                     size: 12
                     name: {

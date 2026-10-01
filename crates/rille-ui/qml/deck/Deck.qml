@@ -55,12 +55,14 @@ Rectangle {
     DropArea {
         id: dropArea
         anchors.fill: parent
-        keys: ["application/x-rille-track", "application/x-rille-path", "text/uri-list"]
+        keys: ["application/x-rille-track", "application/x-rille-path", "application/x-rille-beatport", "text/uri-list"]
         onDropped: drop => {
             if (drop.hasUrls && drop.urls.length > 0)
                 AppController.loadUrl(deck.dc.deck, drop.urls[0])
             else if (drop.getDataAsString("application/x-rille-track").length)
                 AppController.loadTrack(deck.dc.deck, Number(drop.getDataAsString("application/x-rille-track")))
+            else if (drop.getDataAsString("application/x-rille-beatport").length)
+                AppController.loadBeatport(deck.dc.deck, Number(drop.getDataAsString("application/x-rille-beatport")))
             else if (drop.getDataAsString("application/x-rille-path").length)
                 AppController.loadPath(deck.dc.deck, Number(drop.getDataAsString("application/x-rille-path")))
             drop.acceptProposedAction()
@@ -313,9 +315,123 @@ Rectangle {
                     }
                     UiText {
                         anchors.centerIn: parent
-                        visible: deck.dc.loading || !deck.dc.loaded
-                        text: deck.dc.loading ? "loading…" : "Drag a track from the browser"
+                        visible: !deck.dc.loading && !deck.dc.loaded
+                        text: "Drag a track from the browser"
                         color: Theme.textFaint
+                    }
+                    // Loading: a streamed track downloads first (progress,
+                    // speed, time left), then every track is decoded.
+                    Item {
+                        id: loadingCard
+                        anchors.fill: parent
+                        anchors.margins: 1
+                        visible: deck.dc.loading
+                        z: 10
+                        readonly property real progress: deck.dc.downloadProgress
+                        readonly property bool determinate: progress > 0
+                        // A card in the middle: the previous track's waveform
+                        // (which may still be playing) stays visible around it.
+                        Rectangle {
+                            anchors.centerIn: card
+                            width: card.width + 32
+                            height: card.height + (deck.compact ? 12 : 22)
+                            radius: 6
+                            color: Theme.panel
+                            border.color: Theme.border
+                        }
+                        Column {
+                            id: card
+                            anchors.centerIn: parent
+                            width: Math.min(parent.width - 72, 300)
+                            spacing: deck.compact ? 4 : 7
+                            Row {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                spacing: 7
+                                Icon {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    name: loadingCard.progress >= 0 ? "cloud" : "analyze"
+                                    size: 15
+                                    color: Theme.sync
+                                    SequentialAnimation on opacity {
+                                        running: loadingCard.visible
+                                        loops: Animation.Infinite
+                                        NumberAnimation { from: 1; to: 0.35; duration: 700; easing.type: Easing.InOutSine }
+                                        NumberAnimation { from: 0.35; to: 1; duration: 700; easing.type: Easing.InOutSine }
+                                    }
+                                }
+                                UiText {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: deck.dc.loadingText
+                                    font.bold: true
+                                    font.pixelSize: Theme.fontSmall
+                                }
+                            }
+                            Rectangle {
+                                id: bar
+                                width: parent.width
+                                height: 4
+                                radius: 2
+                                color: Theme.control
+                                clip: true
+                                // How much is downloaded, with a light running over it.
+                                Rectangle {
+                                    visible: loadingCard.determinate
+                                    width: bar.width * Math.min(1, loadingCard.progress)
+                                    height: bar.height
+                                    radius: 2
+                                    color: Theme.sync
+                                    clip: true
+                                    Behavior on width { NumberAnimation { duration: 200 } }
+                                    Rectangle {
+                                        width: 60
+                                        height: parent.height
+                                        opacity: 0.55
+                                        gradient: Gradient {
+                                            orientation: Gradient.Horizontal
+                                            GradientStop { position: 0; color: "transparent" }
+                                            GradientStop { position: 0.5; color: Theme.text }
+                                            GradientStop { position: 1; color: "transparent" }
+                                        }
+                                        NumberAnimation on x {
+                                            running: loadingCard.visible && loadingCard.determinate
+                                            loops: Animation.Infinite
+                                            from: -60
+                                            to: bar.width
+                                            duration: 1400
+                                        }
+                                    }
+                                }
+                                // Before the size is known, and while decoding: a sweep.
+                                Rectangle {
+                                    visible: !loadingCard.determinate
+                                    width: bar.width * 0.3
+                                    height: bar.height
+                                    radius: 2
+                                    gradient: Gradient {
+                                        orientation: Gradient.Horizontal
+                                        GradientStop { position: 0; color: "transparent" }
+                                        GradientStop { position: 0.5; color: Theme.sync }
+                                        GradientStop { position: 1; color: "transparent" }
+                                    }
+                                    NumberAnimation on x {
+                                        running: loadingCard.visible && !loadingCard.determinate
+                                        loops: Animation.Infinite
+                                        from: -bar.width * 0.3
+                                        to: bar.width
+                                        duration: 1100
+                                        easing.type: Easing.InOutQuad
+                                    }
+                                }
+                            }
+                            UiText {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                visible: text.length > 0
+                                text: deck.dc.downloadText
+                                color: Theme.textDim
+                                font.family: Theme.fontMono
+                                font.pixelSize: Theme.fontSmall
+                            }
+                        }
                     }
                 }
                 Rectangle {

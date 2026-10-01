@@ -109,6 +109,8 @@ pub struct DeckInfo {
     /// Set for a remix deck: its cells. `title` is the set's name.
     pub remix: Option<Arc<RemixSet>>,
     pub cover: Option<PathBuf>,
+    /// The track streams from Beatport.
+    pub streamed: bool,
     pub loading: bool,
     /// A streamed track is being downloaded.
     pub download: Option<beatport::Download>,
@@ -618,6 +620,7 @@ impl App {
                 key: row.key,
                 cover: self.library.lock().expect("library lock").cover_path(id, CoverSize::Large),
                 path: Some(row.path.clone()),
+                streamed: row.beatport_id.is_some(),
                 loading: true,
                 revision,
                 ..DeckInfo::default()

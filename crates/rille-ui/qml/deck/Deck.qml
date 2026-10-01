@@ -103,13 +103,26 @@ Rectangle {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
-                UiText {
+                RowLayout {
                     Layout.fillWidth: true
-                    text: deck.dc.loaded || deck.dc.loading ? deck.dc.title : "Drop a track here"
-                    color: deck.dc.loaded ? Theme.text : Theme.textFaint
-                    font.pixelSize: Theme.fontLarge
-                    font.bold: true
-                    elide: Text.ElideRight
+                    spacing: 5
+                    // A track streamed from Beatport.
+                    Icon {
+                        visible: deck.dc.streamed && (deck.dc.loaded || deck.dc.loading)
+                        name: "cloud"
+                        size: 14
+                        color: Theme.textDim
+                        HoverHandler { id: streamedHover }
+                        Tip { text: "Streamed from Beatport"; visible: streamedHover.hovered }
+                    }
+                    UiText {
+                        Layout.fillWidth: true
+                        text: deck.dc.loaded || deck.dc.loading ? deck.dc.title : "Drop a track here"
+                        color: deck.dc.loaded ? Theme.text : Theme.textFaint
+                        font.pixelSize: Theme.fontLarge
+                        font.bold: true
+                        elide: Text.ElideRight
+                    }
                 }
                 UiText {
                     Layout.fillWidth: true

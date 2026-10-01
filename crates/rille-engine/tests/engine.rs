@@ -405,6 +405,26 @@ fn sync_off_keeps_tempo() {
     assert!((s.decks[1].bpm - 125.0).abs() < 0.05, "B keeps 125: {}", s.decks[1].bpm);
 }
 
+/// Setting the master tempo moves the leading deck's tempo fader; a synced
+/// deck follows.
+#[test]
+fn master_tempo_moves_the_leading_deck() {
+    let (h, mut e) = create(SR, 1024);
+    load(&h, 0, 1, click_track(136.0, 0.2, 120.0, 44_100), 0.0);
+    load(&h, 1, 2, click_track(128.0, 0.3, 120.0, 44_100), 0.0);
+    press(&h, 0, Control::Play);
+    run(&mut e, 0.5);
+    press(&h, 1, Control::Sync);
+    press(&h, 1, Control::Play);
+    run(&mut e, 0.5);
+    assert!(h.send(Command::SetClockBpm(140.0)).is_ok());
+    run(&mut e, 1.0);
+    let s = h.snapshot();
+    assert!((s.clock_bpm - 140.0).abs() < 0.05, "clock at 140: {}", s.clock_bpm);
+    assert!((s.decks[0].bpm - 140.0).abs() < 0.05, "A plays 140: {}", s.decks[0].bpm);
+    assert!((s.decks[1].bpm - 140.0).abs() < 0.05, "B follows 140: {}", s.decks[1].bpm);
+}
+
 /// TICK clicks on the grid beats of a silent track, exactly where the grid
 /// puts them (at 1.0x and faster, with and without keylock), accent on bar 1.
 #[test]

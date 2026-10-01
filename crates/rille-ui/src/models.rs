@@ -473,17 +473,37 @@ impl qobject::TrackListModel {
             _ => tracks,
         };
         let seen = changes_seq();
-        self.as_mut().begin_reset_model();
+        // The same tracks in the same order (e.g. a track was loaded or
+        // imported): update the rows in place, so the view keeps its scroll
+        // position and current row. A Beatport track keeps its place when it
+        // turns from a catalog row into a collection row (another path).
+        let same = {
+            let old = &self.rust().rows;
+            let same_track = |a: &TrackRow, b: &TrackRow| match (a.beatport_id, b.beatport_id) {
+                (Some(x), Some(y)) => x == y,
+                _ => a.path == b.path,
+            };
+            old.len() == rows.len() && old.iter().zip(&rows).all(|(a, b)| same_track(a, b))
+        };
+        if !same {
+            self.as_mut().begin_reset_model();
+        }
         {
             let mut r = self.as_mut().rust_mut();
             let paths: HashSet<PathBuf> = rows.iter().map(|x| x.path.clone()).collect();
             r.selected.retain(|p| paths.contains(p));
             r.rows = rows;
-            r.anchor = None;
+            if !same {
+                r.anchor = None;
+            }
             r.seen = seen;
             r.scores = scores;
         }
-        self.as_mut().end_reset_model();
+        if same {
+            self.as_mut().emit_all_changed();
+        } else {
+            self.as_mut().end_reset_model();
+        }
         let n = self.rust().rows.len() as i32;
         self.as_mut().set_count(n);
         self.as_mut().set_new_count(new as i32);

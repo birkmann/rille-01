@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import rille.ui
 
@@ -35,19 +36,74 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 0
-            UiText {
+            RowLayout {
                 Layout.alignment: Qt.AlignHCenter
-                text: AppController.clockBpm.toFixed(2)
-                font.pixelSize: 26
-                font.family: Theme.fontMono
-                font.weight: Font.Medium
-                font.letterSpacing: -0.5
-                Tip { text: "Master tempo; the mouse wheel changes the clock tempo in 0.1 BPM steps"; visible: bpmArea.containsMouse }
-                MouseArea {
-                    id: bpmArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    onWheel: wheel => AppController.setClockTempo(AppController.clockBpm + (wheel.angleDelta.y > 0 ? 0.1 : -0.1))
+                spacing: 4
+                // − and + step to the next whole BPM (140.12 → 140 → 139).
+                DjButton {
+                    text: "−"
+                    subtle: true
+                    implicitWidth: 22
+                    implicitHeight: 22
+                    tip: "Master tempo down to the next whole BPM"
+                    onClicked: AppController.setClockTempo(Math.ceil(AppController.clockBpm - 0.005) - 1)
+                }
+                Item {
+                    implicitWidth: bpmText.implicitWidth
+                    implicitHeight: bpmText.implicitHeight
+                    UiText {
+                        id: bpmText
+                        anchors.centerIn: parent
+                        visible: !bpmEdit.visible
+                        text: AppController.clockBpm.toFixed(2)
+                        font.pixelSize: 26
+                        font.family: Theme.fontMono
+                        font.weight: Font.Medium
+                        font.letterSpacing: -0.5
+                    }
+                    MouseArea {
+                        id: bpmArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.IBeamCursor
+                        onClicked: {
+                            bpmEdit.text = AppController.clockBpm.toFixed(2)
+                            bpmEdit.visible = true
+                            bpmEdit.forceActiveFocus()
+                            bpmEdit.selectAll()
+                        }
+                        onWheel: wheel => AppController.setClockTempo(AppController.clockBpm + (wheel.angleDelta.y > 0 ? 0.1 : -0.1))
+                    }
+                    Tip { text: "Master tempo: click to type a BPM; the mouse wheel changes it in 0.1 BPM steps"; visible: bpmArea.containsMouse && !bpmEdit.visible }
+                    TextField {
+                        id: bpmEdit
+                        visible: false
+                        anchors.fill: parent
+                        padding: 0
+                        horizontalAlignment: TextInput.AlignHCenter
+                        verticalAlignment: TextInput.AlignVCenter
+                        font: bpmText.font
+                        color: Theme.text
+                        selectByMouse: true
+                        validator: RegularExpressionValidator { regularExpression: /[0-9]{0,3}([.,][0-9]{0,2})?/ }
+                        background: Rectangle { color: Theme.bg; border.color: Theme.sync; radius: 3 }
+                        onAccepted: {
+                            var bpm = parseFloat(text.replace(",", "."))
+                            if (bpm >= 40 && bpm <= 250)
+                                AppController.setClockTempo(bpm)
+                            visible = false
+                        }
+                        onActiveFocusChanged: if (!activeFocus) visible = false
+                        Keys.onEscapePressed: visible = false
+                    }
+                }
+                DjButton {
+                    text: "+"
+                    subtle: true
+                    implicitWidth: 22
+                    implicitHeight: 22
+                    tip: "Master tempo up to the next whole BPM"
+                    onClicked: AppController.setClockTempo(Math.floor(AppController.clockBpm + 0.005) + 1)
                 }
             }
             UiText {

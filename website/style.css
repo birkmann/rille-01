@@ -187,6 +187,15 @@ p { margin: 0; }
 .tags { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .tags li { font-family: var(--mono); font-size: 13px; border: 1px solid var(--ink-line); color: var(--on-ink-dim); border-radius: 999px; padding: 6px 12px; }
 
+/* Streaming */
+.tags-light li { border-color: var(--rule); color: var(--muted); }
+.steps { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--fg); }
+.steps li { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 8px; padding: 24px 0; border-bottom: 1px solid var(--rule); }
+.steps .idx { padding-top: 5px; }
+.steps h3 { font-size: 22px; letter-spacing: -0.01em; margin-bottom: 6px; }
+.steps p { font-size: 16px; color: var(--text); }
+.split-note { grid-column: 1 / -1; }
+
 /* Controllers */
 .hardware { list-style: none; margin: 0; padding: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--fg); column-gap: 48px; }
 .hardware li { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 18px 0; border-bottom: 1px solid var(--rule); }

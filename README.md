@@ -130,8 +130,9 @@ the score.
 
 **Correcting a grid:** press **GRID** on a deck. The arrows move the grid by
 10/1 ms, ×2/÷2 fix half/double tempo, BEAT HERE puts a beat on the play
-position, BAR START marks the first beat of a bar, TAP sets the tempo by
-tapping, the lock protects the grid from re-analysis, RESET returns to the
+position, BAR START marks the first beat of a bar, GRID START does both at
+once (put the play position on the first kick and press it: the grid snaps
+onto the kick and its bars start there), TAP sets the tempo by tapping, the lock protects the grid from re-analysis, RESET returns to the
 analyzed grid. Corrections are saved immediately.
 
 **Controllers:** Settings → Controllers lists MIDI inputs; choose a mapping or

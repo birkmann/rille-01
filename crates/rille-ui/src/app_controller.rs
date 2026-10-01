@@ -140,8 +140,8 @@ pub mod qobject {
         #[qinvokable]
         fn eject(self: &AppController, deck: i32);
 
-        /// "move" (arg ms), "double", "halve", "beat", "downbeat", "tap",
-        /// "lock" (arg 0/1), "reset".
+        /// "move" (arg ms), "double", "halve", "beat", "downbeat", "barstart",
+        /// "tap", "lock" (arg 0/1), "reset".
         #[qinvokable]
         #[cxx_name = "gridEdit"]
         fn grid_edit(self: &AppController, deck: i32, op: &QString, arg: f64);
@@ -590,6 +590,7 @@ impl qobject::AppController {
             "halve" => GridEdit::HalveTempo,
             "beat" => GridEdit::BeatHere,
             "downbeat" => GridEdit::DownbeatHere,
+            "barstart" => GridEdit::BarStartHere,
             "tap" => GridEdit::Tap,
             "lock" => GridEdit::Lock(arg > 0.5),
             "reset" => GridEdit::Reset,

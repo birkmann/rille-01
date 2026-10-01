@@ -123,6 +123,9 @@ pub enum GridEdit {
     BeatHere,
     /// The beat nearest to the play position becomes a downbeat.
     DownbeatHere,
+    /// Beat 1 of a bar on the play position (snapped to the kick there):
+    /// for grids whose first beat misses the track's first kick.
+    BarStartHere,
     /// Tap the tempo; four or more taps set the BPM.
     Tap,
     Lock(bool),
@@ -780,6 +783,10 @@ impl App {
             (GridEdit::HalveTempo, Some(g)) => Some(g.scaled(0.5, pos)),
             (GridEdit::BeatHere, Some(g)) => Some(g.with_beat_at(pos)),
             (GridEdit::DownbeatHere, Some(g)) => Some(g.with_downbeat_at(pos)),
+            (GridEdit::BarStartHere, Some(g)) => {
+                let at = info.audio.as_deref().and_then(|a| attack_near(a, pos)).unwrap_or(pos);
+                Some(g.with_bar_start_at(at))
+            }
             (GridEdit::Lock(on), Some(g)) => {
                 let mut g = g.clone();
                 g.locked = on;
@@ -1570,6 +1577,28 @@ fn analysis_config(s: &Settings) -> AnalysisConfig {
     AnalysisConfig { bpm_range: (s.bpm_min, s.bpm_max) }
 }
 
+/// Start of the kick attack within 50 ms of `secs` (the broadband attack for
+/// tracks without a kick), where the analyzer would put the beat. `None` if
+/// nothing clearly starts there.
+fn attack_near(audio: &TrackAudio, secs: f64) -> Option<f64> {
+    use rille_analysis::refine::{Band, TransientFinder};
+    // At least 4 dB, so noise or a fading tail doesn't count as an attack.
+    const MIN_STRENGTH: f64 = 0.92;
+    const RADIUS: f64 = 0.05;
+    let sr = f64::from(audio.sample_rate.max(1));
+    let first = ((secs - 0.5) * sr).max(0.0) as usize;
+    let last = (((secs + 0.5) * sr).max(0.0) as usize).min(audio.frames.len());
+    if last <= first {
+        return None;
+    }
+    let mono: Vec<f32> = audio.frames[first..last].iter().map(|[l, r]| 0.5 * (l + r)).collect();
+    let offset = first as f64 / sr;
+    [Band::Low, Band::Broad].into_iter().find_map(|band| {
+        let t = TransientFinder::new(&mono, sr, band).attack(secs - offset, RADIUS)?;
+        (t.strength >= MIN_STRENGTH).then_some(t.secs + offset)
+    })
+}
+
 fn hotcues_from(cues: &TrackCues) -> [Option<Hotcue>; HOTCUES] {
     std::array::from_fn(|slot| {
         cues.hotcue(slot as u8).map(|c| Hotcue { secs: c.start_secs, kind: c.kind, len_secs: c.len_secs })
@@ -1614,4 +1643,36 @@ pub fn sort_rows(rows: &mut [TrackRow], key: SortKey, descending: bool) {
 /// Scope helper for the UI: is this control handled per deck?
 pub fn is_deck_control(c: Control) -> bool {
     c.scope() == Scope::Deck
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Silence, then a pitch-swept kick at `at` seconds.
+    fn kick_at(sr: u32, at: f64) -> TrackAudio {
+        let sr_f = f64::from(sr);
+        let mut frames = vec![[0.0f32; 2]; (3.0 * sr_f) as usize];
+        let start = (at * sr_f).round() as usize;
+        let mut phase = 0.0f64;
+        for (k, f) in frames[start..].iter_mut().enumerate().take((0.4 * sr_f) as usize) {
+            let t = k as f64 / sr_f;
+            phase += 2.0 * std::f64::consts::PI * (45.0 + 100.0 * (-t * 30.0).exp()) / sr_f;
+            let v = (phase.sin() * (-t * 12.0).exp() * 0.8) as f32;
+            *f = [v, v];
+        }
+        TrackAudio { sample_rate: sr, frames }
+    }
+
+    #[test]
+    fn attack_near_snaps_onto_the_kick() {
+        let audio = kick_at(44_100, 1.2);
+        for pos in [1.17, 1.2, 1.23] {
+            let t = attack_near(&audio, pos).expect("kick found");
+            assert!((t - 1.2).abs() < 0.001, "from {pos}: {t}");
+        }
+        // Nothing starts in silence; the play position is used as it is.
+        assert!(attack_near(&audio, 0.5).is_none());
+        assert!(attack_near(&audio, 2.9).is_none());
+    }
 }

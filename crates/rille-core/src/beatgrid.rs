@@ -486,6 +486,14 @@ impl BeatGrid {
         g
     }
 
+    /// Moves the beat nearest to `secs` onto it and makes it beat 1 of a bar:
+    /// the grid then starts its bars exactly there.
+    pub fn with_bar_start_at(&self, secs: f64) -> Self {
+        let mut g = self.with_beat_at(secs);
+        g.downbeat_beat_index = g.beat_at(secs).round() as i64;
+        g
+    }
+
     pub fn shifted(&self, secs: f64) -> Self {
         self.edited(self.map.shifted(secs))
     }
@@ -593,6 +601,11 @@ mod tests {
         assert_abs_diff_eq!(doubled.secs_at(doubled.beat_at(10.1).round()), 10.1, epsilon = 1e-9);
         let d = g.with_downbeat_at(0.6);
         assert!(d.is_downbeat(1));
+        // Bar start between beats 2 and 3 (closer to 3): beat 3 moves onto it.
+        let s = g.with_bar_start_at(1.45);
+        assert_abs_diff_eq!(s.secs_at(3.0), 1.45, epsilon = 1e-12);
+        assert!(s.is_downbeat(3) && s.is_downbeat(-1) && !s.is_downbeat(2));
+        assert_abs_diff_eq!(s.bar_phase(s.beat_at(1.45)), 0.0, epsilon = 1e-9);
         let taps: Vec<f64> = (0..8).map(|i| 1.0 + i as f64 * 0.48 + if i % 2 == 0 { 0.003 } else { -0.003 }).collect();
         let t = BeatGrid::from_taps(&taps).unwrap();
         assert!((t.bpm_at(0.0) - 125.0).abs() < 0.5);

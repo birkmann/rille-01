@@ -1,0 +1,26 @@
+[package]
+name = "rille-engine"
+description = "Real-time audio engine: decks, sync, mixer, effects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rille-core.workspace = true
+rille-dsp = { path = "../rille-dsp" }
+rtrb = "0.4"
+triple_buffer = "9"
+signalsmith-stretch = "0.1"
+cpal = { version = "0.18", optional = true, features = ["pipewire", "jack"] }
+libc = "0.2"
+
+[features]
+default = ["cpal"]
+
+[dev-dependencies]
+assert_no_alloc = { version = "1", default-features = false }
+rille-analysis = { path = "../rille-analysis" }
+
+[lints]
+workspace = true

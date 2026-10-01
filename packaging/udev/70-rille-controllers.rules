@@ -1,0 +1,11 @@
+# Lets the logged-in user open HID DJ controllers that rille drives directly
+# (MIDI controllers need no rule). Install to /usr/lib/udev/rules.d/ or
+# /etc/udev/rules.d/, then: udevadm control --reload && udevadm trigger
+# The number must stay below 73 so the uaccess tag takes effect.
+
+# Native Instruments Traktor Kontrol Z1
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1210", TAG+="uaccess"
+# Native Instruments Traktor Kontrol X1 MK2
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1220", TAG+="uaccess"
+# Native Instruments Traktor Kontrol F1
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1120", TAG+="uaccess"

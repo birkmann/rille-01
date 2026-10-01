@@ -1,0 +1,24 @@
+[package]
+name = "rille-app"
+description = "Application core without UI: engine, library, analysis, MIDI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rille-core.workspace = true
+rille-engine = { path = "../rille-engine" }
+rille-analysis = { path = "../rille-analysis" }
+rille-decode = { path = "../rille-decode" }
+rille-library = { path = "../rille-library" }
+rille-midi = { path = "../rille-midi" }
+crossbeam-channel = "0.5"
+serde.workspace = true
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

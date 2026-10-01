@@ -1,0 +1,18 @@
+[package]
+name = "rille-analysis"
+description = "Track analysis: beatgrid, key, loudness, waveform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rille-core.workspace = true
+rille-decode = { path = "../rille-decode" }
+realfft = "3.5"
+
+[dev-dependencies]
+approx.workspace = true
+
+[lints]
+workspace = true

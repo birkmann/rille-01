@@ -1,0 +1,466 @@
+# Akai Professional AMX
+#
+# A class-compliant USB MIDI mixing controller with a 4-output sound card.
+# MIDI numbers from the community Mixxx mappings (rootzoll/mixxx-akai-amx,
+# MIT, based on the Mixxx forum mapping by Prism; FlorisVedder/Mixxx-
+# Controller-Mapping-Akai-AMX) and Terricka/AMX-Web-Midi, which agree on every
+# number used here. Only the FILTER touch notes (23/24) are inferred: the
+# touch sensors are numbered treble 17/18, mid 19/20, bass 21/22, then the
+# TOUCH button is 25, so the filters sit at 23/24.
+#
+# Everything is on MIDI channel 1. Buttons send note on (127) when pressed and
+# note off when released; the knobs' touch sensors send notes the same way.
+#
+# AUDIO: rille uses the AMX's sound card by itself when no output device is set
+# in Settings -> Audio: main mix on MASTER OUT (1/2), headphones on 3/4. MASTER,
+# CUE GAIN and CUE MIX are MIDI knobs that drive rille's main level, cue volume
+# and cue mix (left = cue only, right = main only).
+#
+# DECK ORDER: the channels drive decks A/B; choose "Akai AMX (CD)" in
+# Settings -> Controllers for decks C/D.
+#
+# MODIFIERS: SHIFT (hold), SEARCH 1/2 (hold, per deck), TOUCH (press to switch
+# touch mode on or off; its LED shows it).
+#
+# Per channel (left / right):
+#   control            MIDI           plain              SHIFT           SEARCH held
+#   GAIN encoder       CC 60 / 61     gain trim          tempo (fine)
+#   TREBLE/MID/BASS    CC14 10,9,8 / 14,13,12  EQ
+#   FILTER             CC14 15 / 16   filter
+#   channel fader      CC14 7 / 11    volume
+#   LOAD               note 4 / 5     load selected      eject
+#   SYNC               note 6 / 7     sync on/off        tempo master    loop on/off
+#   CUE                note 8 / 9     cue (CDJ style)    back to start   loop 1/2
+#   PLAY               note 10 / 11   play / pause       stutter (CUP)   loop x2
+#   PFL (headphones)   note 12 / 13   headphone cue      metronome TICK
+#   SEARCH             note 2 / 3     (hold)             keylock
+#   BROWSE turn with SEARCH held: move through the paused track, or nudge the
+#   playing one (jog), 24 detents per revolution.
+#
+# TOUCH mode (TOUCH lit): touching TREBLE, MID or BASS kills that band while
+# the finger stays on it; touching FILTER and turning it away from the centre
+# plays a loop roll, 1 beat just off the centre down to 1/16 beat at the ends,
+# and playback continues where the track would be once you let go.
+#
+# Global:
+#   BROWSE turn        CC 59          browse list        browse tree
+#   BROWSE press       note 26        open/close folder
+#   PANEL              note 1         quantize           snap
+#   crossfader         CC14 1         crossfader
+#   XFADE CURVE        CC 49          crossfader curve (left slow fade, centre
+#                                     standard, right scratch cut)
+#   XFADE REV switch   CC 58          crossfader reverse (1 = on, 0 = off)
+#   MASTER             CC 50          main level
+#   CUE GAIN           CC 51          headphone volume
+#   CUE MIX            CC 55          cue / main mix in the headphones
+#
+# The knobs, faders and crossfader are 14-bit (MSB on the CC above, LSB on
+# CC + 32) with soft takeover: a control that disagrees with rille picks up once
+# it passes rille's value. The crossfader curve takes effect immediately. The
+# XFADE REV switch is only read when flipped, so a switch left on while rille
+# starts is picked up the first time it is moved.
+#
+# LEDs (note, 127 = on): SYNC, CUE, PLAY, PFL per deck; PANEL = quantize;
+# TOUCH = touch mode. Level meters (CC value, full = 81): channels on CC 64/65
+# (pre-fader, like the on-screen meters), MASTER L/R on CC 62/63, shown from
+# -60 dBFS (dark) to 0 dBFS (all lit).
+#
+# Not mapped: the LINE/PHONO switches and inputs (DVS timecode is not
+# supported), SHIFT + BROWSE press, the LOAD LEDs.
+
+name = "Akai AMX"
+device = '(?i)\bamx\b'
+description = "Akai Professional AMX as a 2-channel mixer with touch EQ kills and filter rolls"
+deck_layouts = ["AB", "CD"]
+
+# Modifiers
+[[input]]
+target = "modifier:shift"
+midi = { type = "note", channel = 1, number = 0 }
+
+[[input]]
+target = "modifier:touch"
+midi = { type = "note", channel = 1, number = 25 }
+latch = true
+
+[[input]]
+target = "modifier:search_a"
+midi = { type = "note", channel = 1, number = 2 }
+
+[[input]]
+target = "modifier:search_b"
+midi = { type = "note", channel = 1, number = 3 }
+
+# Browser
+[[input]]
+target = "global.scroll"
+midi = { type = "cc", channel = 1, number = 59 }
+encoding = "twos_complement"
+
+[[input]]
+target = "global.tree_scroll"
+midi = { type = "cc", channel = 1, number = 59 }
+encoding = "twos_complement"
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.jog"
+midi = { type = "cc", channel = 1, number = 59 }
+encoding = "twos_complement"
+ticks_per_rev = 24
+condition = { modifier = "search_a" }
+
+[[input]]
+target = "deck.B.jog"
+midi = { type = "cc", channel = 1, number = 59 }
+encoding = "twos_complement"
+ticks_per_rev = 24
+condition = { modifier = "search_b" }
+
+[[input]]
+target = "global.toggle_node"
+midi = { type = "note", channel = 1, number = 26 }
+
+# PANEL
+[[input]]
+target = "global.quantize"
+midi = { type = "note", channel = 1, number = 1 }
+
+[[input]]
+target = "global.snap"
+midi = { type = "note", channel = 1, number = 1 }
+condition = { modifier = "shift" }
+
+# Master section
+[[input]]
+target = "global.crossfader"
+midi = { type = "cc14", channel = 1, number = 1 }
+
+[[input]]
+target = "global.crossfader_curve"
+midi = { type = "cc", channel = 1, number = 49 }
+soft_takeover = false
+
+[[input]]
+target = "global.crossfader_reverse"
+midi = { type = "cc", channel = 1, number = 58 }
+
+[[input]]
+target = "global.main_level"
+midi = { type = "cc", channel = 1, number = 50 }
+
+[[input]]
+target = "global.cue_volume"
+midi = { type = "cc", channel = 1, number = 51 }
+
+[[input]]
+target = "global.cue_mix"
+midi = { type = "cc", channel = 1, number = 55 }
+
+# Channel 1: deck A (AB) or C (CD)
+[[input]]
+target = "deck.A.gain"
+midi = { type = "cc", channel = 1, number = 60 }
+mode = "relative"
+encoding = "twos_complement"
+step = 0.02
+
+[[input]]
+target = "deck.A.tempo"
+midi = { type = "cc", channel = 1, number = 60 }
+mode = "relative"
+encoding = "twos_complement"
+step = 0.005
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.eq_hi"
+midi = { type = "cc14", channel = 1, number = 10 }
+
+[[input]]
+target = "deck.A.eq_mid"
+midi = { type = "cc14", channel = 1, number = 9 }
+
+[[input]]
+target = "deck.A.eq_lo"
+midi = { type = "cc14", channel = 1, number = 8 }
+
+[[input]]
+target = "deck.A.filter"
+midi = { type = "cc14", channel = 1, number = 15 }
+
+[[input]]
+target = "deck.A.volume"
+midi = { type = "cc14", channel = 1, number = 7 }
+
+[[input]]
+target = "deck.A.eq_hi_kill"
+midi = { type = "note", channel = 1, number = 17 }
+condition = { modifier = "touch" }
+
+[[input]]
+target = "deck.A.eq_mid_kill"
+midi = { type = "note", channel = 1, number = 19 }
+condition = { modifier = "touch" }
+
+[[input]]
+target = "deck.A.eq_lo_kill"
+midi = { type = "note", channel = 1, number = 21 }
+condition = { modifier = "touch" }
+
+[[input]]
+target = "deck.A.filter_roll"
+midi = { type = "note", channel = 1, number = 23 }
+condition = { modifier = "touch" }
+
+[[input]]
+target = "deck.A.load_selected"
+midi = { type = "note", channel = 1, number = 4 }
+
+[[input]]
+target = "deck.A.eject"
+midi = { type = "note", channel = 1, number = 4 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.sync"
+midi = { type = "note", channel = 1, number = 6 }
+
+[[input]]
+target = "deck.A.master"
+midi = { type = "note", channel = 1, number = 6 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.loop_toggle"
+midi = { type = "note", channel = 1, number = 6 }
+condition = { modifier = "search_a" }
+
+[[input]]
+target = "deck.A.cue"
+midi = { type = "note", channel = 1, number = 8 }
+
+[[input]]
+target = "deck.A.jump_start"
+midi = { type = "note", channel = 1, number = 8 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.loop_halve"
+midi = { type = "note", channel = 1, number = 8 }
+condition = { modifier = "search_a" }
+
+[[input]]
+target = "deck.A.play"
+midi = { type = "note", channel = 1, number = 10 }
+
+[[input]]
+target = "deck.A.cup"
+midi = { type = "note", channel = 1, number = 10 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.loop_double"
+midi = { type = "note", channel = 1, number = 10 }
+condition = { modifier = "search_a" }
+
+[[input]]
+target = "deck.A.pfl"
+midi = { type = "note", channel = 1, number = 12 }
+
+[[input]]
+target = "deck.A.tick"
+midi = { type = "note", channel = 1, number = 12 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.keylock"
+midi = { type = "note", channel = 1, number = 2 }
+condition = { modifier = "shift" }
+
+# Channel 2: deck B (AB) or D (CD)
+[[input]]
+target = "deck.B.gain"
+midi = { type = "cc", channel = 1, number = 61 }
+mode = "relative"
+encoding = "twos_complement"
+step = 0.02
+
+[[input]]
+target = "deck.B.tempo"
+midi = { type = "cc", channel = 1, number = 61 }
+mode = "relative"
+encoding = "twos_complement"
+step = 0.005
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.eq_hi"
+midi = { type = "cc14", channel = 1, number = 14 }
+
+[[input]]
+target = "deck.B.eq_mid"
+midi = { type = "cc14", channel = 1, number = 13 }
+
+[[input]]
+target = "deck.B.eq_lo"
+midi = { type = "cc14", channel = 1, number = 12 }
+
+[[input]]
+target = "deck.B.filter"
+midi = { type = "cc14", channel = 1, number = 16 }
+
+[[input]]
+target = "deck.B.volume"
+midi = { type = "cc14", channel = 1, number = 11 }
+
+[[input]]
+target = "deck.B.eq_hi_kill"
+midi = { type = "note", channel = 1, number = 18 }
+condition = { modifier = "touch" }
+
+[[input]]
+target = "deck.B.eq_mid_kill"
+midi = { type = "note", channel = 1, number = 20 }
+condition = { modifier = "touch" }
+
+[[input]]
+target = "deck.B.eq_lo_kill"
+midi = { type = "note", channel = 1, number = 22 }
+condition = { modifier = "touch" }
+
+[[input]]
+target = "deck.B.filter_roll"
+midi = { type = "note", channel = 1, number = 24 }
+condition = { modifier = "touch" }
+
+[[input]]
+target = "deck.B.load_selected"
+midi = { type = "note", channel = 1, number = 5 }
+
+[[input]]
+target = "deck.B.eject"
+midi = { type = "note", channel = 1, number = 5 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.sync"
+midi = { type = "note", channel = 1, number = 7 }
+
+[[input]]
+target = "deck.B.master"
+midi = { type = "note", channel = 1, number = 7 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.loop_toggle"
+midi = { type = "note", channel = 1, number = 7 }
+condition = { modifier = "search_b" }
+
+[[input]]
+target = "deck.B.cue"
+midi = { type = "note", channel = 1, number = 9 }
+
+[[input]]
+target = "deck.B.jump_start"
+midi = { type = "note", channel = 1, number = 9 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.loop_halve"
+midi = { type = "note", channel = 1, number = 9 }
+condition = { modifier = "search_b" }
+
+[[input]]
+target = "deck.B.play"
+midi = { type = "note", channel = 1, number = 11 }
+
+[[input]]
+target = "deck.B.cup"
+midi = { type = "note", channel = 1, number = 11 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.loop_double"
+midi = { type = "note", channel = 1, number = 11 }
+condition = { modifier = "search_b" }
+
+[[input]]
+target = "deck.B.pfl"
+midi = { type = "note", channel = 1, number = 13 }
+
+[[input]]
+target = "deck.B.tick"
+midi = { type = "note", channel = 1, number = 13 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.keylock"
+midi = { type = "note", channel = 1, number = 3 }
+condition = { modifier = "shift" }
+
+# LEDs
+[[output]]
+source = "global.quantize"
+midi = { type = "note", channel = 1, number = 1 }
+
+[[output]]
+source = "modifier:touch"
+midi = { type = "note", channel = 1, number = 25 }
+
+[[output]]
+source = "deck.A.sync"
+midi = { type = "note", channel = 1, number = 6 }
+
+[[output]]
+source = "deck.B.sync"
+midi = { type = "note", channel = 1, number = 7 }
+
+[[output]]
+source = "deck.A.cue"
+midi = { type = "note", channel = 1, number = 8 }
+
+[[output]]
+source = "deck.B.cue"
+midi = { type = "note", channel = 1, number = 9 }
+
+[[output]]
+source = "deck.A.play"
+midi = { type = "note", channel = 1, number = 10 }
+
+[[output]]
+source = "deck.B.play"
+midi = { type = "note", channel = 1, number = 11 }
+
+[[output]]
+source = "deck.A.pfl"
+midi = { type = "note", channel = 1, number = 12 }
+
+[[output]]
+source = "deck.B.pfl"
+midi = { type = "note", channel = 1, number = 13 }
+
+# Level meters
+[[output]]
+source = "deck.A.meter"
+midi = { type = "cc", channel = 1, number = 64 }
+on = 81
+db_floor = -60
+
+[[output]]
+source = "deck.B.meter"
+midi = { type = "cc", channel = 1, number = 65 }
+on = 81
+db_floor = -60
+
+[[output]]
+source = "global.main_meter.1"
+midi = { type = "cc", channel = 1, number = 62 }
+on = 81
+db_floor = -60
+
+[[output]]
+source = "global.main_meter.2"
+midi = { type = "cc", channel = 1, number = 63 }
+on = 81
+db_floor = -60

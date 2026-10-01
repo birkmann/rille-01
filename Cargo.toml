@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+authors = ["Rafael Birkmann"]
+repository = "https://github.com/birkmann/rille-01"
+rust-version = "1.85"
+
+[workspace.dependencies]
+rille-core = { path = "crates/rille-core" }
+bitflags = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+proptest = "1"
+approx = "0.5"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+
+# Line tables keep backtraces useful without gigabytes of debug info.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+lto = "thin"
+debug = "line-tables-only"

@@ -1,0 +1,13 @@
+[package]
+name = "rille-decode"
+description = "Audio file decoding shared by playback and analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+symphonia = { version = "0.6", features = ["all"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,603 @@
+# Native Instruments Traktor Kontrol X1 MK2
+#
+# The X1 MK2 is a HID device, not MIDI: rille reads its reports directly (see
+# crates/rille-midi/src/hid.rs) and presents them as MIDI on channel 1, which is
+# what this file maps. The report layout comes from the Mixxx HID mapping by
+# infiniteloop (Traktor-Kontrol-X1-MK2-hid-scripts.js, 2021, based on the
+# Mixxx S2 MK2 script).
+#
+# On Linux, opening the device needs the udev rule in
+# packaging/udev/70-rille-controllers.rules (installed by the Arch package).
+#
+# Translated messages:
+#   14-bit CC 0-3    FX 1 dry/wet, knobs 1-3;  CC 4-7  FX 2 dry/wet, knobs 1-3
+#   notes 7 / 3      FX 1 / 2 ON (the left button of each FX row)
+#   notes 6,5,4      FX 1 buttons 1-3;  notes 2,1,0  FX 2 buttons 1-3
+#   notes 15,14      left deck to FX 1, FX 2;  notes 13,12  right deck
+#   note 10          SHIFT (held as a modifier)
+#   notes 11 / 9     LOAD left / right
+#   notes 32 / 8     encoder press left / right;  note 33  browse press
+#   left deck:  notes 31-28 pads 1-4, 27 FLUX, 26 SYNC, 25 CUE, 24 PLAY
+#   right deck: notes 23-20 pads 1-4, 19 FLUX, 18 SYNC, 17 CUE, 16 PLAY
+#   CC 64 browse encoder; CC 65 / 66 deck encoders (relative, two's complement),
+#   plus per tick note 48/49 (browse), 50/51 (left), 52/53 (right) = cw/ccw
+#   CC 70 / 71       touch strip, left / right half (relative)
+#   notes 56 / 57    touch strip left / right half touched (not mapped here)
+#
+#   control             plain                 SHIFT held
+#   PLAY                play / pause          reverse
+#   CUE                 cue                   cue-play (CUP)
+#   SYNC                sync                  master (tempo leader)
+#   FLUX                flux                  keylock
+#   pads 1-4            hotcue 1-4            delete hotcue 1-4
+#   LOAD                load selected track   eject
+#   deck encoder        loop x2 / loop /2     beatjump forward / back
+#   deck encoder press  loop on/off           tempo reset
+#   touch strip half    nudge (jog)           tempo (fine)
+#   FX dry/wet knob     FX unit dry/wet
+#   FX knobs 1-3        effect 1-3 amount     effect 1-3 setting (delay time,
+#                                             reverb size, filter cutoff, ...)
+#   FX ON               FX unit on/off
+#   FX buttons 1-3      effect 1-3 on/off     next effect in slot 1-3
+#   FX assign           deck to FX unit 1/2
+#   browse encoder      browse list           browse tree
+#   browse press        expand/collapse node
+#
+# LEDs (output report byte = note number): FX and deck buttons are dimmed
+# when off, as on the hardware; pads light blue when their hotcue is set;
+# SHIFT lights while held. The segment displays are not driven yet.
+#
+# DECK ORDER: the left/right columns drive decks A/B by default; choose
+# "Traktor Kontrol X1 MK2 (CD)" for decks C/D (e.g. with a second X1).
+
+name = "Traktor Kontrol X1 MK2"
+device = '(?i)traktor kontrol x1 mk2 hid'
+description = "Native Instruments Traktor Kontrol X1 MK2 (HID): two decks and two FX units"
+deck_layouts = ["AB", "CD"]
+
+# SHIFT and browser
+[[input]]
+target = "modifier:shift"
+midi = { type = "note", channel = 1, number = 10 }
+
+[[input]]
+target = "global.scroll"
+midi = { type = "cc", channel = 1, number = 64 }
+encoding = "twos_complement"
+
+[[input]]
+target = "global.tree_scroll"
+midi = { type = "cc", channel = 1, number = 64 }
+encoding = "twos_complement"
+condition = { modifier = "shift" }
+
+[[input]]
+target = "global.toggle_node"
+midi = { type = "note", channel = 1, number = 33 }
+
+# FX unit 1
+[[input]]
+target = "fx.1.dry_wet"
+midi = { type = "cc14", channel = 1, number = 0 }
+
+[[input]]
+target = "fx.1.knob.1"
+midi = { type = "cc14", channel = 1, number = 1 }
+
+[[input]]
+target = "fx.1.param.1"
+midi = { type = "cc14", channel = 1, number = 1 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "fx.1.knob.2"
+midi = { type = "cc14", channel = 1, number = 2 }
+
+[[input]]
+target = "fx.1.param.2"
+midi = { type = "cc14", channel = 1, number = 2 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "fx.1.knob.3"
+midi = { type = "cc14", channel = 1, number = 3 }
+
+[[input]]
+target = "fx.1.param.3"
+midi = { type = "cc14", channel = 1, number = 3 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "fx.1.on"
+midi = { type = "note", channel = 1, number = 7 }
+
+[[input]]
+target = "fx.1.button.1"
+midi = { type = "note", channel = 1, number = 6 }
+
+[[input]]
+target = "fx.1.select.1"
+midi = { type = "note", channel = 1, number = 6 }
+mode = "relative"
+condition = { modifier = "shift" }
+
+[[input]]
+target = "fx.1.button.2"
+midi = { type = "note", channel = 1, number = 5 }
+
+[[input]]
+target = "fx.1.select.2"
+midi = { type = "note", channel = 1, number = 5 }
+mode = "relative"
+condition = { modifier = "shift" }
+
+[[input]]
+target = "fx.1.button.3"
+midi = { type = "note", channel = 1, number = 4 }
+
+[[input]]
+target = "fx.1.select.3"
+midi = { type = "note", channel = 1, number = 4 }
+mode = "relative"
+condition = { modifier = "shift" }
+
+# FX unit 2
+[[input]]
+target = "fx.2.dry_wet"
+midi = { type = "cc14", channel = 1, number = 4 }
+
+[[input]]
+target = "fx.2.knob.1"
+midi = { type = "cc14", channel = 1, number = 5 }
+
+[[input]]
+target = "fx.2.param.1"
+midi = { type = "cc14", channel = 1, number = 5 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "fx.2.knob.2"
+midi = { type = "cc14", channel = 1, number = 6 }
+
+[[input]]
+target = "fx.2.param.2"
+midi = { type = "cc14", channel = 1, number = 6 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "fx.2.knob.3"
+midi = { type = "cc14", channel = 1, number = 7 }
+
+[[input]]
+target = "fx.2.param.3"
+midi = { type = "cc14", channel = 1, number = 7 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "fx.2.on"
+midi = { type = "note", channel = 1, number = 3 }
+
+[[input]]
+target = "fx.2.button.1"
+midi = { type = "note", channel = 1, number = 2 }
+
+[[input]]
+target = "fx.2.select.1"
+midi = { type = "note", channel = 1, number = 2 }
+mode = "relative"
+condition = { modifier = "shift" }
+
+[[input]]
+target = "fx.2.button.2"
+midi = { type = "note", channel = 1, number = 1 }
+
+[[input]]
+target = "fx.2.select.2"
+midi = { type = "note", channel = 1, number = 1 }
+mode = "relative"
+condition = { modifier = "shift" }
+
+[[input]]
+target = "fx.2.button.3"
+midi = { type = "note", channel = 1, number = 0 }
+
+[[input]]
+target = "fx.2.select.3"
+midi = { type = "note", channel = 1, number = 0 }
+mode = "relative"
+condition = { modifier = "shift" }
+
+# Left deck (A here; C with the CD layout)
+[[input]]
+target = "deck.A.play"
+midi = { type = "note", channel = 1, number = 24 }
+
+[[input]]
+target = "deck.A.reverse"
+midi = { type = "note", channel = 1, number = 24 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.cue"
+midi = { type = "note", channel = 1, number = 25 }
+
+[[input]]
+target = "deck.A.cup"
+midi = { type = "note", channel = 1, number = 25 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.sync"
+midi = { type = "note", channel = 1, number = 26 }
+
+[[input]]
+target = "deck.A.master"
+midi = { type = "note", channel = 1, number = 26 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.flux"
+midi = { type = "note", channel = 1, number = 27 }
+
+[[input]]
+target = "deck.A.keylock"
+midi = { type = "note", channel = 1, number = 27 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.hotcue.1"
+midi = { type = "note", channel = 1, number = 31 }
+
+[[input]]
+target = "deck.A.hotcue_delete.1"
+midi = { type = "note", channel = 1, number = 31 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.hotcue.2"
+midi = { type = "note", channel = 1, number = 30 }
+
+[[input]]
+target = "deck.A.hotcue_delete.2"
+midi = { type = "note", channel = 1, number = 30 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.hotcue.3"
+midi = { type = "note", channel = 1, number = 29 }
+
+[[input]]
+target = "deck.A.hotcue_delete.3"
+midi = { type = "note", channel = 1, number = 29 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.hotcue.4"
+midi = { type = "note", channel = 1, number = 28 }
+
+[[input]]
+target = "deck.A.hotcue_delete.4"
+midi = { type = "note", channel = 1, number = 28 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.load_selected"
+midi = { type = "note", channel = 1, number = 11 }
+
+[[input]]
+target = "deck.A.eject"
+midi = { type = "note", channel = 1, number = 11 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.loop_double"
+midi = { type = "note", channel = 1, number = 50 }
+
+[[input]]
+target = "deck.A.beatjump_forward"
+midi = { type = "note", channel = 1, number = 50 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.loop_halve"
+midi = { type = "note", channel = 1, number = 51 }
+
+[[input]]
+target = "deck.A.beatjump_back"
+midi = { type = "note", channel = 1, number = 51 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.loop_toggle"
+midi = { type = "note", channel = 1, number = 32 }
+
+[[input]]
+target = "deck.A.tempo_reset"
+midi = { type = "note", channel = 1, number = 32 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.jog"
+midi = { type = "cc", channel = 1, number = 70 }
+encoding = "twos_complement"
+ticks_per_rev = 448
+
+[[input]]
+target = "deck.A.tempo"
+midi = { type = "cc", channel = 1, number = 70 }
+mode = "relative"
+encoding = "twos_complement"
+step = 0.0002
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.fx_assign.1"
+midi = { type = "note", channel = 1, number = 15 }
+
+[[input]]
+target = "deck.A.fx_assign.2"
+midi = { type = "note", channel = 1, number = 14 }
+
+# Right deck (B here; D with the CD layout)
+[[input]]
+target = "deck.B.play"
+midi = { type = "note", channel = 1, number = 16 }
+
+[[input]]
+target = "deck.B.reverse"
+midi = { type = "note", channel = 1, number = 16 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.cue"
+midi = { type = "note", channel = 1, number = 17 }
+
+[[input]]
+target = "deck.B.cup"
+midi = { type = "note", channel = 1, number = 17 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.sync"
+midi = { type = "note", channel = 1, number = 18 }
+
+[[input]]
+target = "deck.B.master"
+midi = { type = "note", channel = 1, number = 18 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.flux"
+midi = { type = "note", channel = 1, number = 19 }
+
+[[input]]
+target = "deck.B.keylock"
+midi = { type = "note", channel = 1, number = 19 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.hotcue.1"
+midi = { type = "note", channel = 1, number = 23 }
+
+[[input]]
+target = "deck.B.hotcue_delete.1"
+midi = { type = "note", channel = 1, number = 23 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.hotcue.2"
+midi = { type = "note", channel = 1, number = 22 }
+
+[[input]]
+target = "deck.B.hotcue_delete.2"
+midi = { type = "note", channel = 1, number = 22 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.hotcue.3"
+midi = { type = "note", channel = 1, number = 21 }
+
+[[input]]
+target = "deck.B.hotcue_delete.3"
+midi = { type = "note", channel = 1, number = 21 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.hotcue.4"
+midi = { type = "note", channel = 1, number = 20 }
+
+[[input]]
+target = "deck.B.hotcue_delete.4"
+midi = { type = "note", channel = 1, number = 20 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.load_selected"
+midi = { type = "note", channel = 1, number = 9 }
+
+[[input]]
+target = "deck.B.eject"
+midi = { type = "note", channel = 1, number = 9 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.loop_double"
+midi = { type = "note", channel = 1, number = 52 }
+
+[[input]]
+target = "deck.B.beatjump_forward"
+midi = { type = "note", channel = 1, number = 52 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.loop_halve"
+midi = { type = "note", channel = 1, number = 53 }
+
+[[input]]
+target = "deck.B.beatjump_back"
+midi = { type = "note", channel = 1, number = 53 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.loop_toggle"
+midi = { type = "note", channel = 1, number = 8 }
+
+[[input]]
+target = "deck.B.tempo_reset"
+midi = { type = "note", channel = 1, number = 8 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.jog"
+midi = { type = "cc", channel = 1, number = 71 }
+encoding = "twos_complement"
+ticks_per_rev = 448
+
+[[input]]
+target = "deck.B.tempo"
+midi = { type = "cc", channel = 1, number = 71 }
+mode = "relative"
+encoding = "twos_complement"
+step = 0.0002
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.fx_assign.1"
+midi = { type = "note", channel = 1, number = 13 }
+
+[[input]]
+target = "deck.B.fx_assign.2"
+midi = { type = "note", channel = 1, number = 12 }
+
+# LEDs
+[[output]]
+source = "fx.1.on"
+midi = { type = "note", channel = 1, number = 1 }
+off = 3
+
+[[output]]
+source = "fx.1.button.1"
+midi = { type = "note", channel = 1, number = 2 }
+off = 3
+
+[[output]]
+source = "fx.1.button.2"
+midi = { type = "note", channel = 1, number = 3 }
+off = 3
+
+[[output]]
+source = "fx.1.button.3"
+midi = { type = "note", channel = 1, number = 4 }
+off = 3
+
+[[output]]
+source = "fx.2.on"
+midi = { type = "note", channel = 1, number = 5 }
+off = 3
+
+[[output]]
+source = "fx.2.button.1"
+midi = { type = "note", channel = 1, number = 6 }
+off = 3
+
+[[output]]
+source = "fx.2.button.2"
+midi = { type = "note", channel = 1, number = 7 }
+off = 3
+
+[[output]]
+source = "fx.2.button.3"
+midi = { type = "note", channel = 1, number = 8 }
+off = 3
+
+[[output]]
+source = "deck.A.fx_assign.1"
+midi = { type = "note", channel = 1, number = 9 }
+off = 3
+
+[[output]]
+source = "deck.A.fx_assign.2"
+midi = { type = "note", channel = 1, number = 10 }
+off = 3
+
+[[output]]
+source = "deck.B.fx_assign.1"
+midi = { type = "note", channel = 1, number = 15 }
+off = 3
+
+[[output]]
+source = "deck.B.fx_assign.2"
+midi = { type = "note", channel = 1, number = 16 }
+off = 3
+
+[[output]]
+source = "deck.A.hotcue.1"
+midi = { type = "note", channel = 1, number = 22 }
+
+[[output]]
+source = "deck.A.hotcue.2"
+midi = { type = "note", channel = 1, number = 25 }
+
+[[output]]
+source = "deck.A.hotcue.3"
+midi = { type = "note", channel = 1, number = 34 }
+
+[[output]]
+source = "deck.A.hotcue.4"
+midi = { type = "note", channel = 1, number = 37 }
+
+[[output]]
+source = "deck.A.flux"
+midi = { type = "note", channel = 1, number = 44 }
+off = 3
+
+[[output]]
+source = "deck.A.sync"
+midi = { type = "note", channel = 1, number = 45 }
+off = 3
+
+[[output]]
+source = "deck.A.cue"
+midi = { type = "note", channel = 1, number = 48 }
+off = 3
+
+[[output]]
+source = "deck.A.play"
+midi = { type = "note", channel = 1, number = 49 }
+off = 3
+
+[[output]]
+source = "deck.B.hotcue.1"
+midi = { type = "note", channel = 1, number = 28 }
+
+[[output]]
+source = "deck.B.hotcue.2"
+midi = { type = "note", channel = 1, number = 31 }
+
+[[output]]
+source = "deck.B.hotcue.3"
+midi = { type = "note", channel = 1, number = 40 }
+
+[[output]]
+source = "deck.B.hotcue.4"
+midi = { type = "note", channel = 1, number = 43 }
+
+[[output]]
+source = "deck.B.flux"
+midi = { type = "note", channel = 1, number = 46 }
+off = 3
+
+[[output]]
+source = "deck.B.sync"
+midi = { type = "note", channel = 1, number = 47 }
+off = 3
+
+[[output]]
+source = "deck.B.cue"
+midi = { type = "note", channel = 1, number = 50 }
+off = 3
+
+[[output]]
+source = "deck.B.play"
+midi = { type = "note", channel = 1, number = 51 }
+off = 3

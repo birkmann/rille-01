@@ -1,0 +1,246 @@
+# Native Instruments Traktor Kontrol Z1
+#
+# The Z1 is a HID device, not MIDI: rille reads its reports directly (see
+# crates/rille-midi/src/hid.rs) and presents them as MIDI on channel 1, which is
+# what this file maps. The report layout comes from the Mixxx HID mapping
+# (Traktor-Kontrol-Z1-scripts.js, Mixxx 2.4, GPL-2.0-or-later; author
+# djantti). The crossfader is calibrated from the device's own end points.
+#
+# On Linux, opening the device needs the udev rule in
+# packaging/udev/70-rille-controllers.rules (installed by the Arch package).
+#
+# Translated messages:
+#   14-bit CC 0-4    channel 1 gain, EQ hi, mid, lo, filter
+#   14-bit CC 5-9    channel 2 gain, EQ hi, mid, lo, filter
+#   14-bit CC 10     headphone cue mix
+#   14-bit CC 11/12  volume faders 1/2
+#   14-bit CC 13     crossfader
+#   note 4 / 0       headphone CUE 1 / 2
+#   note 2 / 3       FX 1 / 2
+#   note 1           MODE (held as a modifier)
+#
+#   control        plain                  MODE held
+#   CUE            headphone cue          cue
+#   FX             channel to FX unit 1   play / pause
+#
+# Audio: the Z1's MAIN and headphone VOL knobs are analog controls of its
+# sound card, not HID; rille sends the main mix to its MAIN OUT and the cue to
+# its headphones when the Z1 is the output (see rille-engine's backend.rs).
+#
+# LEDs (output report byte = note number): 15/16 CUE, 17/20 play (red, under
+# the FX buttons), 18/21 FX (blue), 19 MODE (lit while held). Off states are
+# dimmed like on the hardware.
+#
+# Level meters: bytes 1-7 (channel 1) and 8-14 (channel 2), bottom to top,
+# labelled -30 -15 -6 -3 0 +3 +6. They show the channel level before the
+# fader, so a muted channel still shows its track (deck.X.meter, peak,
+# 1.0 = 0 dBFS), like the on-screen meters, with the
+# label "0" at -6 dBFS: an LED lights once the level reaches its threshold,
+# so the red +6 LED means the channel is at full scale.
+#
+# DECK ORDER: channel 1/2 drive decks A/B by default; choose
+# "Traktor Kontrol Z1 (CD)" in Settings -> Controllers for decks C/D.
+
+name = "Traktor Kontrol Z1"
+device = '(?i)traktor kontrol z1 hid'
+description = "Native Instruments Traktor Kontrol Z1 (HID) as a 2-channel mixer"
+deck_layouts = ["AB", "CD"]
+
+# MODE
+[[input]]
+target = "modifier:mode"
+midi = { type = "note", channel = 1, number = 1 }
+
+# Mixer
+[[input]]
+target = "deck.A.gain"
+midi = { type = "cc14", channel = 1, number = 0 }
+
+[[input]]
+target = "deck.A.eq_hi"
+midi = { type = "cc14", channel = 1, number = 1 }
+
+[[input]]
+target = "deck.A.eq_mid"
+midi = { type = "cc14", channel = 1, number = 2 }
+
+[[input]]
+target = "deck.A.eq_lo"
+midi = { type = "cc14", channel = 1, number = 3 }
+
+[[input]]
+target = "deck.A.filter"
+midi = { type = "cc14", channel = 1, number = 4 }
+
+[[input]]
+target = "deck.B.gain"
+midi = { type = "cc14", channel = 1, number = 5 }
+
+[[input]]
+target = "deck.B.eq_hi"
+midi = { type = "cc14", channel = 1, number = 6 }
+
+[[input]]
+target = "deck.B.eq_mid"
+midi = { type = "cc14", channel = 1, number = 7 }
+
+[[input]]
+target = "deck.B.eq_lo"
+midi = { type = "cc14", channel = 1, number = 8 }
+
+[[input]]
+target = "deck.B.filter"
+midi = { type = "cc14", channel = 1, number = 9 }
+
+[[input]]
+target = "global.cue_mix"
+midi = { type = "cc14", channel = 1, number = 10 }
+
+[[input]]
+target = "deck.A.volume"
+midi = { type = "cc14", channel = 1, number = 11 }
+
+[[input]]
+target = "deck.B.volume"
+midi = { type = "cc14", channel = 1, number = 12 }
+
+[[input]]
+target = "global.crossfader"
+midi = { type = "cc14", channel = 1, number = 13 }
+
+# Buttons
+[[input]]
+target = "deck.A.pfl"
+midi = { type = "note", channel = 1, number = 4 }
+
+[[input]]
+target = "deck.A.cue"
+midi = { type = "note", channel = 1, number = 4 }
+condition = { modifier = "mode" }
+
+[[input]]
+target = "deck.A.fx_assign.1"
+midi = { type = "note", channel = 1, number = 2 }
+
+[[input]]
+target = "deck.A.play"
+midi = { type = "note", channel = 1, number = 2 }
+condition = { modifier = "mode" }
+
+[[input]]
+target = "deck.B.pfl"
+midi = { type = "note", channel = 1, number = 0 }
+
+[[input]]
+target = "deck.B.cue"
+midi = { type = "note", channel = 1, number = 0 }
+condition = { modifier = "mode" }
+
+[[input]]
+target = "deck.B.fx_assign.1"
+midi = { type = "note", channel = 1, number = 3 }
+
+[[input]]
+target = "deck.B.play"
+midi = { type = "note", channel = 1, number = 3 }
+condition = { modifier = "mode" }
+
+# Level meters
+[[output]]
+source = "deck.A.meter"
+midi = { type = "note", channel = 1, number = 1 }  # -30 = -36 dBFS
+threshold = 0.0158
+
+[[output]]
+source = "deck.A.meter"
+midi = { type = "note", channel = 1, number = 2 }  # -15 = -21 dBFS
+threshold = 0.0891
+
+[[output]]
+source = "deck.A.meter"
+midi = { type = "note", channel = 1, number = 3 }  # -6 = -12 dBFS
+threshold = 0.2512
+
+[[output]]
+source = "deck.A.meter"
+midi = { type = "note", channel = 1, number = 4 }  # -3 = -9 dBFS
+threshold = 0.3548
+
+[[output]]
+source = "deck.A.meter"
+midi = { type = "note", channel = 1, number = 5 }  # +0 = -6 dBFS
+threshold = 0.5012
+
+[[output]]
+source = "deck.A.meter"
+midi = { type = "note", channel = 1, number = 6 }  # +3 = -3 dBFS
+threshold = 0.7079
+
+[[output]]
+source = "deck.A.meter"
+midi = { type = "note", channel = 1, number = 7 }  # +6 = -0.1 dBFS
+threshold = 0.9886
+
+[[output]]
+source = "deck.B.meter"
+midi = { type = "note", channel = 1, number = 8 }  # -30 = -36 dBFS
+threshold = 0.0158
+
+[[output]]
+source = "deck.B.meter"
+midi = { type = "note", channel = 1, number = 9 }  # -15 = -21 dBFS
+threshold = 0.0891
+
+[[output]]
+source = "deck.B.meter"
+midi = { type = "note", channel = 1, number = 10 }  # -6 = -12 dBFS
+threshold = 0.2512
+
+[[output]]
+source = "deck.B.meter"
+midi = { type = "note", channel = 1, number = 11 }  # -3 = -9 dBFS
+threshold = 0.3548
+
+[[output]]
+source = "deck.B.meter"
+midi = { type = "note", channel = 1, number = 12 }  # +0 = -6 dBFS
+threshold = 0.5012
+
+[[output]]
+source = "deck.B.meter"
+midi = { type = "note", channel = 1, number = 13 }  # +3 = -3 dBFS
+threshold = 0.7079
+
+[[output]]
+source = "deck.B.meter"
+midi = { type = "note", channel = 1, number = 14 }  # +6 = -0.1 dBFS
+threshold = 0.9886
+
+# LEDs
+[[output]]
+source = "deck.A.pfl"
+midi = { type = "note", channel = 1, number = 15 }
+off = 10
+
+[[output]]
+source = "deck.A.play"
+midi = { type = "note", channel = 1, number = 17 }
+
+[[output]]
+source = "deck.A.fx_assign.1"
+midi = { type = "note", channel = 1, number = 18 }
+off = 10
+
+[[output]]
+source = "deck.B.pfl"
+midi = { type = "note", channel = 1, number = 16 }
+off = 10
+
+[[output]]
+source = "deck.B.play"
+midi = { type = "note", channel = 1, number = 20 }
+
+[[output]]
+source = "deck.B.fx_assign.1"
+midi = { type = "note", channel = 1, number = 21 }
+off = 10

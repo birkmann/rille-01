@@ -1,0 +1,1532 @@
+//! Application core without any UI: owns the engine, the library, track
+//! loading and analysis, MIDI and settings. The Qt UI (and tests) drive it
+//! through [`App`].
+
+pub mod analysis;
+mod audio;
+mod engine_slot;
+pub mod explorer;
+pub mod remix;
+pub mod settings;
+pub mod timing;
+mod values;
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
+
+use crossbeam_channel::{Receiver, Sender};
+use rille_analysis::AnalysisConfig;
+use rille_core::track::{ANALYZER_VERSION, HOTCUE_COLORS};
+use rille_core::{
+    BeatClock, BeatGrid, Control, ControlEvent, ControlValue, CuePoint, Key, Scope, TrackCues, WaveformSummary,
+};
+use rille_engine::backend::AudioConfig;
+use rille_engine::{Command, Event, HOTCUES, Hotcue, LoadedTrack, MAX_DECKS, Snapshot, TrackAudio};
+use rille_library::{CoverSize, Library, PlaylistId, ScanProgress, SearchIndex, TrackId, TrackRow};
+use rille_midi::{LearnSession, Mapping, MappingStore, MidiEvent, MidiManager, port_base_name};
+
+pub use analysis::{AnalysisQueue, AnalysisState, Priority};
+pub use audio::AudioStatus;
+use engine_slot::EngineSlot;
+use explorer::FolderTree;
+pub use remix::{RemixCell, RemixSet};
+pub use rille_library::{HistorySession, PlaylistNode};
+pub use settings::{KeyNotation, MixingMode, Paths, Settings, WaveformStyle};
+pub use timing::{Timing, format_duration};
+
+/// Something the UI should react to.
+#[derive(Clone, Debug, PartialEq)]
+pub enum UiEvent {
+    /// Title, grid, waveform… of a deck changed.
+    DeckChanged(u8),
+    LibraryChanged,
+    /// Only these rows changed (analysis finished, rating…).
+    TracksChanged(Vec<TrackId>),
+    Status(String),
+    AnalysisProgress(AnalysisProgress),
+    /// Import or scan: files read so far (all zero when finished).
+    ImportProgress {
+        done: usize,
+        total: usize,
+        timing: Timing,
+    },
+    /// Browser controls and "load selected" from a controller.
+    Browser(ControlEvent),
+    MidiChanged,
+    MidiLearned(String),
+    AudioChanged,
+}
+
+/// The analysis queue's state for the status bar.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AnalysisProgress {
+    pub done: usize,
+    pub failed: usize,
+    pub total: usize,
+    pub paused: bool,
+    /// "Artist – Title" of a track being analyzed.
+    pub current: String,
+    pub timing: Timing,
+}
+
+impl AnalysisProgress {
+    pub fn idle(&self) -> bool {
+        self.done + self.failed >= self.total && self.current.is_empty()
+    }
+}
+
+/// What a deck holds, for display.
+#[derive(Clone, Debug, Default)]
+pub struct DeckInfo {
+    pub track_id: Option<TrackId>,
+    /// Identity of this load inside the engine.
+    pub engine_id: u64,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub remixer: String,
+    pub label: String,
+    pub key: Option<Key>,
+    pub grid: Option<Arc<BeatGrid>>,
+    pub waveform: Option<Arc<WaveformSummary>>,
+    /// The track's file and decoded audio (for capturing loops from it).
+    pub path: Option<PathBuf>,
+    pub audio: Option<Arc<TrackAudio>>,
+    /// Set for a remix deck: its cells. `title` is the set's name.
+    pub remix: Option<Arc<RemixSet>>,
+    pub cover: Option<PathBuf>,
+    pub loading: bool,
+    pub analyzing: bool,
+    pub error: Option<String>,
+    /// Bumped on every change.
+    pub revision: u64,
+    play_secs: f64,
+    logged: bool,
+    taps: Vec<Instant>,
+}
+
+/// Corrections to a deck's beatgrid.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GridEdit {
+    /// Move all beats (milliseconds, positive = later).
+    Move(f64),
+    DoubleTempo,
+    HalveTempo,
+    /// The beat nearest to the play position moves onto it.
+    BeatHere,
+    /// The beat nearest to the play position becomes a downbeat.
+    DownbeatHere,
+    /// Tap the tempo; four or more taps set the BPM.
+    Tap,
+    Lock(bool),
+    /// Back to the analyzer's grid.
+    Reset,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    Collection,
+    Playlist(i64),
+    History(i64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SortKey {
+    #[default]
+    Artist,
+    Title,
+    Album,
+    Label,
+    Genre,
+    Bpm,
+    Key,
+    Rating,
+    Duration,
+    Added,
+    PlayCount,
+    FileName,
+    Remixer,
+    Comment,
+    Year,
+    Bitrate,
+    SampleRate,
+    FileSize,
+    LastPlayed,
+    Path,
+}
+
+struct Tracks {
+    rows: Vec<TrackRow>,
+    index: SearchIndex,
+    /// Row position by track id.
+    by_id: HashMap<TrackId, usize>,
+}
+
+impl Tracks {
+    fn new(rows: Vec<TrackRow>) -> Self {
+        let index = SearchIndex::new(&rows);
+        let by_id = rows.iter().enumerate().map(|(i, r)| (r.id, i)).collect();
+        Self { rows, index, by_id }
+    }
+}
+
+pub struct App {
+    pub paths: Paths,
+    settings: RwLock<Settings>,
+    engine: Arc<EngineSlot>,
+    audio_status: RwLock<AudioStatus>,
+    audio_runner: Mutex<Option<audio::AudioRunner>>,
+    library: Mutex<Library>,
+    tracks: RwLock<Tracks>,
+    decks: [RwLock<DeckInfo>; MAX_DECKS],
+    load_seq: AtomicU64,
+    ui_tx: Sender<UiEvent>,
+    ui_rx: Receiver<UiEvent>,
+    /// Wakes the background planner (new files, settings changed).
+    analysis_kick: Sender<()>,
+    queue: Arc<AnalysisQueue>,
+    history_session: Mutex<Option<i64>>,
+    midi: Mutex<Option<MidiManager>>,
+    mappings: Mutex<MappingStore>,
+    learn: Arc<Mutex<Option<LearnSession>>>,
+    last_tick: Mutex<Instant>,
+    shutdown: Arc<AtomicBool>,
+}
+
+/// Options for [`App::start`].
+#[derive(Clone, Debug)]
+pub struct StartOptions {
+    pub paths: Paths,
+    /// Open the audio device (off for tests and headless runs).
+    pub audio: bool,
+    pub midi: bool,
+    /// Folder with bundled controller mappings.
+    pub bundled_mappings: Option<PathBuf>,
+}
+
+impl App {
+    pub fn start(opts: StartOptions) -> Result<Arc<App>, String> {
+        let paths = opts.paths;
+        paths.create().map_err(|e| format!("cannot create app folders: {e}"))?;
+        let settings = Settings::load(&paths.settings_file());
+        let library = Library::open(&paths.library_db(), &paths.cache).map_err(|e| e.to_string())?;
+        let rows = library.tracks().map_err(|e| e.to_string())?;
+        let (ui_tx, ui_rx) = crossbeam_channel::unbounded();
+        let (kick_tx, kick_rx) = crossbeam_channel::unbounded();
+        let mut mapping_dirs = vec![paths.user_mappings()];
+        mapping_dirs.extend(opts.bundled_mappings.clone());
+        let app = Arc::new(App {
+            settings: RwLock::new(settings),
+            engine: Arc::new(EngineSlot::default()),
+            audio_status: RwLock::new(AudioStatus::default()),
+            audio_runner: Mutex::new(None),
+            library: Mutex::new(library),
+            tracks: RwLock::new(Tracks::new(rows)),
+            decks: std::array::from_fn(|_| RwLock::new(DeckInfo::default())),
+            load_seq: AtomicU64::new(1),
+            ui_tx,
+            ui_rx,
+            analysis_kick: kick_tx,
+            queue: Arc::new(AnalysisQueue::default()),
+            history_session: Mutex::new(None),
+            midi: Mutex::new(None),
+            mappings: Mutex::new(MappingStore::load(&mapping_dirs)),
+            learn: Arc::new(Mutex::new(None)),
+            last_tick: Mutex::new(Instant::now()),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            paths,
+        });
+        app.restart_audio(opts.audio);
+        app.apply_deck_types();
+        if opts.midi && app.settings().midi {
+            app.start_midi();
+        }
+        app.clone().spawn_analysis_workers(kick_rx);
+        if app.settings().background_analysis {
+            let _ = app.analysis_kick.send(());
+        }
+        Ok(app)
+    }
+
+    /// Stops background work and audio.
+    pub fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = self.analysis_kick.send(());
+        self.queue.shutdown();
+        *self.midi.lock().expect("midi lock") = None;
+        *self.audio_runner.lock().expect("audio lock") = None;
+    }
+
+    // ---------------------------------------------------------------- state
+
+    pub fn settings(&self) -> Settings {
+        self.settings.read().expect("settings lock").clone()
+    }
+
+    /// Applies and saves settings; restarts audio if the device changed.
+    pub fn set_settings(self: &Arc<Self>, s: Settings) {
+        let old = self.settings();
+        *self.settings.write().expect("settings lock") = s.clone();
+        let _ = s.save(&self.paths.settings_file());
+        if old.audio_device != s.audio_device || old.buffer_frames != s.buffer_frames {
+            self.restart_audio(true);
+        } else {
+            self.send_engine_settings();
+        }
+        if old.library_roots != s.library_roots {
+            self.sync_roots();
+        }
+        if old.remix_decks != s.remix_decks {
+            self.apply_deck_types();
+        }
+    }
+
+    pub fn audio_status(&self) -> AudioStatus {
+        self.audio_status.read().expect("audio status lock").clone()
+    }
+
+    pub fn output_devices(&self) -> Vec<String> {
+        rille_engine::backend::output_devices()
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        self.engine.get().map(|e| e.snapshot()).unwrap_or_default()
+    }
+
+    pub fn deck(&self, deck: u8) -> DeckInfo {
+        self.decks[usize::from(deck).min(MAX_DECKS - 1)].read().expect("deck lock").clone()
+    }
+
+    /// Events for the UI since the last call.
+    pub fn poll_ui_events(&self) -> Vec<UiEvent> {
+        self.ui_rx.try_iter().collect()
+    }
+
+    fn notify(&self, e: UiEvent) {
+        let _ = self.ui_tx.send(e);
+    }
+
+    /// Sends a raw engine command (clock tempo, master selection…).
+    pub fn command(&self, cmd: Command) {
+        self.send(cmd);
+    }
+
+    fn send(&self, cmd: Command) {
+        if let Some(e) = self.engine.get()
+            && e.send(cmd).is_err()
+        {
+            eprintln!("engine command queue full");
+        }
+    }
+
+    // ---------------------------------------------------------------- audio
+
+    fn restart_audio(self: &Arc<Self>, device: bool) {
+        let s = self.settings();
+        // Stop the old stream first so the device is free.
+        *self.audio_runner.lock().expect("audio lock") = None;
+        let cfg = AudioConfig { device: s.audio_device.clone(), buffer_frames: s.buffer_frames };
+        let (handle, status, runner) = audio::start(&cfg, device);
+        self.engine.set(Some(handle));
+        *self.audio_status.write().expect("audio status lock") = status.clone();
+        *self.audio_runner.lock().expect("audio lock") = Some(runner);
+        self.send_engine_settings();
+        if let Some(err) = status.error {
+            self.notify(UiEvent::Status(format!("Audio output unavailable ({err}); running silent")));
+        }
+        // A new engine starts empty: reload whatever the decks held.
+        for d in 0..MAX_DECKS as u8 {
+            let info = self.deck(d);
+            if info.remix.is_some() {
+                self.install_remix(d);
+            } else if let Some(id) = info.track_id {
+                self.load_track(d, id);
+            }
+        }
+        self.notify(UiEvent::AudioChanged);
+    }
+
+    /// Whether the decks go to a hardware mixer's channels (see
+    /// [`MixingMode`]) instead of the internal mixer.
+    pub fn external_mixing(&self) -> bool {
+        match self.settings().mixing {
+            MixingMode::Auto => self.audio_status().external_mixer,
+            MixingMode::Internal => false,
+            MixingMode::External => true,
+        }
+    }
+
+    fn send_engine_settings(&self) {
+        let s = self.settings();
+        self.send(Command::Settings(rille_engine::Settings {
+            tempo_range: s.tempo_range,
+            split_cue: s.split_cue,
+            external_outputs: self.external_mixing().then(|| s.deck_outputs()),
+            ..rille_engine::Settings::default()
+        }));
+    }
+
+    // -------------------------------------------------------------- control
+
+    /// A button, knob or fader from the UI or keyboard.
+    pub fn control(&self, ev: ControlEvent) {
+        if let Some(session) = self.learn.lock().expect("learn lock").as_mut()
+            && session.target() != ev.target
+        {
+            // Learn mode: clicking a control on screen selects it as target.
+            *session = LearnSession::new(ev.target);
+            self.notify(UiEvent::MidiLearned(format!("Move a control for {}", ev.target)));
+            return;
+        }
+        match ev.target.control {
+            Control::LoadSelected
+            | Control::BrowserScroll
+            | Control::BrowserTreeScroll
+            | Control::BrowserToggleNode => {
+                self.notify(UiEvent::Browser(ev));
+            }
+            Control::Eject if matches!(ev.value, ControlValue::Press(true)) => self.eject(ev.target.unit),
+            // Cell edits need the app (files, the other decks' audio).
+            Control::RemixPadLoad(_) => self.notify(UiEvent::Browser(ev)),
+            Control::RemixPadDelete(pad) | Control::RemixPadCapture(pad) | Control::RemixPadType(pad) => {
+                let deck = ev.target.unit;
+                if matches!(ev.value, ControlValue::Press(true))
+                    && let Some(cell) = self.remix_pad_cell(deck, pad)
+                {
+                    match ev.target.control {
+                        Control::RemixPadDelete(_) => self.delete_remix_cell(deck, cell),
+                        Control::RemixPadCapture(_) => self.capture_remix_cell(deck, cell),
+                        _ => self.toggle_remix_cell_type(deck, cell),
+                    }
+                }
+            }
+            _ => self.send(Command::Control(ev)),
+        }
+    }
+
+    /// Called about 60 times per second by the UI.
+    pub fn tick(&self) {
+        let now = Instant::now();
+        let dt = {
+            let mut last = self.last_tick.lock().expect("tick lock");
+            let dt = now.duration_since(*last).as_secs_f64().min(0.5);
+            *last = now;
+            dt
+        };
+        if let Some(engine) = self.engine.get() {
+            engine.poll(|e| self.on_engine_event(e));
+            let snap = engine.snapshot();
+            self.log_history(&snap, dt);
+        }
+        if let Some(m) = self.midi.lock().expect("midi lock").as_mut() {
+            m.send_feedback(&values::SnapshotValues(self.engine.clone()));
+        }
+    }
+
+    fn deck_by_engine_id(&self, engine_id: u64) -> Option<(u8, TrackId)> {
+        (0..MAX_DECKS as u8).find_map(|d| {
+            let info = self.deck(d);
+            (info.engine_id == engine_id).then_some(info.track_id.map(|t| (d, t))).flatten()
+        })
+    }
+
+    fn on_engine_event(&self, e: Event) {
+        let update = |track_id: u64, f: &dyn Fn(&mut TrackCues)| {
+            if let Some((_, id)) = self.deck_by_engine_id(track_id) {
+                let mut lib = self.library.lock().expect("library lock");
+                let mut cues = lib.cues(id).unwrap_or_default();
+                f(&mut cues);
+                if let Err(err) = lib.set_cues(id, &cues) {
+                    eprintln!("saving cues: {err}");
+                }
+            }
+        };
+        match e {
+            Event::MainCueSet { track_id, secs, .. } => update(track_id, &|c| c.main_cue_secs = secs),
+            Event::HotcueSet { track_id, slot, cue, .. } => update(track_id, &|c| {
+                c.set_hotcue(CuePoint {
+                    slot: Some(slot),
+                    kind: cue.kind,
+                    start_secs: cue.secs,
+                    len_secs: cue.len_secs,
+                    name: String::new(),
+                    color: HOTCUE_COLORS[usize::from(slot) % HOTCUE_COLORS.len()],
+                })
+            }),
+            Event::HotcueDeleted { track_id, slot, .. } => update(track_id, &|c| c.delete_hotcue(slot)),
+            Event::TrackEnded { .. } => {}
+        }
+    }
+
+    /// Logs a track to the history once it played 30 s with its fader open.
+    fn log_history(&self, snap: &Snapshot, dt: f64) {
+        for d in 0..MAX_DECKS {
+            let (ds, ch) = (&snap.decks[d], &snap.channels[d]);
+            if !(ds.playing && ch.volume > 0.1) {
+                continue;
+            }
+            let mut info = self.decks[d].write().expect("deck lock");
+            info.play_secs += dt;
+            if info.play_secs > 30.0 && !info.logged {
+                info.logged = true;
+                if let Some(id) = info.track_id {
+                    drop(info);
+                    let mut lib = self.library.lock().expect("library lock");
+                    let mut session = self.history_session.lock().expect("history lock");
+                    if session.is_none() {
+                        *session = lib.start_history_session().ok();
+                    }
+                    if let Some(s) = *session {
+                        let _ = lib.log_played(s, id, d as u8);
+                    }
+                }
+            }
+        }
+    }
+
+    // --------------------------------------------------------------- decks
+
+    /// Loads a library track onto a deck (decoding and, if needed, analysis
+    /// run in the background; audio plays as soon as it is decoded).
+    pub fn load_track(self: &Arc<Self>, deck: u8, id: TrackId) {
+        if self.is_remix_deck(deck) {
+            // Into the first free cell.
+            self.load_remix_cell(deck, None, id);
+            return;
+        }
+        let d = usize::from(deck).min(MAX_DECKS - 1);
+        let row = match self.library.lock().expect("library lock").track(id) {
+            Ok(Some(r)) => r,
+            _ => return,
+        };
+        let seq = self.load_seq.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut info = self.decks[d].write().expect("deck lock");
+            let revision = info.revision + 1;
+            *info = DeckInfo {
+                track_id: Some(id),
+                engine_id: seq,
+                title: row.title.clone(),
+                artist: row.artist.clone(),
+                album: row.album.clone(),
+                remixer: row.remixer.clone(),
+                label: row.label.clone(),
+                key: row.key,
+                cover: self.library.lock().expect("library lock").cover_path(id, CoverSize::Large),
+                path: Some(row.path.clone()),
+                loading: true,
+                revision,
+                ..DeckInfo::default()
+            };
+        }
+        self.notify(UiEvent::DeckChanged(deck));
+        let app = self.clone();
+        std::thread::Builder::new()
+            .name(format!("load-deck-{deck}"))
+            .spawn(move || app.load_worker(deck, id, seq, row.path))
+            .expect("spawn loader");
+    }
+
+    /// Imports a file (drag and drop, file browser) and loads it.
+    pub fn load_file(self: &Arc<Self>, deck: u8, path: &Path) {
+        if self.is_remix_deck(deck) {
+            self.load_remix_file(deck, None, path);
+            return;
+        }
+        let id = self.library.lock().expect("library lock").import_file(path);
+        match id {
+            Ok(id) => {
+                self.refresh_tracks();
+                self.load_track(deck, id);
+            }
+            Err(e) => self.notify(UiEvent::Status(format!("Cannot load {}: {e}", path.display()))),
+        }
+    }
+
+    pub fn eject(&self, deck: u8) {
+        if self.is_remix_deck(deck) {
+            self.clear_remix(deck);
+            return;
+        }
+        self.send(Command::Unload { deck });
+        let d = usize::from(deck).min(MAX_DECKS - 1);
+        let mut info = self.decks[d].write().expect("deck lock");
+        let revision = info.revision + 1;
+        *info = DeckInfo { revision, ..DeckInfo::default() };
+        drop(info);
+        self.notify(UiEvent::DeckChanged(deck));
+    }
+
+    fn update_deck(&self, deck: u8, seq: u64, f: impl FnOnce(&mut DeckInfo)) -> bool {
+        let d = usize::from(deck).min(MAX_DECKS - 1);
+        let mut info = self.decks[d].write().expect("deck lock");
+        if info.engine_id != seq {
+            return false;
+        }
+        f(&mut info);
+        info.revision += 1;
+        drop(info);
+        self.notify(UiEvent::DeckChanged(deck));
+        true
+    }
+
+    fn load_worker(self: Arc<Self>, deck: u8, id: TrackId, seq: u64, path: PathBuf) {
+        let audio = match rille_decode::decode_file(&path, None, &mut |_| {}) {
+            Ok(a) => a,
+            Err(e) => {
+                self.update_deck(deck, seq, |i| {
+                    i.loading = false;
+                    i.error = Some(e.to_string());
+                });
+                self.notify(UiEvent::Status(format!("Cannot decode {}: {e}", path.display())));
+                return;
+            }
+        };
+        if self.deck(deck).engine_id != seq {
+            return;
+        }
+        let (stored, waveform, cues) = {
+            let lib = self.library.lock().expect("library lock");
+            (lib.analysis(id).ok().flatten(), lib.waveform(id).ok().flatten(), lib.cues(id).unwrap_or_default())
+        };
+        let fresh = stored.as_ref().is_some_and(|a| a.analyzer_version >= ANALYZER_VERSION) && waveform.is_some();
+        let settings = self.settings();
+        let track_audio = Arc::new(TrackAudio { sample_rate: audio.sample_rate, frames: audio.frames.clone() });
+        let auto_gain = |lufs: Option<f32>| {
+            if settings.auto_gain { lufs.map_or(0.0, |l| (settings.target_lufs - l).clamp(-12.0, 12.0)) } else { 0.0 }
+        };
+        let hotcues = hotcues_from(&cues);
+        let grid = stored.as_ref().and_then(|a| a.grid.clone()).map(Arc::new);
+        if !self.update_deck(deck, seq, |i| i.audio = Some(track_audio.clone())) {
+            return;
+        }
+        self.send(Command::Load {
+            deck,
+            track: LoadedTrack {
+                id: seq,
+                audio: track_audio,
+                grid: if fresh { grid.clone() } else { None },
+                main_cue_secs: cues.main_cue_secs,
+                hotcues,
+                auto_gain_db: auto_gain(stored.as_ref().and_then(|a| a.lufs)),
+            },
+        });
+        if fresh {
+            let wf = waveform.and_then(|b| WaveformSummary::from_bytes(&b)).map(Arc::new);
+            self.update_deck(deck, seq, |i| {
+                i.loading = false;
+                i.grid = grid;
+                i.waveform = wf;
+                i.key = stored.as_ref().and_then(|a| a.key).or(i.key);
+            });
+            return;
+        }
+
+        // Not analyzed yet: the deck already plays; the grid follows.
+        self.update_deck(deck, seq, |i| {
+            i.loading = false;
+            i.analyzing = true;
+        });
+        // Shown as running in the browser; a worker won't pick it up too.
+        self.queue.claim(id);
+        self.notify_progress();
+        let out = rille_analysis::analyze(&audio, &analysis_config(&settings));
+        let effective = {
+            let mut lib = self.library.lock().expect("library lock");
+            let _ = lib.set_analysis(id, &out.analysis);
+            let _ = lib.set_waveform(id, &out.waveform.to_bytes());
+            lib.analysis(id).ok().flatten()
+        };
+        self.finish_analysis(id, true);
+        self.notify_progress();
+        let grid = effective.as_ref().and_then(|a| a.grid.clone()).map(Arc::new);
+        self.send(Command::SetGrid { deck, track_id: seq, grid: grid.clone() });
+        let wf = Arc::new(out.waveform);
+        self.update_deck(deck, seq, |i| {
+            i.analyzing = false;
+            i.grid = grid;
+            i.waveform = Some(wf);
+            i.key = out.analysis.key.or(i.key);
+        });
+        self.refresh_track(id);
+    }
+
+    /// Applies a beatgrid correction to the track on `deck` and saves it.
+    pub fn grid_edit(&self, deck: u8, edit: GridEdit) {
+        let d = usize::from(deck).min(MAX_DECKS - 1);
+        let info = self.deck(deck);
+        let Some(id) = info.track_id else { return };
+        let pos = self.snapshot().decks[d].position_secs;
+        let new = match (edit, info.grid.as_deref()) {
+            (GridEdit::Reset, _) => {
+                let mut lib = self.library.lock().expect("library lock");
+                let _ = lib.reset_grid(id);
+                lib.analysis(id).ok().flatten().and_then(|a| a.grid)
+            }
+            (GridEdit::Tap, grid) => {
+                let mut taps = {
+                    let mut w = self.decks[d].write().expect("deck lock");
+                    let now = Instant::now();
+                    if w.taps.last().is_some_and(|t| now.duration_since(*t) > Duration::from_secs(2)) {
+                        w.taps.clear();
+                    }
+                    w.taps.push(now);
+                    if w.taps.len() > 16 {
+                        w.taps.remove(0);
+                    }
+                    w.taps.clone()
+                };
+                if taps.len() < 4 {
+                    return;
+                }
+                let t0 = taps[0];
+                let secs: Vec<f64> = taps.drain(..).map(|t| t.duration_since(t0).as_secs_f64()).collect();
+                let Some(tapped) = BeatGrid::from_taps(&secs) else { return };
+                let bpm = tapped.bpm_at(0.0);
+                // Keep the grid position under the play head, set the tempo.
+                let anchor = grid.map_or(pos, |g| g.secs_at(g.beat_at(pos).round()));
+                let Ok(map) = rille_core::BeatMap::constant(anchor, bpm) else { return };
+                let mut g = BeatGrid::new(map, rille_core::GridSource::Tapped);
+                if let Some(old) = grid {
+                    g.downbeat_beat_index = old.beat_at(old.secs_at(old.downbeat_beat_index as f64)).round() as i64;
+                }
+                Some(g)
+            }
+            (_, None) => None,
+            (GridEdit::Move(ms), Some(g)) => Some(g.shifted(ms / 1000.0)),
+            (GridEdit::DoubleTempo, Some(g)) => Some(g.scaled(2.0, pos)),
+            (GridEdit::HalveTempo, Some(g)) => Some(g.scaled(0.5, pos)),
+            (GridEdit::BeatHere, Some(g)) => Some(g.with_beat_at(pos)),
+            (GridEdit::DownbeatHere, Some(g)) => Some(g.with_downbeat_at(pos)),
+            (GridEdit::Lock(on), Some(g)) => {
+                let mut g = g.clone();
+                g.locked = on;
+                Some(g)
+            }
+        };
+        let Some(new) = new else { return };
+        if !matches!(edit, GridEdit::Reset) {
+            let _ = self.library.lock().expect("library lock").set_grid(id, &new);
+        }
+        let grid = Arc::new(new);
+        self.send(Command::SetGrid { deck, track_id: info.engine_id, grid: Some(grid.clone()) });
+        self.update_deck(deck, info.engine_id, |i| i.grid = Some(grid));
+        self.refresh_tracks();
+    }
+
+    // ------------------------------------------------------------- library
+
+    /// Rows for the browser.
+    pub fn tracks(&self, source: Source, search: &str, sort: SortKey, descending: bool) -> Vec<TrackRow> {
+        let t = self.tracks.read().expect("tracks lock");
+        let ids: Option<Vec<TrackId>> = match source {
+            Source::Collection => None,
+            Source::Playlist(p) => self.library.lock().expect("library lock").playlist_tracks(p).ok(),
+            Source::History(h) => self.library.lock().expect("library lock").history_tracks(h).ok(),
+        };
+        let matching: Option<HashSet<usize>> =
+            (!search.trim().is_empty()).then(|| t.index.search(search).into_iter().collect());
+        let by_id = |id: TrackId| t.by_id.get(&id).copied();
+        let mut rows: Vec<TrackRow> = match ids {
+            // Playlists and history keep their own order unless sorted.
+            Some(ids) => ids
+                .into_iter()
+                .filter_map(by_id)
+                .filter(|i| matching.as_ref().is_none_or(|m| m.contains(i)))
+                .map(|i| t.rows[i].clone())
+                .collect(),
+            None => t
+                .rows
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| matching.as_ref().is_none_or(|m| m.contains(i)))
+                .map(|(_, r)| r.clone())
+                .collect(),
+        };
+        if !matches!(source, Source::Playlist(_) | Source::History(_)) || descending || sort != SortKey::Artist {
+            sort_rows(&mut rows, sort, descending);
+        }
+        rows
+    }
+
+    pub fn playlists(&self) -> Vec<PlaylistNode> {
+        self.library.lock().expect("library lock").playlist_tree().unwrap_or_default()
+    }
+
+    pub fn history_sessions(&self) -> Vec<HistorySession> {
+        self.library.lock().expect("library lock").history_sessions().unwrap_or_default()
+    }
+
+    pub fn create_playlist(&self, name: &str) -> Option<i64> {
+        let id = self.library.lock().expect("library lock").create_playlist(None, name, false).ok();
+        self.notify(UiEvent::LibraryChanged);
+        id
+    }
+
+    pub fn add_to_playlist(&self, playlist: i64, tracks: &[TrackId]) {
+        let _ = self.library.lock().expect("library lock").add_to_playlist(playlist, tracks, None);
+        self.notify(UiEvent::LibraryChanged);
+    }
+
+    pub fn delete_playlist(&self, playlist: i64) {
+        let _ = self.library.lock().expect("library lock").delete_playlist(playlist);
+        self.notify(UiEvent::LibraryChanged);
+    }
+
+    pub fn set_rating(&self, id: TrackId, stars: u8) {
+        let _ = self.library.lock().expect("library lock").set_rating(id, stars.min(5));
+        self.refresh_track(id);
+    }
+
+    pub fn cover(&self, id: TrackId) -> Option<PathBuf> {
+        self.library.lock().expect("library lock").cover_path(id, CoverSize::Small)
+    }
+
+    /// Adds a music folder and scans it in the background.
+    pub fn add_music_folder(self: &Arc<Self>, dir: PathBuf) {
+        let mut s = self.settings();
+        if !s.library_roots.contains(&dir) {
+            s.library_roots.push(dir);
+            self.set_settings(s);
+        }
+        self.scan();
+    }
+
+    fn sync_roots(&self) {
+        let mut lib = self.library.lock().expect("library lock");
+        let wanted = self.settings().library_roots;
+        let existing = lib.roots().unwrap_or_default();
+        for r in &existing {
+            if !wanted.contains(r) {
+                let _ = lib.remove_root(r);
+            }
+        }
+        for r in &wanted {
+            if !existing.contains(r) {
+                let _ = lib.add_root(r);
+            }
+        }
+    }
+
+    /// Rescans the music folders in the background. The scan works on its
+    /// own database connection, so browsing stays responsive meanwhile.
+    pub fn scan(self: &Arc<Self>) {
+        self.sync_roots();
+        let app = self.clone();
+        std::thread::Builder::new()
+            .name("scan".into())
+            .spawn(move || {
+                app.notify(UiEvent::Status("Scanning music folders…".into()));
+                let mut clock = ReadClock::new();
+                let report = app
+                    .open_library()
+                    .and_then(|mut lib| lib.scan(&mut |p| app.notify_scan(p, &mut clock)).map_err(|e| e.to_string()));
+                match report {
+                    Ok(r) => app.notify(UiEvent::Status(format!(
+                        "Scan: {} new, {} updated, {} moved, {} missing · took {}",
+                        r.added,
+                        r.updated,
+                        r.relinked,
+                        r.missing,
+                        format_duration(clock.started.elapsed())
+                    ))),
+                    Err(e) => app.notify(UiEvent::Status(format!("Scan failed: {e}"))),
+                }
+                app.notify(UiEvent::ImportProgress { done: 0, total: 0, timing: Timing::default() });
+                app.refresh_tracks();
+                let _ = app.analysis_kick.send(());
+            })
+            .expect("spawn scan");
+    }
+
+    /// A second connection to the collection for long background work.
+    fn open_library(&self) -> Result<Library, String> {
+        let lib = Library::open(&self.paths.library_db(), &self.paths.cache).map_err(|e| e.to_string())?;
+        lib.set_busy_timeout(Duration::from_secs(10)).map_err(|e| e.to_string())?;
+        Ok(lib)
+    }
+
+    fn notify_scan(&self, p: ScanProgress, clock: &mut ReadClock) {
+        if let ScanProgress::Reading { done, total } = p {
+            self.notify(UiEvent::ImportProgress { done, total, timing: clock.timing(done, total) });
+        }
+    }
+
+    /// Adds files to the collection in the background (file explorer,
+    /// drag and drop), then analyzes them if asked.
+    pub fn import_paths(self: &Arc<Self>, paths: Vec<PathBuf>, analyze: bool) {
+        self.import_in_background(paths, analyze, None);
+    }
+
+    /// Imports `paths`, then (with `playlists`) mirrors that folder tree
+    /// as playlists.
+    fn import_in_background(self: &Arc<Self>, paths: Vec<PathBuf>, analyze: bool, playlists: Option<FolderTree>) {
+        let app = self.clone();
+        std::thread::Builder::new()
+            .name("import".into())
+            .spawn(move || {
+                let mut clock = ReadClock::new();
+                let report = app.open_library().and_then(|mut lib| {
+                    let r =
+                        lib.import_files(&paths, &mut |p| app.notify_scan(p, &mut clock)).map_err(|e| e.to_string())?;
+                    let mirrored = match &playlists {
+                        Some(tree) => Some(mirror_folder(&mut lib, tree, None).map_err(|e| e.to_string())?),
+                        None => None,
+                    };
+                    Ok((r, mirrored))
+                });
+                app.notify(UiEvent::ImportProgress { done: 0, total: 0, timing: Timing::default() });
+                match report {
+                    Ok((r, mirrored)) => {
+                        let lists = match (&playlists, mirrored) {
+                            (Some(tree), Some(n)) => format!(" · playlist \"{}\" (+{n} entries)", tree.name),
+                            _ => String::new(),
+                        };
+                        app.notify(UiEvent::Status(format!(
+                            "Import: {} new, {} updated, {} already in the collection{}{lists} · took {}",
+                            r.added,
+                            r.updated + r.relinked,
+                            r.unchanged,
+                            if r.errors.is_empty() {
+                                String::new()
+                            } else {
+                                format!(", {} unreadable", r.errors.len())
+                            },
+                            format_duration(clock.started.elapsed())
+                        )));
+                        if playlists.is_some() {
+                            app.notify(UiEvent::LibraryChanged);
+                        }
+                        app.refresh_tracks();
+                        if analyze {
+                            app.analyze_tracks(&r.ids, false);
+                        }
+                    }
+                    Err(e) => app.notify(UiEvent::Status(format!("Import failed: {e}"))),
+                }
+            })
+            .expect("spawn import");
+    }
+
+    /// Imports the audio files in `dir` (and below with `recursive`).
+    pub fn import_folder(self: &Arc<Self>, dir: &Path, recursive: bool, analyze: bool) {
+        let files = explorer::audio_files(dir, recursive);
+        if files.is_empty() {
+            self.notify(UiEvent::Status(format!("No audio files in {}", dir.display())));
+            return;
+        }
+        self.import_paths(files, analyze);
+    }
+
+    /// Imports a folder and mirrors it as a playlist of the same name. With
+    /// `recursive`, subfolders become a playlist folder of that name, each
+    /// holding its own playlists. Importing again reuses the playlists and
+    /// only adds files that are new.
+    pub fn import_folder_as_playlist(self: &Arc<Self>, dir: &Path, recursive: bool, analyze: bool) {
+        let tree = explorer::folder_tree(dir, recursive);
+        if tree.is_empty() {
+            self.notify(UiEvent::Status(format!("No audio files in {}", dir.display())));
+            return;
+        }
+        self.import_in_background(tree.all_files(), analyze, Some(tree));
+    }
+
+    /// Queues collection tracks for analysis ahead of the background pass.
+    /// `force` re-analyzes tracks that already have a current result.
+    pub fn analyze_tracks(&self, ids: &[TrackId], force: bool) {
+        let wanted: Vec<TrackId> = if force {
+            ids.to_vec()
+        } else {
+            let t = self.tracks.read().expect("tracks lock");
+            ids.iter()
+                .copied()
+                .filter(|id| {
+                    t.by_id.get(id).is_none_or(|&i| t.rows[i].analysis_version.is_none_or(|v| v < ANALYZER_VERSION))
+                })
+                .collect()
+        };
+        // Tracks already waiting move up to the user's lane.
+        self.queue.push(&wanted, Priority::User, force);
+        self.notify(UiEvent::TracksChanged(wanted));
+        self.notify_progress();
+    }
+
+    /// Analyzes files by path: imports the ones not yet in the collection.
+    pub fn analyze_paths(self: &Arc<Self>, paths: Vec<PathBuf>, force: bool) {
+        let mut known = Vec::new();
+        let mut unknown = Vec::new();
+        {
+            let lib = self.library.lock().expect("library lock");
+            for p in paths {
+                match lib.track_by_path(&p) {
+                    Ok(Some(id)) => known.push(id),
+                    _ => unknown.push(p),
+                }
+            }
+        }
+        self.analyze_tracks(&known, force);
+        if !unknown.is_empty() {
+            self.import_paths(unknown, true);
+        }
+    }
+
+    pub fn cancel_analysis(&self) {
+        self.queue.cancel();
+        self.notify_progress();
+    }
+
+    pub fn set_analysis_paused(&self, paused: bool) {
+        self.queue.set_paused(paused);
+        self.notify_progress();
+    }
+
+    pub fn analysis_progress(&self) -> AnalysisProgress {
+        let p = self.queue.progress();
+        let current = p
+            .running
+            .first()
+            .map(|&id| {
+                let t = self.tracks.read().expect("tracks lock");
+                t.by_id.get(&id).map_or_else(String::new, |&i| {
+                    let r = &t.rows[i];
+                    match (r.artist.is_empty(), r.title.is_empty()) {
+                        (false, false) => format!("{} – {}", r.artist, r.title),
+                        (true, false) => r.title.clone(),
+                        _ => r.path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
+                    }
+                })
+            })
+            .unwrap_or_default();
+        AnalysisProgress { done: p.done, failed: p.failed, total: p.total, paused: p.paused, current, timing: p.timing }
+    }
+
+    /// Elapsed and remaining analysis time, cheap enough for every frame.
+    pub fn analysis_timing(&self) -> Timing {
+        self.queue.timing()
+    }
+
+    fn notify_progress(&self) {
+        self.notify(UiEvent::AnalysisProgress(self.analysis_progress()));
+    }
+
+    /// Ends an analysis job; the last one of a batch reports how long the
+    /// batch took (a single deck load is not worth a message).
+    fn finish_analysis(&self, id: TrackId, ok: bool) {
+        if let Some(b) = self.queue.finish(id, ok)
+            && b.done + b.failed > 1
+        {
+            let failed = if b.failed > 0 { format!(", {} failed", b.failed) } else { String::new() };
+            self.notify(UiEvent::Status(format!(
+                "Analyzed {} tracks in {}{failed}",
+                b.done,
+                format_duration(b.elapsed)
+            )));
+        }
+    }
+
+    /// Where a collection track stands in analysis.
+    pub fn analysis_state(&self, row: &TrackRow) -> AnalysisState {
+        if row.id < 0 {
+            return AnalysisState::NotInCollection;
+        }
+        if let Some(s) = self.queue.state(row.id) {
+            return s;
+        }
+        match row.analysis_version {
+            _ if row.analysis_failed => AnalysisState::Failed,
+            Some(v) if v >= ANALYZER_VERSION => AnalysisState::Done,
+            Some(_) => AnalysisState::Stale,
+            None => AnalysisState::NotAnalyzed,
+        }
+    }
+
+    /// Number of tracks in the collection.
+    pub fn track_count(&self) -> usize {
+        self.tracks.read().expect("tracks lock").rows.len()
+    }
+
+    /// Back to the analyzer's grid for these tracks (edits and imported
+    /// grids dropped).
+    pub fn reset_grids(&self, ids: &[TrackId]) {
+        {
+            let mut lib = self.library.lock().expect("library lock");
+            for &id in ids {
+                let _ = lib.reset_grid(id);
+            }
+        }
+        for &id in ids {
+            self.refresh_track_row(id);
+        }
+        self.notify(UiEvent::TracksChanged(ids.to_vec()));
+    }
+
+    /// Removes tracks from the collection (files stay on disk).
+    pub fn remove_tracks(&self, ids: &[TrackId]) {
+        let _ = self.library.lock().expect("library lock").remove_tracks(ids);
+        self.refresh_tracks();
+    }
+
+    /// Sets (or clears) the color tag of tracks.
+    pub fn set_track_color(&self, ids: &[TrackId], color: Option<u32>) {
+        {
+            let mut lib = self.library.lock().expect("library lock");
+            for &id in ids {
+                let _ = lib.set_color(id, color);
+            }
+        }
+        for &id in ids {
+            self.refresh_track_row(id);
+        }
+        self.notify(UiEvent::TracksChanged(ids.to_vec()));
+    }
+
+    /// The explorer's view of a folder: its audio files, with collection
+    /// data where the file is in the collection (others have id −1 and a
+    /// title from the file name).
+    pub fn folder_rows(&self, dir: &Path) -> Vec<TrackRow> {
+        let files = explorer::audio_files(dir, false);
+        let known: HashMap<PathBuf, TrackRow> = {
+            let lib = self.library.lock().expect("library lock");
+            let canon = dir.canonicalize().unwrap_or_else(|_| dir.to_owned());
+            lib.tracks_under(&canon, false).unwrap_or_default().into_iter().map(|r| (r.path.clone(), r)).collect()
+        };
+        files
+            .into_iter()
+            .map(|p| {
+                let canon = p.canonicalize().unwrap_or_else(|_| p.clone());
+                known.get(&canon).cloned().unwrap_or_else(|| explorer::file_row(&p))
+            })
+            .collect()
+    }
+
+    /// Cover thumbnail for a row's cover key, without touching the database.
+    pub fn cover_file(&self, cover: &str, size: CoverSize) -> Option<PathBuf> {
+        Some(rille_library::cover_thumb(&self.paths.cache, cover, size)).filter(|p| p.exists())
+    }
+
+    /// Imports a Traktor `collection.nml` (grids, cues, ratings).
+    pub fn import_nml(&self, path: &Path) -> Result<String, String> {
+        let report = self
+            .library
+            .lock()
+            .expect("library lock")
+            .import_nml(path, &|p| Some(PathBuf::from(p)))
+            .map_err(|e| e.to_string())?;
+        self.refresh_tracks();
+        Ok(format!(
+            "{} entries, {} matched, {} imported, {} grids, {} cues, {} missing",
+            report.entries,
+            report.matched,
+            report.imported,
+            report.grids,
+            report.cues,
+            report.missing.len()
+        ))
+    }
+
+    fn refresh_tracks(&self) {
+        if let Ok(rows) = self.library.lock().expect("library lock").tracks() {
+            *self.tracks.write().expect("tracks lock") = Tracks::new(rows);
+        }
+        self.notify(UiEvent::LibraryChanged);
+    }
+
+    /// Re-reads one row (analysis finished, rating, color) and tells the UI
+    /// which row changed instead of rebuilding every list.
+    fn refresh_track(&self, id: TrackId) {
+        self.refresh_track_row(id);
+        self.notify(UiEvent::TracksChanged(vec![id]));
+    }
+
+    fn refresh_track_row(&self, id: TrackId) {
+        let row = self.library.lock().expect("library lock").track(id).ok().flatten();
+        let mut t = self.tracks.write().expect("tracks lock");
+        match (row, t.by_id.get(&id).copied()) {
+            (Some(row), Some(i)) => t.rows[i] = row,
+            (Some(row), None) => {
+                // New track: rebuild (search index, positions).
+                let mut rows = std::mem::take(&mut t.rows);
+                rows.push(row);
+                *t = Tracks::new(rows);
+            }
+            _ => {}
+        }
+    }
+
+    /// One collection row by id.
+    pub fn track_row(&self, id: TrackId) -> Option<TrackRow> {
+        let t = self.tracks.read().expect("tracks lock");
+        t.by_id.get(&id).map(|&i| t.rows[i].clone())
+    }
+
+    // ------------------------------------------------------------ analysis
+
+    fn spawn_analysis_workers(self: Arc<Self>, kick: Receiver<()>) {
+        let workers = std::thread::available_parallelism().map_or(2, |n| (n.get() / 4).clamp(1, 4));
+        self.queue.set_workers(workers);
+        for w in 0..workers {
+            let app = self.clone();
+            std::thread::Builder::new()
+                .name(format!("analysis-{w}"))
+                .spawn(move || {
+                    // Background work: never compete with playback or the UI.
+                    rille_engine::realtime::lower_current_thread();
+                    while let Some(job) = app.queue.take() {
+                        if app.shutdown.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        app.notify_progress();
+                        let ok = app.analyze_track(job.id);
+                        app.finish_analysis(job.id, ok);
+                        app.refresh_track(job.id);
+                        app.notify_progress();
+                    }
+                })
+                .expect("spawn analysis worker");
+        }
+        // The background pass: whatever in the collection lacks a current
+        // analysis joins the queue's lowest lane, at start, after scans and
+        // imports, and once a minute.
+        let app = self;
+        std::thread::Builder::new()
+            .name("analysis-planner".into())
+            .spawn(move || {
+                loop {
+                    let _ = kick.recv_timeout(Duration::from_secs(60));
+                    while kick.try_recv().is_ok() {}
+                    if app.shutdown.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if !app.settings().background_analysis {
+                        continue;
+                    }
+                    let ids = app.library.lock().expect("library lock").tracks_needing_analysis().unwrap_or_default();
+                    if app.queue.push(&ids, Priority::Background, false) > 0 {
+                        app.notify_progress();
+                    }
+                }
+            })
+            .expect("spawn analysis planner");
+    }
+
+    /// Analyzes one collection track and stores the result; a failure is
+    /// recorded so the file is not retried until the analyzer changes.
+    fn analyze_track(&self, id: TrackId) -> bool {
+        let path = self.library.lock().expect("library lock").track(id).ok().flatten().map(|r| r.path);
+        let Some(path) = path else { return false };
+        let cfg = analysis_config(&self.settings());
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rille_analysis::analyze_file(&path, &cfg, None)));
+        let mut lib = self.library.lock().expect("library lock");
+        match result {
+            Ok(Ok((_, out))) => {
+                let _ = lib.set_analysis(id, &out.analysis);
+                let _ = lib.set_waveform(id, &out.waveform.to_bytes());
+                true
+            }
+            Ok(Err(e)) => {
+                let _ = lib.set_analysis_error(id, &e.to_string());
+                false
+            }
+            Err(_) => {
+                let _ = lib.set_analysis_error(id, "analysis crashed");
+                false
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------- MIDI
+
+    fn start_midi(self: &Arc<Self>) {
+        let (tx, rx) = crossbeam_channel::unbounded::<MidiEvent>();
+        let values = Arc::new(values::SnapshotValues(self.engine.clone()));
+        match MidiManager::new("rille", tx, values) {
+            Ok(mut m) => {
+                let store = self.mappings.lock().expect("mappings lock");
+                m.refresh_with(|port| self.pick_mapping(&store, port));
+                drop(store);
+                *self.midi.lock().expect("midi lock") = Some(m);
+            }
+            Err(e) => {
+                self.notify(UiEvent::Status(format!("MIDI unavailable: {e:?}")));
+                return;
+            }
+        }
+        // MIDI input goes straight to the engine (lowest latency), except
+        // browser controls, which the UI handles.
+        let app = Arc::downgrade(self);
+        std::thread::Builder::new()
+            .name("midi-dispatch".into())
+            .spawn(move || {
+                while let Ok(ev) = rx.recv() {
+                    let Some(app) = app.upgrade() else { break };
+                    match ev {
+                        MidiEvent::Control(c) => app.control(c),
+                        MidiEvent::Raw { bytes, t, port } => app.learn_feed(&port, &bytes, t),
+                        MidiEvent::Connected { .. } | MidiEvent::Disconnected { .. } => {
+                            app.notify(UiEvent::MidiChanged)
+                        }
+                    }
+                }
+            })
+            .expect("spawn midi dispatch");
+        // Hotplug.
+        let app = Arc::downgrade(self);
+        std::thread::Builder::new()
+            .name("midi-hotplug".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_secs(2));
+                    let Some(app) = app.upgrade() else { break };
+                    if app.shutdown.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let store = app.mappings.lock().expect("mappings lock");
+                    if let Some(m) = app.midi.lock().expect("midi lock").as_mut()
+                        && !m.refresh_with(|port| app.pick_mapping(&store, port)).is_empty()
+                    {
+                        app.notify(UiEvent::MidiChanged);
+                    }
+                }
+            })
+            .expect("spawn midi hotplug");
+    }
+
+    /// The mapping for a newly seen MIDI port: the one last chosen for this
+    /// device in the settings, else the first whose device pattern matches.
+    /// A remix controller (such as the F1) without a chosen mapping drives a
+    /// remix deck: the first deck layout whose deck is one.
+    fn pick_mapping(&self, store: &MappingStore, port: &str) -> Option<Mapping> {
+        match self.settings().midi_mappings.get(port_base_name(port)) {
+            Some(name) if name.is_empty() => None,
+            Some(name) => store.by_name(name).or_else(|| store.find(port)).cloned(),
+            None => {
+                let remix_deck = |m: &Mapping| {
+                    m.inputs.iter().filter_map(|b| b.target.control()).find(|t| t.control.is_remix()).map(|t| t.unit)
+                };
+                let first = store.find(port)?;
+                let follows = |m: &&Mapping| remix_deck(m).is_some_and(|d| self.is_remix_deck(d));
+                let m = match remix_deck(first) {
+                    Some(d) if !self.is_remix_deck(d) => store.find_all(port).find(follows).unwrap_or(first),
+                    _ => first,
+                };
+                Some(m.clone())
+            }
+        }
+    }
+
+    /// After the remix decks changed: controllers on their automatic mapping
+    /// move to the deck layout that drives a remix deck.
+    pub(crate) fn refollow_remix_decks(&self) {
+        let store = self.mappings.lock().expect("mappings lock");
+        let chosen = self.settings().midi_mappings;
+        let mut midi = self.midi.lock().expect("midi lock");
+        let Some(m) = midi.as_mut() else { return };
+        for (port, current) in m.connected() {
+            if chosen.contains_key(port_base_name(&port)) {
+                continue;
+            }
+            let pick = self.pick_mapping(&store, &port);
+            if pick.as_ref().map(|p| &p.name) != current.as_ref() {
+                let _ = m.set_mapping(&port, pick);
+            }
+        }
+    }
+
+    /// Connected MIDI inputs and their mapping names.
+    pub fn midi_devices(&self) -> Vec<(String, Option<String>)> {
+        self.midi.lock().expect("midi lock").as_ref().map(|m| m.connected()).unwrap_or_default()
+    }
+
+    pub fn midi_ports(&self) -> Vec<String> {
+        self.midi.lock().expect("midi lock").as_ref().map(|m| m.input_ports()).unwrap_or_default()
+    }
+
+    pub fn mapping_names(&self) -> Vec<String> {
+        self.mappings.lock().expect("mappings lock").entries().iter().map(|e| e.mapping.name.clone()).collect()
+    }
+
+    /// Uses mapping `name` (or none) for MIDI input `port`, and remembers
+    /// the choice for when the device is plugged in again.
+    pub fn set_port_mapping(&self, port: &str, name: Option<&str>) {
+        let mapping = name.and_then(|n| self.mappings.lock().expect("mappings lock").by_name(n).cloned());
+        let settings = {
+            let mut s = self.settings.write().expect("settings lock");
+            let chosen = mapping.as_ref().map(|m| m.name.clone()).unwrap_or_default();
+            s.midi_mappings.insert(port_base_name(port).to_owned(), chosen);
+            s.clone()
+        };
+        let _ = settings.save(&self.paths.settings_file());
+        if let Some(m) = self.midi.lock().expect("midi lock").as_mut() {
+            let result = if m.connected().iter().any(|(p, _)| p == port) {
+                m.set_mapping(port, mapping)
+            } else {
+                m.connect(port, mapping)
+            };
+            if let Err(e) = result {
+                self.notify(UiEvent::Status(format!("MIDI: {e:?}")));
+            }
+        }
+        self.notify(UiEvent::MidiChanged);
+    }
+
+    /// MIDI learn: while on, clicking a control selects it, moving a
+    /// hardware control binds it.
+    pub fn set_learn(&self, on: bool) {
+        let mut learn = self.learn.lock().expect("learn lock");
+        *learn = on.then(|| LearnSession::new(rille_core::ControlTarget::global(Control::Crossfader)));
+        if let Some(m) = self.midi.lock().expect("midi lock").as_ref() {
+            m.set_raw_events(on);
+        }
+        self.notify(UiEvent::MidiLearned(if on {
+            "Click a control, then move it on your controller".into()
+        } else {
+            String::new()
+        }));
+    }
+
+    pub fn learning(&self) -> bool {
+        self.learn.lock().expect("learn lock").is_some()
+    }
+
+    fn learn_feed(&self, port: &str, bytes: &[u8], t: Instant) {
+        let binding = {
+            let mut learn = self.learn.lock().expect("learn lock");
+            let Some(session) = learn.as_mut() else { return };
+            session.feed(bytes, t);
+            session.result()
+        };
+        let Some(binding) = binding else { return };
+        let port_name = port.to_string();
+        let mut mapping = self
+            .midi
+            .lock()
+            .expect("midi lock")
+            .as_ref()
+            .and_then(|m| m.connected().into_iter().find(|(p, _)| *p == port_name).and_then(|(_, name)| name))
+            .and_then(|name| self.mappings.lock().expect("mappings lock").by_name(&name).cloned())
+            .unwrap_or_else(|| rille_midi::Mapping::new(format!("{port_name} (learned)"), regex_escape(&port_name)));
+        let text = format!("Mapped {}", binding.target);
+        mapping.set_input(binding);
+        if let Ok(path) = rille_midi::store::save_to_dir(&mapping, &self.paths.user_mappings()) {
+            self.mappings.lock().expect("mappings lock").push(mapping.clone(), path);
+        }
+        if let Some(m) = self.midi.lock().expect("midi lock").as_mut() {
+            let _ = m.set_mapping(&port_name, Some(mapping));
+        }
+        if let Some(s) = self.learn.lock().expect("learn lock").as_mut() {
+            s.clear();
+        }
+        self.notify(UiEvent::MidiLearned(text));
+    }
+}
+
+fn regex_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    out.push('^');
+    for c in s.chars() {
+        if "\\.+*?()|[]{}^$".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Times the file reading of an import or scan; the rate is measured from
+/// the first file read, after the folder walk.
+struct ReadClock {
+    started: Instant,
+    reading: Option<Instant>,
+}
+
+impl ReadClock {
+    fn new() -> Self {
+        Self { started: Instant::now(), reading: None }
+    }
+
+    fn timing(&mut self, done: usize, total: usize) -> Timing {
+        let now = Instant::now();
+        let reading = *self.reading.get_or_insert(now);
+        Timing { elapsed: now - self.started, remaining: timing::linear_estimate(now - reading, done, total) }
+    }
+}
+
+/// Creates (or reuses) the playlists for an imported folder tree under
+/// `parent`: a playlist for a folder without subfolders, else a playlist
+/// folder with the folder's own files in a playlist of the same name.
+/// Returns how many entries were added.
+fn mirror_folder(lib: &mut Library, tree: &FolderTree, parent: Option<PlaylistId>) -> rille_library::Result<usize> {
+    let ids = |lib: &Library, files: &[PathBuf]| -> Vec<TrackId> {
+        files.iter().filter_map(|p| lib.track_by_path(p).ok().flatten()).collect()
+    };
+    if tree.children.is_empty() {
+        let list = lib.playlist_named(parent, &tree.name, false)?;
+        let tracks = ids(lib, &tree.files);
+        return lib.add_missing_to_playlist(list, &tracks);
+    }
+    let folder = lib.playlist_named(parent, &tree.name, true)?;
+    let mut added = 0;
+    if !tree.files.is_empty() {
+        let list = lib.playlist_named(Some(folder), &tree.name, false)?;
+        let tracks = ids(lib, &tree.files);
+        added += lib.add_missing_to_playlist(list, &tracks)?;
+    }
+    for c in &tree.children {
+        added += mirror_folder(lib, c, Some(folder))?;
+    }
+    Ok(added)
+}
+
+fn analysis_config(s: &Settings) -> AnalysisConfig {
+    AnalysisConfig { bpm_range: (s.bpm_min, s.bpm_max) }
+}
+
+fn hotcues_from(cues: &TrackCues) -> [Option<Hotcue>; HOTCUES] {
+    std::array::from_fn(|slot| {
+        cues.hotcue(slot as u8).map(|c| Hotcue { secs: c.start_secs, kind: c.kind, len_secs: c.len_secs })
+    })
+}
+
+pub fn sort_rows(rows: &mut [TrackRow], key: SortKey, descending: bool) {
+    let lower = |s: &str| s.to_lowercase();
+    rows.sort_by(|a, b| {
+        let o = match key {
+            SortKey::Artist => {
+                lower(&a.artist).cmp(&lower(&b.artist)).then_with(|| lower(&a.title).cmp(&lower(&b.title)))
+            }
+            SortKey::Title => lower(&a.title).cmp(&lower(&b.title)),
+            SortKey::Album => lower(&a.album).cmp(&lower(&b.album)),
+            SortKey::Label => lower(&a.label).cmp(&lower(&b.label)),
+            SortKey::Genre => lower(&a.genre).cmp(&lower(&b.genre)),
+            SortKey::Bpm => a.bpm.unwrap_or(0.0).total_cmp(&b.bpm.unwrap_or(0.0)),
+            SortKey::Key => {
+                let k =
+                    |r: &TrackRow| r.key.map_or(99, |k| u16::from(k.camelot_number()) * 2 + u16::from(!k.is_minor()));
+                k(a).cmp(&k(b))
+            }
+            SortKey::Rating => a.rating.cmp(&b.rating),
+            SortKey::Duration => a.duration_secs.total_cmp(&b.duration_secs),
+            SortKey::Added => a.date_added.cmp(&b.date_added),
+            SortKey::PlayCount => a.play_count.cmp(&b.play_count),
+            SortKey::FileName => a.path.file_name().cmp(&b.path.file_name()),
+            SortKey::Remixer => lower(&a.remixer).cmp(&lower(&b.remixer)),
+            SortKey::Comment => lower(&a.comment).cmp(&lower(&b.comment)),
+            SortKey::Year => a.year.cmp(&b.year),
+            SortKey::Bitrate => a.bitrate.cmp(&b.bitrate),
+            SortKey::SampleRate => a.sample_rate.cmp(&b.sample_rate),
+            SortKey::FileSize => a.file_size.cmp(&b.file_size),
+            SortKey::LastPlayed => a.last_played.cmp(&b.last_played),
+            SortKey::Path => a.path.cmp(&b.path),
+        };
+        if descending { o.reverse() } else { o }
+    });
+}
+
+/// Scope helper for the UI: is this control handled per deck?
+pub fn is_deck_control(c: Control) -> bool {
+    c.scope() == Scope::Deck
+}

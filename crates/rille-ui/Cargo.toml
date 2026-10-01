@@ -1,0 +1,28 @@
+[package]
+name = "rille-ui"
+description = "rille: Qt Quick user interface and application binary"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "rille"
+path = "src/main.rs"
+
+[dependencies]
+rille-core.workspace = true
+rille-app = { path = "../rille-app" }
+rille-engine = { path = "../rille-engine" }
+rille-library = { path = "../rille-library" }
+cxx = "1"
+cxx-qt = "0.10"
+cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
+
+[build-dependencies]
+cxx-qt-build = "0.10"
+
+[lints]
+workspace = true

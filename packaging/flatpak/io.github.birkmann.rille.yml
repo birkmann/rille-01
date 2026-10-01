@@ -1,0 +1,48 @@
+# Flatpak manifest. The app id follows the GitHub repository; change it
+# together with packaging/rille.metainfo.xml.
+#
+# Build (needs network for the runtimes and for vendoring crates):
+#   python3 flatpak-cargo-generator.py ../../Cargo.lock -o cargo-sources.json
+#   flatpak-builder --user --install --force-clean build io.github.birkmann.rille.yml
+app-id: io.github.birkmann.rille
+runtime: org.kde.Platform
+runtime-version: '6.9'
+sdk: org.kde.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm20
+command: rille
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Audio through PipeWire (and its JACK/ALSA layers).
+  - --socket=pipewire
+  - --filesystem=xdg-run/pipewire-0
+  # MIDI controllers (ALSA sequencer, raw MIDI) and HID controllers
+  # (/dev/hidraw*; the host still needs packaging/udev/70-rille-controllers.rules).
+  - --device=all
+  # Music folders.
+  - --filesystem=xdg-music
+  - --filesystem=home:ro
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
+  prepend-ld-library-path: /usr/lib/sdk/llvm20/lib
+  env:
+    CARGO_HOME: /run/build/rille/cargo
+    CARGO_NET_OFFLINE: 'true'
+modules:
+  - name: rille
+    buildsystem: simple
+    build-commands:
+      - cargo --offline build --release -p rille-ui -p rille-cli
+      - SKIP_BUILD=1 PREFIX=/app ./scripts/install.sh
+      - mv /app/share/applications/rille.desktop /app/share/applications/io.github.birkmann.rille.desktop
+      - sed -i 's/^Icon=rille$/Icon=io.github.birkmann.rille/' /app/share/applications/io.github.birkmann.rille.desktop
+      - sed -i 's#rille.desktop</launchable>#io.github.birkmann.rille.desktop</launchable>#' /app/share/metainfo/io.github.birkmann.rille.metainfo.xml
+      - for f in /app/share/icons/hicolor/*/apps/rille.*; do mv "$f" "${f%/*}/io.github.birkmann.rille.${f##*.}"; done
+    sources:
+      - type: dir
+        path: ../..
+      - cargo-sources.json

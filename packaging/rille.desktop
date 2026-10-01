@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=rille
+GenericName=DJ Software
+Comment=Mix music with automatic beatgrids and beat-locked sync
+Exec=rille
+Icon=rille
+Terminal=false
+Categories=AudioVideo;Audio;Mixer;
+Keywords=DJ;mix;mixing;beatgrid;sync;turntable;decks;remix;
+StartupWMClass=rille
+SingleMainWindow=true

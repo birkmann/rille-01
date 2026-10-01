@@ -1,0 +1,25 @@
+[package]
+name = "rille-library"
+description = "Music collection database: scanning, tags, analysis storage, playlists, history, NML import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rille-core.workspace = true
+rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
+lofty = "0.25"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+walkdir = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+serde_json = "1"
+quick-xml = "0.41"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+hound = "3"
+
+[lints]
+workspace = true

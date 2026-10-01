@@ -1,0 +1,4 @@
+/target
+*.qsb
+.qmlls.ini
+.vscode/

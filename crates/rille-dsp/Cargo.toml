@@ -1,0 +1,15 @@
+[package]
+name = "rille-dsp"
+description = "Real-time-safe DSP building blocks and DJ effects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+assert_no_alloc = { version = "1", default-features = false }
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "rille-midi"
+description = "MIDI controller support: mapping files, MIDI learn, soft-takeover, LED feedback, device I/O"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rille-core.workspace = true
+serde.workspace = true
+toml = "0.8"
+regex = "1"
+midir = "0.11"
+crossbeam-channel = "0.5"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# HID controllers (Traktor Kontrol Z1, X1 MK2, F1) via hidraw; needs libudev.
+hidapi = { version = "2.6", default-features = false, features = ["linux-native"] }
+
+[lints]
+workspace = true

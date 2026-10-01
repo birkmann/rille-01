@@ -1,0 +1,865 @@
+# Allen & Heath Xone:K2
+#
+# MIDI numbers from the Mixxx mapping (Allen and Heath Xone K2.midi.xml and
+# Allen-and-Heath-Xone-K2-scripts.js, Mixxx 2.x, GPL-2.0-or-later; author Be).
+# The functions are laid out for rille: all four columns are decks.
+#
+# The K2 must be on its factory MIDI channel 15 with latching layers off
+# (both are the defaults). Every note and CC below is on channel 15.
+#
+# DECK ORDER. Columns are written left to right as decks A B C D; the
+# `deck_layouts` line decides which app deck each column drives. The mapping
+# appears twice in Settings -> Controllers:
+#   "Allen & Heath Xone:K2 (CABD)"  columns = C A B D  (default)
+#   "Allen & Heath Xone:K2 (ABCD)"  columns = A B C D
+# The choice is remembered per device.
+#
+# MODIFIERS (hold): SHIFT = bottom-right button (note 15),
+# LAYER = bottom-left button (note 12), BROWSE = press the right bottom
+# encoder (note 14).
+#
+# Per column (k = 0..3 from the left):
+#   control          MIDI       plain            SHIFT            LAYER
+#   encoder turn     CC k       nudge (jog)      tempo (fine)
+#   encoder press    note 52+k  sync             tempo reset      master
+#   knob row 1       CC 4+k     EQ high          gain
+#   knob row 2       CC 8+k     EQ mid
+#   knob row 3       CC 12+k    EQ low           filter
+#   button A         note 48+k  headphone cue    keylock          loop in
+#   button B         note 44+k  cue              cue-play (CUP)   loop out
+#   button C         note 40+k  play             reverse          loop on/off
+#   fader            CC 16+k    volume
+#   grid row 1       note 36+k  hotcue 1         delete hotcue 1  loop /2
+#   grid row 2       note 32+k  hotcue 2         delete hotcue 2  loop x2
+#   grid row 3       note 28+k  hotcue 3         delete hotcue 3  beatjump back
+#   grid row 4       note 24+k  hotcue 4         delete hotcue 4  beatjump fwd
+#   BROWSE + button C loads the selected track into that column's deck.
+#
+# Global:
+#   right encoder    CC 21      browse list      SHIFT: browse tree
+#   right press      note 14    BROWSE (hold)    SHIFT: expand/collapse node
+#   left encoder     CC 20      cue mix          SHIFT: cue volume
+#   left press       note 13                     SHIFT: quantize
+#
+# Encoders send 1 per detent clockwise and 127 counter-clockwise (two's
+# complement). Knobs and faders are 7-bit absolute with soft takeover, so a
+# knob shared through SHIFT picks its value up before it moves anything.
+#
+# LEDs: each button has one LED with three colours on three notes: the button's
+# note (red), note + 36 (amber) and note + 72 (green). Sync is green, headphone
+# cue amber, cue red, play green, hotcues red when set. Off is sent as note on
+# with velocity 0 on the colour's note.
+#
+# Not mapped: crossfader and main level (the K2 has neither), FX units, the
+# LAYER and SHIFT LEDs, and the other MIDI channels Mixxx uses for alternative
+# layouts.
+
+name = "Allen & Heath Xone:K2"
+device = '(?i)xone:?\s*k2'
+description = "Allen & Heath Xone:K2 as a 4-deck controller (MIDI channel 15)"
+deck_layouts = ["CABD", "ABCD"]
+
+# Modifiers
+[[input]]
+target = "modifier:shift"
+midi = { type = "note", channel = 15, number = 15 }  # 9E 0F
+
+[[input]]
+target = "modifier:layer"
+midi = { type = "note", channel = 15, number = 12 }  # 9E 0C
+
+[[input]]
+target = "modifier:browse"
+midi = { type = "note", channel = 15, number = 14 }  # 9E 0E
+
+# Browser and headphones
+[[input]]
+target = "global.scroll"
+midi = { type = "cc", channel = 15, number = 21 }  # BE 15
+encoding = "twos_complement"
+
+[[input]]
+target = "global.tree_scroll"
+midi = { type = "cc", channel = 15, number = 21 }  # BE 15
+encoding = "twos_complement"
+condition = { modifier = "shift" }
+
+[[input]]
+target = "global.toggle_node"
+midi = { type = "note", channel = 15, number = 14 }  # 9E 0E
+condition = { modifier = "shift" }
+
+[[input]]
+target = "global.cue_mix"
+midi = { type = "cc", channel = 15, number = 20 }  # BE 14
+mode = "relative"
+step = 0.02
+
+[[input]]
+target = "global.cue_volume"
+midi = { type = "cc", channel = 15, number = 20 }  # BE 14
+mode = "relative"
+step = 0.02
+condition = { modifier = "shift" }
+
+[[input]]
+target = "global.quantize"
+midi = { type = "note", channel = 15, number = 13 }  # 9E 0D
+condition = { modifier = "shift" }
+
+# Column 1: deck A here = app deck C (CABD) or A (ABCD)
+[[input]]
+target = "deck.A.jog"
+midi = { type = "cc", channel = 15, number = 0 }  # BE 00
+encoding = "twos_complement"
+ticks_per_rev = 24
+
+[[input]]
+target = "deck.A.tempo"
+midi = { type = "cc", channel = 15, number = 0 }  # BE 00
+mode = "relative"
+step = 0.005
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.sync"
+midi = { type = "note", channel = 15, number = 52 }  # 9E 34
+
+[[input]]
+target = "deck.A.tempo_reset"
+midi = { type = "note", channel = 15, number = 52 }  # 9E 34
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.master"
+midi = { type = "note", channel = 15, number = 52 }  # 9E 34
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.A.eq_hi"
+midi = { type = "cc", channel = 15, number = 4 }  # BE 04
+
+[[input]]
+target = "deck.A.gain"
+midi = { type = "cc", channel = 15, number = 4 }  # BE 04
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.eq_mid"
+midi = { type = "cc", channel = 15, number = 8 }  # BE 08
+
+[[input]]
+target = "deck.A.eq_lo"
+midi = { type = "cc", channel = 15, number = 12 }  # BE 0C
+
+[[input]]
+target = "deck.A.filter"
+midi = { type = "cc", channel = 15, number = 12 }  # BE 0C
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.pfl"
+midi = { type = "note", channel = 15, number = 48 }  # 9E 30
+
+[[input]]
+target = "deck.A.keylock"
+midi = { type = "note", channel = 15, number = 48 }  # 9E 30
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.loop_in"
+midi = { type = "note", channel = 15, number = 48 }  # 9E 30
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.A.cue"
+midi = { type = "note", channel = 15, number = 44 }  # 9E 2C
+
+[[input]]
+target = "deck.A.cup"
+midi = { type = "note", channel = 15, number = 44 }  # 9E 2C
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.loop_out"
+midi = { type = "note", channel = 15, number = 44 }  # 9E 2C
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.A.play"
+midi = { type = "note", channel = 15, number = 40 }  # 9E 28
+
+[[input]]
+target = "deck.A.reverse"
+midi = { type = "note", channel = 15, number = 40 }  # 9E 28
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.loop_toggle"
+midi = { type = "note", channel = 15, number = 40 }  # 9E 28
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.A.load_selected"
+midi = { type = "note", channel = 15, number = 40 }  # 9E 28
+condition = { modifier = "browse" }
+
+[[input]]
+target = "deck.A.volume"
+midi = { type = "cc", channel = 15, number = 16 }  # BE 10
+
+[[input]]
+target = "deck.A.hotcue.1"
+midi = { type = "note", channel = 15, number = 36 }  # 9E 24
+
+[[input]]
+target = "deck.A.hotcue_delete.1"
+midi = { type = "note", channel = 15, number = 36 }  # 9E 24
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.loop_halve"
+midi = { type = "note", channel = 15, number = 36 }  # 9E 24
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.A.hotcue.2"
+midi = { type = "note", channel = 15, number = 32 }  # 9E 20
+
+[[input]]
+target = "deck.A.hotcue_delete.2"
+midi = { type = "note", channel = 15, number = 32 }  # 9E 20
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.loop_double"
+midi = { type = "note", channel = 15, number = 32 }  # 9E 20
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.A.hotcue.3"
+midi = { type = "note", channel = 15, number = 28 }  # 9E 1C
+
+[[input]]
+target = "deck.A.hotcue_delete.3"
+midi = { type = "note", channel = 15, number = 28 }  # 9E 1C
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.beatjump_back"
+midi = { type = "note", channel = 15, number = 28 }  # 9E 1C
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.A.hotcue.4"
+midi = { type = "note", channel = 15, number = 24 }  # 9E 18
+
+[[input]]
+target = "deck.A.hotcue_delete.4"
+midi = { type = "note", channel = 15, number = 24 }  # 9E 18
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.beatjump_forward"
+midi = { type = "note", channel = 15, number = 24 }  # 9E 18
+condition = { modifier = "layer" }
+
+# Column 2: deck B here = app deck A (CABD) or B (ABCD)
+[[input]]
+target = "deck.B.jog"
+midi = { type = "cc", channel = 15, number = 1 }  # BE 01
+encoding = "twos_complement"
+ticks_per_rev = 24
+
+[[input]]
+target = "deck.B.tempo"
+midi = { type = "cc", channel = 15, number = 1 }  # BE 01
+mode = "relative"
+step = 0.005
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.sync"
+midi = { type = "note", channel = 15, number = 53 }  # 9E 35
+
+[[input]]
+target = "deck.B.tempo_reset"
+midi = { type = "note", channel = 15, number = 53 }  # 9E 35
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.master"
+midi = { type = "note", channel = 15, number = 53 }  # 9E 35
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.B.eq_hi"
+midi = { type = "cc", channel = 15, number = 5 }  # BE 05
+
+[[input]]
+target = "deck.B.gain"
+midi = { type = "cc", channel = 15, number = 5 }  # BE 05
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.eq_mid"
+midi = { type = "cc", channel = 15, number = 9 }  # BE 09
+
+[[input]]
+target = "deck.B.eq_lo"
+midi = { type = "cc", channel = 15, number = 13 }  # BE 0D
+
+[[input]]
+target = "deck.B.filter"
+midi = { type = "cc", channel = 15, number = 13 }  # BE 0D
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.pfl"
+midi = { type = "note", channel = 15, number = 49 }  # 9E 31
+
+[[input]]
+target = "deck.B.keylock"
+midi = { type = "note", channel = 15, number = 49 }  # 9E 31
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.loop_in"
+midi = { type = "note", channel = 15, number = 49 }  # 9E 31
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.B.cue"
+midi = { type = "note", channel = 15, number = 45 }  # 9E 2D
+
+[[input]]
+target = "deck.B.cup"
+midi = { type = "note", channel = 15, number = 45 }  # 9E 2D
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.loop_out"
+midi = { type = "note", channel = 15, number = 45 }  # 9E 2D
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.B.play"
+midi = { type = "note", channel = 15, number = 41 }  # 9E 29
+
+[[input]]
+target = "deck.B.reverse"
+midi = { type = "note", channel = 15, number = 41 }  # 9E 29
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.loop_toggle"
+midi = { type = "note", channel = 15, number = 41 }  # 9E 29
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.B.load_selected"
+midi = { type = "note", channel = 15, number = 41 }  # 9E 29
+condition = { modifier = "browse" }
+
+[[input]]
+target = "deck.B.volume"
+midi = { type = "cc", channel = 15, number = 17 }  # BE 11
+
+[[input]]
+target = "deck.B.hotcue.1"
+midi = { type = "note", channel = 15, number = 37 }  # 9E 25
+
+[[input]]
+target = "deck.B.hotcue_delete.1"
+midi = { type = "note", channel = 15, number = 37 }  # 9E 25
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.loop_halve"
+midi = { type = "note", channel = 15, number = 37 }  # 9E 25
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.B.hotcue.2"
+midi = { type = "note", channel = 15, number = 33 }  # 9E 21
+
+[[input]]
+target = "deck.B.hotcue_delete.2"
+midi = { type = "note", channel = 15, number = 33 }  # 9E 21
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.loop_double"
+midi = { type = "note", channel = 15, number = 33 }  # 9E 21
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.B.hotcue.3"
+midi = { type = "note", channel = 15, number = 29 }  # 9E 1D
+
+[[input]]
+target = "deck.B.hotcue_delete.3"
+midi = { type = "note", channel = 15, number = 29 }  # 9E 1D
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.beatjump_back"
+midi = { type = "note", channel = 15, number = 29 }  # 9E 1D
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.B.hotcue.4"
+midi = { type = "note", channel = 15, number = 25 }  # 9E 19
+
+[[input]]
+target = "deck.B.hotcue_delete.4"
+midi = { type = "note", channel = 15, number = 25 }  # 9E 19
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.beatjump_forward"
+midi = { type = "note", channel = 15, number = 25 }  # 9E 19
+condition = { modifier = "layer" }
+
+# Column 3: deck C here = app deck B (CABD) or C (ABCD)
+[[input]]
+target = "deck.C.jog"
+midi = { type = "cc", channel = 15, number = 2 }  # BE 02
+encoding = "twos_complement"
+ticks_per_rev = 24
+
+[[input]]
+target = "deck.C.tempo"
+midi = { type = "cc", channel = 15, number = 2 }  # BE 02
+mode = "relative"
+step = 0.005
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.C.sync"
+midi = { type = "note", channel = 15, number = 54 }  # 9E 36
+
+[[input]]
+target = "deck.C.tempo_reset"
+midi = { type = "note", channel = 15, number = 54 }  # 9E 36
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.C.master"
+midi = { type = "note", channel = 15, number = 54 }  # 9E 36
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.C.eq_hi"
+midi = { type = "cc", channel = 15, number = 6 }  # BE 06
+
+[[input]]
+target = "deck.C.gain"
+midi = { type = "cc", channel = 15, number = 6 }  # BE 06
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.C.eq_mid"
+midi = { type = "cc", channel = 15, number = 10 }  # BE 0A
+
+[[input]]
+target = "deck.C.eq_lo"
+midi = { type = "cc", channel = 15, number = 14 }  # BE 0E
+
+[[input]]
+target = "deck.C.filter"
+midi = { type = "cc", channel = 15, number = 14 }  # BE 0E
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.C.pfl"
+midi = { type = "note", channel = 15, number = 50 }  # 9E 32
+
+[[input]]
+target = "deck.C.keylock"
+midi = { type = "note", channel = 15, number = 50 }  # 9E 32
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.C.loop_in"
+midi = { type = "note", channel = 15, number = 50 }  # 9E 32
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.C.cue"
+midi = { type = "note", channel = 15, number = 46 }  # 9E 2E
+
+[[input]]
+target = "deck.C.cup"
+midi = { type = "note", channel = 15, number = 46 }  # 9E 2E
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.C.loop_out"
+midi = { type = "note", channel = 15, number = 46 }  # 9E 2E
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.C.play"
+midi = { type = "note", channel = 15, number = 42 }  # 9E 2A
+
+[[input]]
+target = "deck.C.reverse"
+midi = { type = "note", channel = 15, number = 42 }  # 9E 2A
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.C.loop_toggle"
+midi = { type = "note", channel = 15, number = 42 }  # 9E 2A
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.C.load_selected"
+midi = { type = "note", channel = 15, number = 42 }  # 9E 2A
+condition = { modifier = "browse" }
+
+[[input]]
+target = "deck.C.volume"
+midi = { type = "cc", channel = 15, number = 18 }  # BE 12
+
+[[input]]
+target = "deck.C.hotcue.1"
+midi = { type = "note", channel = 15, number = 38 }  # 9E 26
+
+[[input]]
+target = "deck.C.hotcue_delete.1"
+midi = { type = "note", channel = 15, number = 38 }  # 9E 26
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.C.loop_halve"
+midi = { type = "note", channel = 15, number = 38 }  # 9E 26
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.C.hotcue.2"
+midi = { type = "note", channel = 15, number = 34 }  # 9E 22
+
+[[input]]
+target = "deck.C.hotcue_delete.2"
+midi = { type = "note", channel = 15, number = 34 }  # 9E 22
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.C.loop_double"
+midi = { type = "note", channel = 15, number = 34 }  # 9E 22
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.C.hotcue.3"
+midi = { type = "note", channel = 15, number = 30 }  # 9E 1E
+
+[[input]]
+target = "deck.C.hotcue_delete.3"
+midi = { type = "note", channel = 15, number = 30 }  # 9E 1E
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.C.beatjump_back"
+midi = { type = "note", channel = 15, number = 30 }  # 9E 1E
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.C.hotcue.4"
+midi = { type = "note", channel = 15, number = 26 }  # 9E 1A
+
+[[input]]
+target = "deck.C.hotcue_delete.4"
+midi = { type = "note", channel = 15, number = 26 }  # 9E 1A
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.C.beatjump_forward"
+midi = { type = "note", channel = 15, number = 26 }  # 9E 1A
+condition = { modifier = "layer" }
+
+# Column 4: deck D here = app deck D (CABD) or D (ABCD)
+[[input]]
+target = "deck.D.jog"
+midi = { type = "cc", channel = 15, number = 3 }  # BE 03
+encoding = "twos_complement"
+ticks_per_rev = 24
+
+[[input]]
+target = "deck.D.tempo"
+midi = { type = "cc", channel = 15, number = 3 }  # BE 03
+mode = "relative"
+step = 0.005
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.D.sync"
+midi = { type = "note", channel = 15, number = 55 }  # 9E 37
+
+[[input]]
+target = "deck.D.tempo_reset"
+midi = { type = "note", channel = 15, number = 55 }  # 9E 37
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.D.master"
+midi = { type = "note", channel = 15, number = 55 }  # 9E 37
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.D.eq_hi"
+midi = { type = "cc", channel = 15, number = 7 }  # BE 07
+
+[[input]]
+target = "deck.D.gain"
+midi = { type = "cc", channel = 15, number = 7 }  # BE 07
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.D.eq_mid"
+midi = { type = "cc", channel = 15, number = 11 }  # BE 0B
+
+[[input]]
+target = "deck.D.eq_lo"
+midi = { type = "cc", channel = 15, number = 15 }  # BE 0F
+
+[[input]]
+target = "deck.D.filter"
+midi = { type = "cc", channel = 15, number = 15 }  # BE 0F
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.D.pfl"
+midi = { type = "note", channel = 15, number = 51 }  # 9E 33
+
+[[input]]
+target = "deck.D.keylock"
+midi = { type = "note", channel = 15, number = 51 }  # 9E 33
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.D.loop_in"
+midi = { type = "note", channel = 15, number = 51 }  # 9E 33
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.D.cue"
+midi = { type = "note", channel = 15, number = 47 }  # 9E 2F
+
+[[input]]
+target = "deck.D.cup"
+midi = { type = "note", channel = 15, number = 47 }  # 9E 2F
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.D.loop_out"
+midi = { type = "note", channel = 15, number = 47 }  # 9E 2F
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.D.play"
+midi = { type = "note", channel = 15, number = 43 }  # 9E 2B
+
+[[input]]
+target = "deck.D.reverse"
+midi = { type = "note", channel = 15, number = 43 }  # 9E 2B
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.D.loop_toggle"
+midi = { type = "note", channel = 15, number = 43 }  # 9E 2B
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.D.load_selected"
+midi = { type = "note", channel = 15, number = 43 }  # 9E 2B
+condition = { modifier = "browse" }
+
+[[input]]
+target = "deck.D.volume"
+midi = { type = "cc", channel = 15, number = 19 }  # BE 13
+
+[[input]]
+target = "deck.D.hotcue.1"
+midi = { type = "note", channel = 15, number = 39 }  # 9E 27
+
+[[input]]
+target = "deck.D.hotcue_delete.1"
+midi = { type = "note", channel = 15, number = 39 }  # 9E 27
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.D.loop_halve"
+midi = { type = "note", channel = 15, number = 39 }  # 9E 27
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.D.hotcue.2"
+midi = { type = "note", channel = 15, number = 35 }  # 9E 23
+
+[[input]]
+target = "deck.D.hotcue_delete.2"
+midi = { type = "note", channel = 15, number = 35 }  # 9E 23
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.D.loop_double"
+midi = { type = "note", channel = 15, number = 35 }  # 9E 23
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.D.hotcue.3"
+midi = { type = "note", channel = 15, number = 31 }  # 9E 1F
+
+[[input]]
+target = "deck.D.hotcue_delete.3"
+midi = { type = "note", channel = 15, number = 31 }  # 9E 1F
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.D.beatjump_back"
+midi = { type = "note", channel = 15, number = 31 }  # 9E 1F
+condition = { modifier = "layer" }
+
+[[input]]
+target = "deck.D.hotcue.4"
+midi = { type = "note", channel = 15, number = 27 }  # 9E 1B
+
+[[input]]
+target = "deck.D.hotcue_delete.4"
+midi = { type = "note", channel = 15, number = 27 }  # 9E 1B
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.D.beatjump_forward"
+midi = { type = "note", channel = 15, number = 27 }  # 9E 1B
+condition = { modifier = "layer" }
+
+# LEDs
+[[output]]
+source = "deck.A.sync"
+midi = { type = "note", channel = 15, number = 124 }  # 9E 7C
+
+[[output]]
+source = "deck.A.pfl"
+midi = { type = "note", channel = 15, number = 84 }  # 9E 54
+
+[[output]]
+source = "deck.A.cue"
+midi = { type = "note", channel = 15, number = 44 }  # 9E 2C
+
+[[output]]
+source = "deck.A.play"
+midi = { type = "note", channel = 15, number = 112 }  # 9E 70
+
+[[output]]
+source = "deck.A.hotcue.1"
+midi = { type = "note", channel = 15, number = 36 }  # 9E 24
+
+[[output]]
+source = "deck.A.hotcue.2"
+midi = { type = "note", channel = 15, number = 32 }  # 9E 20
+
+[[output]]
+source = "deck.A.hotcue.3"
+midi = { type = "note", channel = 15, number = 28 }  # 9E 1C
+
+[[output]]
+source = "deck.A.hotcue.4"
+midi = { type = "note", channel = 15, number = 24 }  # 9E 18
+
+[[output]]
+source = "deck.B.sync"
+midi = { type = "note", channel = 15, number = 125 }  # 9E 7D
+
+[[output]]
+source = "deck.B.pfl"
+midi = { type = "note", channel = 15, number = 85 }  # 9E 55
+
+[[output]]
+source = "deck.B.cue"
+midi = { type = "note", channel = 15, number = 45 }  # 9E 2D
+
+[[output]]
+source = "deck.B.play"
+midi = { type = "note", channel = 15, number = 113 }  # 9E 71
+
+[[output]]
+source = "deck.B.hotcue.1"
+midi = { type = "note", channel = 15, number = 37 }  # 9E 25
+
+[[output]]
+source = "deck.B.hotcue.2"
+midi = { type = "note", channel = 15, number = 33 }  # 9E 21
+
+[[output]]
+source = "deck.B.hotcue.3"
+midi = { type = "note", channel = 15, number = 29 }  # 9E 1D
+
+[[output]]
+source = "deck.B.hotcue.4"
+midi = { type = "note", channel = 15, number = 25 }  # 9E 19
+
+[[output]]
+source = "deck.C.sync"
+midi = { type = "note", channel = 15, number = 126 }  # 9E 7E
+
+[[output]]
+source = "deck.C.pfl"
+midi = { type = "note", channel = 15, number = 86 }  # 9E 56
+
+[[output]]
+source = "deck.C.cue"
+midi = { type = "note", channel = 15, number = 46 }  # 9E 2E
+
+[[output]]
+source = "deck.C.play"
+midi = { type = "note", channel = 15, number = 114 }  # 9E 72
+
+[[output]]
+source = "deck.C.hotcue.1"
+midi = { type = "note", channel = 15, number = 38 }  # 9E 26
+
+[[output]]
+source = "deck.C.hotcue.2"
+midi = { type = "note", channel = 15, number = 34 }  # 9E 22
+
+[[output]]
+source = "deck.C.hotcue.3"
+midi = { type = "note", channel = 15, number = 30 }  # 9E 1E
+
+[[output]]
+source = "deck.C.hotcue.4"
+midi = { type = "note", channel = 15, number = 26 }  # 9E 1A
+
+[[output]]
+source = "deck.D.sync"
+midi = { type = "note", channel = 15, number = 127 }  # 9E 7F
+
+[[output]]
+source = "deck.D.pfl"
+midi = { type = "note", channel = 15, number = 87 }  # 9E 57
+
+[[output]]
+source = "deck.D.cue"
+midi = { type = "note", channel = 15, number = 47 }  # 9E 2F
+
+[[output]]
+source = "deck.D.play"
+midi = { type = "note", channel = 15, number = 115 }  # 9E 73
+
+[[output]]
+source = "deck.D.hotcue.1"
+midi = { type = "note", channel = 15, number = 39 }  # 9E 27
+
+[[output]]
+source = "deck.D.hotcue.2"
+midi = { type = "note", channel = 15, number = 35 }  # 9E 23
+
+[[output]]
+source = "deck.D.hotcue.3"
+midi = { type = "note", channel = 15, number = 31 }  # 9E 1F
+
+[[output]]
+source = "deck.D.hotcue.4"
+midi = { type = "note", channel = 15, number = 27 }  # 9E 1B

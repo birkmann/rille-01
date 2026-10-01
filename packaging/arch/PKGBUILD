@@ -1,0 +1,32 @@
+# Maintainer: Rafael Birkmann
+# Build from a checkout: cd packaging/arch && makepkg -si
+pkgname=rille
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="DJ software for Linux with automatic beatgrids and beat-locked sync"
+url="https://github.com/birkmann/rille-01"
+arch=('x86_64')
+license=('GPL-3.0-or-later')
+depends=('qt6-base' 'qt6-declarative' 'hicolor-icon-theme' 'pipewire' 'alsa-lib' 'jack' 'systemd-libs')
+makedepends=('rust' 'cargo' 'clang' 'cmake')
+source=()
+sha256sums=()
+
+_srcdir() {
+    realpath "$startdir/../.."
+}
+
+build() {
+    cd "$(_srcdir)"
+    cargo build --release --locked -p rille-ui -p rille-cli
+}
+
+check() {
+    cd "$(_srcdir)"
+    cargo test --release --locked -p rille-core -p rille-analysis -p rille-engine
+}
+
+package() {
+    cd "$(_srcdir)"
+    SKIP_BUILD=1 DESTDIR="$pkgdir" PREFIX=/usr ./scripts/install.sh
+}

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata (software centres, Flathub). The id follows the
+     GitHub repository; change it together with the Flatpak app-id. -->
+<component type="desktop-application">
+  <id>io.github.birkmann.rille</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>rille</name>
+  <summary>DJ software for Linux</summary>
+  <developer id="io.github.birkmann">
+    <name>Rafael Birkmann</name>
+  </developer>
+  <description>
+    <p>
+      rille is a native DJ application for Linux: four decks, remix decks, a
+      mixer with FX, a music library and controller support, built around
+      beatgrids that are detected precisely enough that sync never drifts.
+    </p>
+    <ul>
+      <li>Automatic beatgrids, key and loudness analysis</li>
+      <li>Beat-locked sync that follows the beat you hear, with keylock</li>
+      <li>Four track decks or remix decks with 64 sample cells each</li>
+      <li>Two FX units, 3-band EQ, filter, auto-gain and a master limiter</li>
+      <li>MIDI and HID controllers with LED feedback and MIDI learn</li>
+      <li>PipeWire, JACK and ALSA; external mixer mode for hardware mixers</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">rille.desktop</launchable>
+  <url type="homepage">https://github.com/birkmann/rille-01</url>
+  <url type="vcs-browser">https://github.com/birkmann/rille-01</url>
+  <url type="bugtracker">https://github.com/birkmann/rille-01/issues</url>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+  </categories>
+  <keywords>
+    <keyword>DJ</keyword>
+    <keyword>mixing</keyword>
+    <keyword>beatgrid</keyword>
+    <keyword>turntable</keyword>
+  </keywords>
+  <branding>
+    <color type="primary" scheme_preference="light">#f4f3ef</color>
+    <color type="primary" scheme_preference="dark">#111111</color>
+  </branding>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>rille</binary>
+  </provides>
+  <releases>
+    <release version="0.1.0" date="2026-10-01"/>
+  </releases>
+</component>

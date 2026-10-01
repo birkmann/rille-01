@@ -1,0 +1,773 @@
+# Native Instruments Traktor Kontrol F1
+#
+# The F1 is a HID device, not MIDI: rille reads its reports directly (see
+# crates/rille-midi/src/hid.rs) and presents them as MIDI on channel 1, which is
+# what this file maps. The report layout comes from the device's HID report
+# descriptor and Mixxx's Traktor-Kontrol-F1-scripts.js (Ilkka Tuohela).
+#
+# On Linux, opening the device needs the udev rule in
+# packaging/udev/70-rille-controllers.rules (installed by the Arch package).
+#
+# The F1 drives a remix deck: a deck switched to remix mode, with four slots
+# (columns) of sample cells. The 4x4 pads show one page of four rows; track
+# decks ignore these controls.
+#
+# Translated messages:
+#   notes 7-0        pads 1-8 (top two rows, left to right: pad 1 = note 7)
+#   notes 15-8       pads 9-16 (bottom two rows: pad 9 = note 15)
+#   note 18          encoder press
+#   notes 19-23      BROWSE, SIZE, TYPE, REVERSE, SHIFT
+#   notes 25-27      CAPTURE, QUANT, SYNC
+#   notes 31-28      the buttons under faders 1-4 (STOP / mute)
+#   14-bit CC 0-3    knobs 1-4;  CC 4-7  faders 1-4
+#   CC 64            encoder (relative, two's complement), plus per tick
+#                    note 48/49 = cw/ccw (not mapped here)
+#
+#   control             plain                 held modifier
+#   pads 1-16           trigger the cell      SHIFT: delete the cell
+#                                             CAPTURE: capture a loop into it
+#                                             TYPE: loop <-> one-shot
+#                                             BROWSE: load the selected track
+#   knobs 1-4           slot 1-4 filter
+#   faders 1-4          slot 1-4 volume (both without soft takeover: the
+#                       F1 sets the slots as soon as it connects or moves)
+#   STOP 1-4            stop slot 1-4         SHIFT: mute slot 1-4 (toggle)
+#   encoder             page of the pads      SIZE: quantize size
+#                                             CAPTURE: capture source deck
+#                                             BROWSE: browse list
+#                                             SHIFT: tempo
+#   encoder press       play / pause          SHIFT: cue (stop, back to bar 1)
+#                                             BROWSE: expand/collapse node
+#   SYNC                sync                  SHIFT: master (tempo leader)
+#   QUANT               quantize triggered samples on/off
+#   SHIFT, CAPTURE, TYPE, SIZE, BROWSE        modifiers, lit while held
+#   REVERSE             a modifier with no function yet (lit while held)
+#
+# LEDs: SYNC, QUANT and the STOP buttons (lit while their slot plays) on
+# channel 1, note = output report byte, dimmed when off. Pads show their
+# cell's colour, bright while it plays, on channel 2 (note = pad, velocity =
+# LED code, see rille_core::remix::led_code); the two-digit display shows the
+# pad page on channel 3 (CC 0), and the capture source deck (A, b, C, d)
+# while CAPTURE is held. Both use raw = true, which sends the value itself
+# instead of an on/off brightness.
+#
+# CAPTURING: hold CAPTURE, turn the encoder to choose the deck to take the
+# loop from (the display shows its letter), then press the pad whose cell
+# should get it. The pad lights up in its slot's colour.
+#
+# DECK ORDER: the F1 drives the first remix deck (C by default); choose
+# "Traktor Kontrol F1 (C)", "(D)", "(A)" or "(B)" to fix it to one deck. The
+# file itself uses deck A for the F1's deck.
+
+name = "Traktor Kontrol F1"
+device = '(?i)traktor kontrol f1 hid'
+description = "Native Instruments Traktor Kontrol F1 (HID): a remix deck with 4x4 RGB pads"
+deck_layouts = ["C", "D", "A", "B"]
+
+# Modifiers
+[[input]]
+target = "modifier:shift"
+midi = { type = "note", channel = 1, number = 23 }
+
+[[input]]
+target = "modifier:capture"
+midi = { type = "note", channel = 1, number = 25 }
+
+[[input]]
+target = "modifier:type"
+midi = { type = "note", channel = 1, number = 21 }
+
+[[input]]
+target = "modifier:size"
+midi = { type = "note", channel = 1, number = 20 }
+
+[[input]]
+target = "modifier:browse"
+midi = { type = "note", channel = 1, number = 19 }
+
+[[input]]
+target = "modifier:reverse"
+midi = { type = "note", channel = 1, number = 22 }
+
+# Pad 1
+[[input]]
+target = "deck.A.remix_pad.1"
+midi = { type = "note", channel = 1, number = 7 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.1"
+midi = { type = "note", channel = 1, number = 7 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.1"
+midi = { type = "note", channel = 1, number = 7 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.1"
+midi = { type = "note", channel = 1, number = 7 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.1"
+midi = { type = "note", channel = 1, number = 7 }
+condition = { modifier = "browse" }
+
+# Pad 2
+[[input]]
+target = "deck.A.remix_pad.2"
+midi = { type = "note", channel = 1, number = 6 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.2"
+midi = { type = "note", channel = 1, number = 6 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.2"
+midi = { type = "note", channel = 1, number = 6 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.2"
+midi = { type = "note", channel = 1, number = 6 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.2"
+midi = { type = "note", channel = 1, number = 6 }
+condition = { modifier = "browse" }
+
+# Pad 3
+[[input]]
+target = "deck.A.remix_pad.3"
+midi = { type = "note", channel = 1, number = 5 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.3"
+midi = { type = "note", channel = 1, number = 5 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.3"
+midi = { type = "note", channel = 1, number = 5 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.3"
+midi = { type = "note", channel = 1, number = 5 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.3"
+midi = { type = "note", channel = 1, number = 5 }
+condition = { modifier = "browse" }
+
+# Pad 4
+[[input]]
+target = "deck.A.remix_pad.4"
+midi = { type = "note", channel = 1, number = 4 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.4"
+midi = { type = "note", channel = 1, number = 4 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.4"
+midi = { type = "note", channel = 1, number = 4 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.4"
+midi = { type = "note", channel = 1, number = 4 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.4"
+midi = { type = "note", channel = 1, number = 4 }
+condition = { modifier = "browse" }
+
+# Pad 5
+[[input]]
+target = "deck.A.remix_pad.5"
+midi = { type = "note", channel = 1, number = 3 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.5"
+midi = { type = "note", channel = 1, number = 3 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.5"
+midi = { type = "note", channel = 1, number = 3 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.5"
+midi = { type = "note", channel = 1, number = 3 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.5"
+midi = { type = "note", channel = 1, number = 3 }
+condition = { modifier = "browse" }
+
+# Pad 6
+[[input]]
+target = "deck.A.remix_pad.6"
+midi = { type = "note", channel = 1, number = 2 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.6"
+midi = { type = "note", channel = 1, number = 2 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.6"
+midi = { type = "note", channel = 1, number = 2 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.6"
+midi = { type = "note", channel = 1, number = 2 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.6"
+midi = { type = "note", channel = 1, number = 2 }
+condition = { modifier = "browse" }
+
+# Pad 7
+[[input]]
+target = "deck.A.remix_pad.7"
+midi = { type = "note", channel = 1, number = 1 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.7"
+midi = { type = "note", channel = 1, number = 1 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.7"
+midi = { type = "note", channel = 1, number = 1 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.7"
+midi = { type = "note", channel = 1, number = 1 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.7"
+midi = { type = "note", channel = 1, number = 1 }
+condition = { modifier = "browse" }
+
+# Pad 8
+[[input]]
+target = "deck.A.remix_pad.8"
+midi = { type = "note", channel = 1, number = 0 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.8"
+midi = { type = "note", channel = 1, number = 0 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.8"
+midi = { type = "note", channel = 1, number = 0 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.8"
+midi = { type = "note", channel = 1, number = 0 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.8"
+midi = { type = "note", channel = 1, number = 0 }
+condition = { modifier = "browse" }
+
+# Pad 9
+[[input]]
+target = "deck.A.remix_pad.9"
+midi = { type = "note", channel = 1, number = 15 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.9"
+midi = { type = "note", channel = 1, number = 15 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.9"
+midi = { type = "note", channel = 1, number = 15 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.9"
+midi = { type = "note", channel = 1, number = 15 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.9"
+midi = { type = "note", channel = 1, number = 15 }
+condition = { modifier = "browse" }
+
+# Pad 10
+[[input]]
+target = "deck.A.remix_pad.10"
+midi = { type = "note", channel = 1, number = 14 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.10"
+midi = { type = "note", channel = 1, number = 14 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.10"
+midi = { type = "note", channel = 1, number = 14 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.10"
+midi = { type = "note", channel = 1, number = 14 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.10"
+midi = { type = "note", channel = 1, number = 14 }
+condition = { modifier = "browse" }
+
+# Pad 11
+[[input]]
+target = "deck.A.remix_pad.11"
+midi = { type = "note", channel = 1, number = 13 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.11"
+midi = { type = "note", channel = 1, number = 13 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.11"
+midi = { type = "note", channel = 1, number = 13 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.11"
+midi = { type = "note", channel = 1, number = 13 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.11"
+midi = { type = "note", channel = 1, number = 13 }
+condition = { modifier = "browse" }
+
+# Pad 12
+[[input]]
+target = "deck.A.remix_pad.12"
+midi = { type = "note", channel = 1, number = 12 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.12"
+midi = { type = "note", channel = 1, number = 12 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.12"
+midi = { type = "note", channel = 1, number = 12 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.12"
+midi = { type = "note", channel = 1, number = 12 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.12"
+midi = { type = "note", channel = 1, number = 12 }
+condition = { modifier = "browse" }
+
+# Pad 13
+[[input]]
+target = "deck.A.remix_pad.13"
+midi = { type = "note", channel = 1, number = 11 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.13"
+midi = { type = "note", channel = 1, number = 11 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.13"
+midi = { type = "note", channel = 1, number = 11 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.13"
+midi = { type = "note", channel = 1, number = 11 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.13"
+midi = { type = "note", channel = 1, number = 11 }
+condition = { modifier = "browse" }
+
+# Pad 14
+[[input]]
+target = "deck.A.remix_pad.14"
+midi = { type = "note", channel = 1, number = 10 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.14"
+midi = { type = "note", channel = 1, number = 10 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.14"
+midi = { type = "note", channel = 1, number = 10 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.14"
+midi = { type = "note", channel = 1, number = 10 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.14"
+midi = { type = "note", channel = 1, number = 10 }
+condition = { modifier = "browse" }
+
+# Pad 15
+[[input]]
+target = "deck.A.remix_pad.15"
+midi = { type = "note", channel = 1, number = 9 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.15"
+midi = { type = "note", channel = 1, number = 9 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.15"
+midi = { type = "note", channel = 1, number = 9 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.15"
+midi = { type = "note", channel = 1, number = 9 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.15"
+midi = { type = "note", channel = 1, number = 9 }
+condition = { modifier = "browse" }
+
+# Pad 16
+[[input]]
+target = "deck.A.remix_pad.16"
+midi = { type = "note", channel = 1, number = 8 }
+
+[[input]]
+target = "deck.A.remix_pad_delete.16"
+midi = { type = "note", channel = 1, number = 8 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_pad_capture.16"
+midi = { type = "note", channel = 1, number = 8 }
+condition = { modifier = "capture" }
+
+[[input]]
+target = "deck.A.remix_pad_type.16"
+midi = { type = "note", channel = 1, number = 8 }
+condition = { modifier = "type" }
+
+[[input]]
+target = "deck.A.remix_pad_load.16"
+midi = { type = "note", channel = 1, number = 8 }
+condition = { modifier = "browse" }
+
+# Slots: filter knobs, volume faders, STOP buttons (SHIFT: mute)
+[[input]]
+target = "deck.A.remix_filter.1"
+midi = { type = "cc14", channel = 1, number = 0 }
+soft_takeover = false
+
+[[input]]
+target = "deck.A.remix_volume.1"
+midi = { type = "cc14", channel = 1, number = 4 }
+soft_takeover = false
+
+[[input]]
+target = "deck.A.remix_stop.1"
+midi = { type = "note", channel = 1, number = 31 }
+
+[[input]]
+target = "deck.A.remix_mute.1"
+midi = { type = "note", channel = 1, number = 31 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_filter.2"
+midi = { type = "cc14", channel = 1, number = 1 }
+soft_takeover = false
+
+[[input]]
+target = "deck.A.remix_volume.2"
+midi = { type = "cc14", channel = 1, number = 5 }
+soft_takeover = false
+
+[[input]]
+target = "deck.A.remix_stop.2"
+midi = { type = "note", channel = 1, number = 30 }
+
+[[input]]
+target = "deck.A.remix_mute.2"
+midi = { type = "note", channel = 1, number = 30 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_filter.3"
+midi = { type = "cc14", channel = 1, number = 2 }
+soft_takeover = false
+
+[[input]]
+target = "deck.A.remix_volume.3"
+midi = { type = "cc14", channel = 1, number = 6 }
+soft_takeover = false
+
+[[input]]
+target = "deck.A.remix_stop.3"
+midi = { type = "note", channel = 1, number = 29 }
+
+[[input]]
+target = "deck.A.remix_mute.3"
+midi = { type = "note", channel = 1, number = 29 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_filter.4"
+midi = { type = "cc14", channel = 1, number = 3 }
+soft_takeover = false
+
+[[input]]
+target = "deck.A.remix_volume.4"
+midi = { type = "cc14", channel = 1, number = 7 }
+soft_takeover = false
+
+[[input]]
+target = "deck.A.remix_stop.4"
+midi = { type = "note", channel = 1, number = 28 }
+
+[[input]]
+target = "deck.A.remix_mute.4"
+midi = { type = "note", channel = 1, number = 28 }
+condition = { modifier = "shift" }
+
+# Encoder
+[[input]]
+target = "deck.A.remix_page"
+midi = { type = "cc", channel = 1, number = 64 }
+encoding = "twos_complement"
+
+[[input]]
+target = "deck.A.remix_quantize_size"
+midi = { type = "cc", channel = 1, number = 64 }
+encoding = "twos_complement"
+condition = { modifier = "size" }
+
+[[input]]
+target = "deck.A.remix_capture_source"
+midi = { type = "cc", channel = 1, number = 64 }
+encoding = "twos_complement"
+condition = { modifier = "capture" }
+
+[[input]]
+target = "global.scroll"
+midi = { type = "cc", channel = 1, number = 64 }
+encoding = "twos_complement"
+condition = { modifier = "browse" }
+
+[[input]]
+target = "deck.A.tempo"
+midi = { type = "cc", channel = 1, number = 64 }
+mode = "relative"
+encoding = "twos_complement"
+step = 0.005
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.play"
+midi = { type = "note", channel = 1, number = 18 }
+
+[[input]]
+target = "deck.A.cue"
+midi = { type = "note", channel = 1, number = 18 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "global.toggle_node"
+midi = { type = "note", channel = 1, number = 18 }
+condition = { modifier = "browse" }
+
+# SYNC, QUANT
+[[input]]
+target = "deck.A.sync"
+midi = { type = "note", channel = 1, number = 27 }
+
+[[input]]
+target = "deck.A.master"
+midi = { type = "note", channel = 1, number = 27 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.remix_quantize"
+midi = { type = "note", channel = 1, number = 26 }
+
+# LEDs: pads (channel 2, LED codes), display (channel 3, the page)
+[[output]]
+source = "deck.A.remix_pad.1"
+midi = { type = "note", channel = 2, number = 1 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.2"
+midi = { type = "note", channel = 2, number = 2 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.3"
+midi = { type = "note", channel = 2, number = 3 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.4"
+midi = { type = "note", channel = 2, number = 4 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.5"
+midi = { type = "note", channel = 2, number = 5 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.6"
+midi = { type = "note", channel = 2, number = 6 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.7"
+midi = { type = "note", channel = 2, number = 7 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.8"
+midi = { type = "note", channel = 2, number = 8 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.9"
+midi = { type = "note", channel = 2, number = 9 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.10"
+midi = { type = "note", channel = 2, number = 10 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.11"
+midi = { type = "note", channel = 2, number = 11 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.12"
+midi = { type = "note", channel = 2, number = 12 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.13"
+midi = { type = "note", channel = 2, number = 13 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.14"
+midi = { type = "note", channel = 2, number = 14 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.15"
+midi = { type = "note", channel = 2, number = 15 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_pad.16"
+midi = { type = "note", channel = 2, number = 16 }
+raw = true
+
+[[output]]
+source = "deck.A.remix_page"
+midi = { type = "cc", channel = 3, number = 0 }
+raw = true
+# Blank when switched off.
+off = 127
+
+# While CAPTURE is held: the capture source deck (A, b, C, d) instead.
+[[output]]
+source = "deck.A.remix_capture_source"
+midi = { type = "cc", channel = 3, number = 0 }
+raw = true
+condition = { modifier = "capture" }
+
+# LEDs on channel 1: note = output report byte
+[[output]]
+source = "deck.A.remix_stop.1"
+midi = { type = "note", channel = 1, number = 79 }
+off = 10
+
+[[output]]
+source = "deck.A.remix_stop.1"
+midi = { type = "note", channel = 1, number = 80 }
+off = 10
+
+[[output]]
+source = "deck.A.remix_stop.2"
+midi = { type = "note", channel = 1, number = 77 }
+off = 10
+
+[[output]]
+source = "deck.A.remix_stop.2"
+midi = { type = "note", channel = 1, number = 78 }
+off = 10
+
+[[output]]
+source = "deck.A.remix_stop.3"
+midi = { type = "note", channel = 1, number = 75 }
+off = 10
+
+[[output]]
+source = "deck.A.remix_stop.3"
+midi = { type = "note", channel = 1, number = 76 }
+off = 10
+
+[[output]]
+source = "deck.A.remix_stop.4"
+midi = { type = "note", channel = 1, number = 73 }
+off = 10
+
+[[output]]
+source = "deck.A.remix_stop.4"
+midi = { type = "note", channel = 1, number = 74 }
+off = 10
+
+[[output]]
+source = "deck.A.sync"
+midi = { type = "note", channel = 1, number = 24 }
+off = 10
+
+[[output]]
+source = "deck.A.remix_quantize"
+midi = { type = "note", channel = 1, number = 23 }
+off = 10

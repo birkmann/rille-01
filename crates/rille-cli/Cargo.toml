@@ -1,0 +1,26 @@
+[package]
+name = "rille-cli"
+description = "Developer tool: analyze files, evaluate beatgrids against references"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "rille-cli"
+path = "src/main.rs"
+
+[dependencies]
+rille-core.workspace = true
+rille-decode = { path = "../rille-decode" }
+rille-analysis = { path = "../rille-analysis" }
+rille-library = { path = "../rille-library" }
+rille-engine = { path = "../rille-engine" }
+rusqlite = { version = "0.40", features = ["bundled"] }
+rayon = "1.10"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[lints]
+workspace = true

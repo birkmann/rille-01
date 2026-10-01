@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install system packages
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git rustup clang cmake \
+            qt6-base qt6-declarative lld \
+            jack2 alsa-lib pipewire
+          rustup default stable
+          rustup component add rustfmt clippy
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests (release; includes the beatgrid accuracy suite)
+        run: cargo test --workspace --release
+      - name: Build UI
+        run: cargo build -p rille-ui
+      - name: QML lint
+        run: ./scripts/qmllint.sh
+      - name: UI smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_FATAL_WARNINGS: "1"
+          QT_FORCE_STDERR_LOGGING: "1"
+        run: timeout 60 ./target/debug/rille --smoke-test

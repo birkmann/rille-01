@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rille — dj software for linux</title>
+<meta name="description" content="rille is free, native DJ software for Linux: four decks, remix decks, beat-locked sync, automatic beatgrids and controller support. PipeWire, JACK and ALSA.">
+<meta name="theme-color" content="#F4F3EF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">
+<script>
+// Apply a saved theme before first paint; without one the system setting decides.
+try {
+  var t = localStorage.getItem('theme');
+  if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+} catch (e) {}
+</script>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="assets/img/app-icon.png">
+<link rel="preload" href="assets/fonts/Geist-Medium.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/Geist-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+<meta property="og:type" content="website">
+<meta property="og:title" content="rille — dj software for linux">
+<meta property="og:description" content="Four decks, remix decks, beat-locked sync and automatic beatgrids. Native on Linux, free and open source.">
+<meta property="og:image" content="assets/img/og.png">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <nav class="wrap nav" aria-label="Main">
+    <a class="lockup" href="#top" aria-label="rille home">
+      <svg class="mark" viewBox="0 0 100 100" fill="none" aria-hidden="true"><circle cx="50" cy="50" r="36" stroke="currentColor" stroke-width="9"/><circle cx="77.6" cy="26.9" r="11" fill="#FF4A1C"/></svg>
+      <span class="wordmark">rille</span>
+    </a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#sync">Sync</a>
+      <a href="#controllers">Controllers</a>
+      <a href="#">Source</a>
+      <button class="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="false">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+      </button>
+      <a class="pill pill-ink" href="#install">Install</a>
+    </div>
+  </nav>
+</header>
+
+<main id="main">
+
+<section class="wrap hero" id="top">
+  <span class="label">dj software for linux · v0.1.0 · free &amp; open source</span>
+  <h1>Drop the needle.<br>On Linux.</h1>
+  <p class="lead">Four decks, remix decks, sync and key lock — a native DJ setup for the system you already run. No dual boot, no workarounds.</p>
+  <div class="actions">
+    <a class="pill pill-signal" href="#install">Install for Linux</a>
+    <a class="pill pill-outline" href="#">View source</a>
+  </div>
+</section>
+
+<figure class="wrap shot shot-hero">
+  <picture>
+    <source srcset="assets/img/rille-2-decks.webp" type="image/webp">
+    <img src="assets/img/rille-2-decks.png" width="1592" height="992" alt="rille with two decks playing in sync: waveforms, mixer with EQ and filter, FX units and the track collection.">
+  </picture>
+</figure>
+
+<section class="wrap proof" aria-label="Measured results">
+  <div><span class="num">0.016&nbsp;ms</span><span class="what">worst phase error of a synced deck over 60&nbsp;s of rendered audio</span></div>
+  <div><span class="num">1&nbsp;sample</span><span class="what">loop length accuracy over 125 wraps, with and without key lock</span></div>
+  <div><span class="num">&lt;&nbsp;1&nbsp;ms</span><span class="what">follower phase after seeks, jumps, loops and scratches (torture test)</span></div>
+  <div><span class="num">exact</span><span class="what">BPM on synthetic tracks from 95 to 174 BPM, incl. 126.37 and 133.33</span></div>
+</section>
+
+<section class="wrap section" id="features">
+  <h2>Everything a set needs. Nothing it doesn't.</h2>
+  <div class="grid features">
+    <article><span class="idx">01</span><h3>Automatic beatgrids</h3><p>Every track is analyzed once: exact tempo, bar start, key, loudness and a spectral waveform. Real doubts are flagged on the deck, not hidden.</p></article>
+    <article><span class="idx">02</span><h3>Beat-locked sync</h3><p>Synced decks follow the beat you hear from the master, not a BPM number — through loops, hotcue jumps, seeks and scratches.</p></article>
+    <article><span class="idx">03</span><h3>Four decks</h3><p>Play, cue, eight hotcues, auto loops from 1/32 to 32 beats, beatjump, flux, reverse, key lock and key shift on every deck.</p></article>
+    <article><span class="idx">04</span><h3>Remix decks</h3><p>Four slots of sixteen cells: capture loops from any deck or load one-shots, then trigger them quantized and in time.</p></article>
+    <article><span class="idx">05</span><h3>Mixer</h3><p>Gain with auto-gain, 3-band isolator EQ with full kill, DJ filter, crossfader, headphone cue and a master limiter.</p></article>
+    <article><span class="idx">06</span><h3>FX</h3><p>Two units with three slots — delay, reverb, LFO filter, flanger, gater and beatmasher, all tempo-synced.</p></article>
+    <article><span class="idx">07</span><h3>Library &amp; explorer</h3><p>Music folders, tags and cover art, search, ratings, colors, playlists, history — and Traktor collection import.</p></article>
+    <article><span class="idx">08</span><h3>Controllers</h3><p>MIDI and HID mappings with LED feedback, MIDI learn, soft takeover and hotplug — remembered per device.</p></article>
+  </div>
+</section>
+
+<section class="wrap section split" id="sync">
+  <div class="copy">
+    <h2>Grids you don't have to fix.</h2>
+    <p>Grid lines sit on the start of the kick, measured from the average of all beats, so the tempo comes out exact — 144.000, not 144.002. Produced music gets a constant grid, tempo changes a piecewise one, live-played music a per-beat map.</p>
+    <p>Press <span class="kbd">TICK</span> on a deck to hear a click on every beat, and check any grid by ear. If one is off, the grid editor fixes it in two clicks and remembers.</p>
+  </div>
+  <figure class="shot shot-detail">
+    <picture>
+      <source srcset="assets/img/rille-deck.webp" type="image/webp">
+      <img src="assets/img/rille-deck.png" width="1312" height="680" alt="A rille deck: track title, remaining time, BPM, key, the beatgrid over the waveform and the transport controls." loading="lazy">
+    </picture>
+  </figure>
+</section>
+
+<section class="dark" id="linux">
+  <div class="wrap section split split-reverse">
+    <figure class="shot">
+      <picture>
+        <source srcset="assets/img/rille-4-decks.webp" type="image/webp">
+        <img src="assets/img/rille-4-decks.png" width="1592" height="992" alt="rille with four decks: two decks stacked on each side of a four-channel mixer." loading="lazy">
+      </picture>
+    </figure>
+    <div class="copy">
+      <h2>Built for Linux, not ported to it.</h2>
+      <p>rille talks to PipeWire natively, or to JACK and ALSA. Headphone cue on outputs 3/4 of a four-channel interface, or split mono on two. A real-time audio thread that never allocates, locks or waits.</p>
+      <p>Running a hardware mixer like the Allen &amp; Heath Xone:96? External mixer mode puts every deck on its own channel.</p>
+      <ul class="tags">
+        <li>PipeWire</li><li>JACK</li><li>ALSA</li><li>Wayland</li><li>X11</li><li>GPL-3.0</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="wrap section" id="controllers">
+  <h2>Bring your controller.</h2>
+  <p class="lead narrow">Mappings for these ship with rille. Anything else with MIDI works through MIDI learn — click a control on screen, move it on the hardware, done.</p>
+  <ul class="grid hardware">
+    <li><span class="hw">Allen &amp; Heath Xone:K2</span><span class="proto">midi · 4 decks</span></li>
+    <li><span class="hw">Allen &amp; Heath Xone:96</span><span class="proto">audio · external mixer</span></li>
+    <li><span class="hw">Native Instruments Traktor Kontrol F1</span><span class="proto">hid · remix decks</span></li>
+    <li><span class="hw">Native Instruments Traktor Kontrol Z1</span><span class="proto">hid · audio</span></li>
+    <li><span class="hw">Native Instruments Traktor Kontrol X1 MK2</span><span class="proto">hid</span></li>
+    <li><span class="hw">Akai AMX</span><span class="proto">midi · audio</span></li>
+    <li><span class="hw">Pioneer DDJ-400</span><span class="proto">midi</span></li>
+    <li><span class="hw">Hercules DJControl Inpulse 200</span><span class="proto">midi</span></li>
+  </ul>
+  <p class="note">Traktor, Xone, DDJ and the other product names belong to their owners; rille is an independent project.</p>
+</section>
+
+<section class="install" id="install">
+  <div class="wrap section">
+    <svg class="mark mark-lg" viewBox="0 0 100 100" fill="none" aria-hidden="true"><circle cx="50" cy="50" r="36" stroke="#F4F3EF" stroke-width="6"/><circle cx="77.6" cy="26.9" r="9" fill="#FF4A1C"/></svg>
+    <h2>Get rille.</h2>
+    <p class="lead">Builds from source in a few minutes and installs into <code>~/.local</code> — no root needed.</p>
+    <div class="code" role="group" aria-label="Install commands">
+      <pre><code><span class="prompt">$</span> git clone https://github.com/birkmann/rille-01.git rille
+<span class="prompt">$</span> cd rille &amp;&amp; ./scripts/install.sh
+<span class="prompt">$</span> rille</code></pre>
+      <button class="copy-btn" type="button" data-copy="git clone https://github.com/birkmann/rille-01.git rille &amp;&amp; cd rille &amp;&amp; ./scripts/install.sh">Copy</button>
+    </div>
+    <div class="install-more">
+      <div>
+        <h3>Arch Linux</h3>
+        <p><code>cd packaging/arch &amp;&amp; makepkg -si</code> — installs system-wide, including the udev rule for HID controllers.</p>
+      </div>
+      <div>
+        <h3>Requirements</h3>
+        <p>Rust (stable), Qt 6.5+ (<code>qt6-base</code>, <code>qt6-declarative</code>), <code>clang</code>, and PipeWire, JACK or ALSA development files.</p>
+      </div>
+      <div>
+        <h3>Flatpak &amp; AppImage</h3>
+        <p>Recipes are in <code>packaging/</code>. Prebuilt packages will follow with the first release.</p>
+      </div>
+    </div>
+    <div class="actions">
+      <a class="pill pill-signal" href="#">Source code</a>
+      <a class="pill pill-outline-light" href="#">Read the manual</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="wrap footer">
+  <span>rille · GPL-3.0-or-later · 2026</span>
+  <span><a href="#">source</a> · <a href="#">docs</a> · <a href="#">issues</a></span>
+</footer>
+
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Screenshot" hidden>
+  <div class="lb-backdrop" data-close></div>
+  <div class="lb-frame">
+    <img class="lb-img" alt="" draggable="false">
+  </div>
+  <p class="lb-caption" aria-live="polite"></p>
+  <div class="lb-bar">
+    <span class="lb-count"></span>
+    <span class="lb-hint">click to zoom · esc to close</span>
+  </div>
+  <button class="lb-btn lb-close" type="button" aria-label="Close" data-close>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+  <button class="lb-btn lb-prev" type="button" aria-label="Previous screenshot">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
+  <button class="lb-btn lb-next" type="button" aria-label="Next screenshot">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+  </button>
+</div>
+
+<script>
+// Dark mode toggle. Follows the system setting until the visitor picks one.
+(function () {
+  var root = document.documentElement;
+  var btn = document.querySelector('.theme-toggle');
+  var metas = document.querySelectorAll('meta[name="theme-color"]');
+  var system = window.matchMedia('(prefers-color-scheme: dark)');
+  function isDark() { return root.dataset.theme ? root.dataset.theme === 'dark' : system.matches; }
+  function sync() {
+    var dark = isDark();
+    root.classList.toggle('is-dark', dark);
+    btn.setAttribute('aria-pressed', String(dark));
+    if (root.dataset.theme) metas.forEach(function (m) { m.content = dark ? '#111111' : '#F4F3EF'; });
+  }
+  btn.addEventListener('click', function () {
+    root.dataset.theme = isDark() ? 'light' : 'dark';
+    try { localStorage.setItem('theme', root.dataset.theme); } catch (e) {}
+    sync();
+  });
+  system.addEventListener('change', sync);
+  sync();
+})();
+
+// Copy the install command.
+document.querySelectorAll('.copy-btn').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var done = function (text) { b.textContent = text; setTimeout(function () { b.textContent = 'Copy'; }, 1600); };
+    var select = function () {
+      var r = document.createRange();
+      r.selectNodeContents(b.parentNode.querySelector('pre'));
+      var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      done('Selected');
+    };
+    if (!navigator.clipboard) return select();
+    navigator.clipboard.writeText(b.dataset.copy).then(function () { done('Copied'); }, select);
+  });
+});
+
+// Screenshot lightbox: the shot grows out of its place on the page (FLIP),
+// a click zooms in further and the view follows the pointer.
+(function () {
+  var lb = document.getElementById('lightbox');
+  var frame = lb.querySelector('.lb-frame');
+  var img = lb.querySelector('.lb-img');
+  var caption = lb.querySelector('.lb-caption');
+  var count = lb.querySelector('.lb-count');
+  var prevBtn = lb.querySelector('.lb-prev');
+  var nextBtn = lb.querySelector('.lb-next');
+  var closeBtn = lb.querySelector('.lb-close');
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+  var EASE = 'cubic-bezier(.2,.8,.2,1)';
+  var shots = [].slice.call(document.querySelectorAll('.shot img'));
+  var current = -1, zoomed = false, opener = null, closing = false;
+
+  // Each screenshot becomes a button that opens it.
+  shots.forEach(function (thumb, i) {
+    var pic = thumb.closest('picture') || thumb;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'shot-open';
+    btn.setAttribute('aria-label', 'View full size: ' + thumb.alt);
+    pic.parentNode.insertBefore(btn, pic);
+    btn.appendChild(pic);
+    var badge = document.createElement('span');
+    badge.className = 'shot-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    badge.innerHTML = '<svg viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>View full size';
+    btn.appendChild(badge);
+    btn.addEventListener('click', function () { open(i, btn); });
+  });
+
+  function fitted(thumb) {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var padX = vw < 720 ? 12 : 88, padTop = vw < 720 ? 64 : 72, padBottom = vw < 720 ? 96 : 104;
+    var ratio = thumb.naturalWidth / thumb.naturalHeight || 1.6;
+    var w = Math.min(vw - padX * 2, (vh - padTop - padBottom) * ratio);
+    var h = w / ratio;
+    return { left: (vw - w) / 2, top: padTop + (vh - padTop - padBottom - h) / 2, width: w, height: h };
+  }
+  function place(r) {
+    frame.style.left = r.left + 'px'; frame.style.top = r.top + 'px';
+    frame.style.width = r.width + 'px'; frame.style.height = r.height + 'px';
+  }
+  // Transform that makes the frame (at `to`) cover the rectangle `from`.
+  function cover(from, to) {
+    return 'translate(' + (from.left - to.left) + 'px,' + (from.top - to.top) + 'px) scale(' + (from.width / to.width) + ',' + (from.height / to.height) + ')';
+  }
+  function show(i) {
+    var thumb = shots[i];
+    current = i;
+    img.src = thumb.currentSrc || thumb.src;
+    img.alt = thumb.alt;
+    caption.textContent = thumb.alt;
+    count.textContent = (i + 1) + ' / ' + shots.length;
+    lb.classList.toggle('lb-single', shots.length < 2);
+  }
+  function setZoom(on, e) {
+    zoomed = on;
+    lb.classList.toggle('is-zoomed', on);
+    if (on) pan(e); else img.style.transform = '';
+  }
+  function pan(e) {
+    if (!zoomed) return;
+    var r = frame.getBoundingClientRect();
+    var x = e ? Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) : 0.5;
+    var y = e ? Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) : 0.5;
+    var s = Math.min(3, Math.max(1.8, 2200 / r.width));
+    img.style.transformOrigin = (x * 100) + '% ' + (y * 100) + '%';
+    img.style.transform = 'scale(' + s + ')';
+  }
+
+  function open(i, from) {
+    if (closing) return;
+    opener = from;
+    show(i);
+    var thumb = shots[i];
+    var start = thumb.getBoundingClientRect();
+    var end = fitted(thumb);
+    lb.hidden = false;
+    document.documentElement.classList.add('lb-lock');
+    place(end);
+    if (!reduce.matches) {
+      frame.style.transition = 'none';
+      frame.style.transform = cover(start, end);
+      frame.getBoundingClientRect();
+      frame.style.transition = 'transform .5s ' + EASE;
+    }
+    thumb.style.visibility = 'hidden';
+    requestAnimationFrame(function () {
+      lb.classList.add('is-open');
+      frame.style.transform = '';
+    });
+    closeBtn.focus({ preventScroll: true });
+  }
+
+  function close() {
+    if (lb.hidden || closing) return;
+    closing = true;
+    setZoom(false);
+    var thumb = shots[current];
+    lb.classList.remove('is-open');
+    var finish = function () {
+      frame.removeEventListener('transitionend', finish);
+      clearTimeout(timer);
+      lb.hidden = true;
+      thumb.style.visibility = '';
+      frame.style.transition = 'none';
+      frame.style.transform = '';
+      document.documentElement.classList.remove('lb-lock');
+      closing = false;
+      if (opener) opener.focus({ preventScroll: true });
+    };
+    var timer = setTimeout(finish, 600);
+    if (reduce.matches) { setTimeout(finish, 200); return; }
+    // Fly back to wherever the thumbnail is now.
+    frame.style.transition = 'transform .42s ' + EASE;
+    frame.style.transform = cover(thumb.getBoundingClientRect(), frame.getBoundingClientRect());
+    frame.addEventListener('transitionend', finish);
+  }
+
+  function step(d) {
+    if (lb.hidden || closing) return;
+    setZoom(false);
+    shots[current].style.visibility = '';
+    var i = (current + d + shots.length) % shots.length;
+    opener = shots[i].closest('.shot-open');
+    frame.classList.add('is-switching');
+    setTimeout(function () {
+      show(i);
+      shots[i].style.visibility = 'hidden';
+      frame.style.transition = 'none';
+      place(fitted(shots[i]));
+      requestAnimationFrame(function () { frame.classList.remove('is-switching'); });
+    }, reduce.matches ? 0 : 160);
+  }
+
+  lb.addEventListener('click', function (e) {
+    if (e.target.closest('[data-close]')) close();
+  });
+  prevBtn.addEventListener('click', function () { step(-1); });
+  nextBtn.addEventListener('click', function () { step(1); });
+  frame.addEventListener('click', function (e) { setZoom(!zoomed, e); });
+  frame.addEventListener('pointermove', pan);
+  document.addEventListener('keydown', function (e) {
+    if (lb.hidden) return;
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    else if (e.key === 'ArrowLeft') step(-1);
+    else if (e.key === 'ArrowRight') step(1);
+    else if (e.key === 'Tab') {
+      // Keep focus inside the lightbox.
+      var f = [closeBtn, prevBtn, nextBtn].filter(function (b) { return b.offsetParent !== null; });
+      var at = f.indexOf(document.activeElement);
+      e.preventDefault();
+      f[(at + (e.shiftKey ? -1 : 1) + f.length) % f.length].focus();
+    }
+  });
+  window.addEventListener('resize', function () {
+    if (!lb.hidden && !closing) { frame.style.transition = 'none'; place(fitted(shots[current])); }
+  });
+})();
+</script>
+</body>
+</html>

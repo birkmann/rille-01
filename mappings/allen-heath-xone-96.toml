@@ -1,0 +1,78 @@
+# Allen & Heath Xone:96
+#
+# An analogue DJ mixer with two USB sound cards (USB 1 and USB 2). rille plays
+# each deck into its own mixer channel; the Xone:96 does the mixing, EQ,
+# filters, crossfader and headphones.
+#
+# AUDIO: rille uses the Xone:96 by itself when no output device is set in
+# Settings -> Audio, and "Mixing" on Auto then sends every deck to its own
+# channel:
+#   outputs 1/2 -> channel 1   3/4 -> channel 2   5/6 -> channel 3   7/8 -> channel 4
+# The channel order is set in Settings -> Audio -> "Mixer channels" (default
+# C A B D, the Xone:96's own default). Set channels 1-4 to USB 1 (or USB 2,
+# whichever port the laptop is on) with their input select switches. Under
+# PipeWire the card needs the "Pro Audio" profile (pavucontrol ->
+# Configuration); its stereo profile only reaches channel 1.
+#
+# MIDI numbers are from the Xone:96 user guide (AP11645, "MIDI Control",
+# p. 27-29). The guide gives the crossfader as CC 5; Beat Link Trigger's
+# Xone:96 integration found that the mixer sends CC 4, so both are mapped.
+# Everything is on the factory MIDI channel 16. The Xone:96 only sends MIDI
+# to a USB port while that port's MIDI 1 / MIDI 2 switch is lit.
+#
+# The mixer's channel faders and crossfader drive rille's channel faders and
+# crossfader. rille ignores them in external mixing, but with
+# Settings -> Waveform -> "Dim with fader" a deck whose fader is down shows
+# it. The hardware owns the CUE, filter and input select switches,
+# so they are not mapped: the Xone:96 sends their state, not a press, and
+# rille's toggles would drift from it.
+#
+#   control            MIDI          rille
+#   CH 1-4 fader       CC 0-3        channel fader of the deck on that channel
+#   crossfader         CC 4 (and 5)  crossfader
+#
+# DECK ORDER: written for channels 1-4 as decks A B C D; the deck layouts
+# below put them on the app decks C A B D (default) or A B C D, like the
+# Xone:K2 mapping. Pick the one that matches "Mixer channels".
+#
+# X:LINK: a Xone:K2 plugged into the Xone:96's X:LINK port sends its MIDI
+# through the Xone:96's USB port, so this mapping includes the Xone:K2
+# mapping (channel 15, no overlap). Its columns follow the same deck layout.
+
+name = "Allen & Heath Xone:96"
+device = '(?i)xone\s*:?\s*96'
+description = "Allen & Heath Xone:96 faders (MIDI channel 16), plus a Xone:K2 on X:LINK"
+deck_layouts = ["CABD", "ABCD"]
+include = ["Allen & Heath Xone:K2"]
+
+# Channel faders: absolute, no soft takeover, so rille follows the hardware.
+[[input]]
+target = "deck.A.volume"
+midi = { type = "cc", channel = 16, number = 0 }  # BF 00
+soft_takeover = false
+
+[[input]]
+target = "deck.B.volume"
+midi = { type = "cc", channel = 16, number = 1 }  # BF 01
+soft_takeover = false
+
+[[input]]
+target = "deck.C.volume"
+midi = { type = "cc", channel = 16, number = 2 }  # BF 02
+soft_takeover = false
+
+[[input]]
+target = "deck.D.volume"
+midi = { type = "cc", channel = 16, number = 3 }  # BF 03
+soft_takeover = false
+
+# Crossfader
+[[input]]
+target = "global.crossfader"
+midi = { type = "cc", channel = 16, number = 4 }  # BF 04
+soft_takeover = false
+
+[[input]]
+target = "global.crossfader"
+midi = { type = "cc", channel = 16, number = 5 }  # BF 05, as in the user guide
+soft_takeover = false

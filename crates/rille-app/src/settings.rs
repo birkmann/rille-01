@@ -57,6 +57,16 @@ impl Paths {
     pub fn user_mappings(&self) -> PathBuf {
         self.config.join("mappings")
     }
+
+    /// Files of tracks streamed from Beatport.
+    pub fn beatport_cache(&self) -> PathBuf {
+        self.cache.join("beatport")
+    }
+
+    /// The Beatport sign-in (tokens only, never the password).
+    pub fn beatport_token(&self) -> PathBuf {
+        self.data.join("beatport-token.json")
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -197,6 +207,12 @@ pub struct Settings {
     /// The browser lists tracks that fit the playing one (tempo, key,
     /// genre) under "Suggestions".
     pub suggestions: bool,
+    /// Beatport streaming quality: "lossless" (FLAC), "high" (AAC 256) or
+    /// "medium" (AAC 128).
+    pub beatport_quality: String,
+    /// Streamed tracks kept on disk, in megabytes; the least recently
+    /// played go first, never those downloaded for offline use.
+    pub beatport_cache_mb: u32,
 }
 
 impl Default for Settings {
@@ -232,6 +248,8 @@ impl Default for Settings {
             browser_row_size: 0,
             browser_sidebar_width: 250,
             suggestions: false,
+            beatport_quality: "lossless".into(),
+            beatport_cache_mb: 20 * 1024,
         }
     }
 }

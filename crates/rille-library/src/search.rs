@@ -90,6 +90,8 @@ mod tests {
             grid_locked: false,
             analyzed: false,
             missing: false,
+            beatport_id: None,
+            beatport_offline: false,
         }
     }
 

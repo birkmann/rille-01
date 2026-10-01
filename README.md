@@ -186,6 +186,17 @@ install it once:
     sudo install -m644 packaging/udev/70-rille-controllers.rules /etc/udev/rules.d/
     sudo udevadm control --reload && sudo udevadm trigger
 
+**Beatport streaming:** sign in under Settings → Beatport (needs a Beatport
+streaming subscription; lossless FLAC needs Professional). The browser's
+**Beatport** section then searches the catalog from the search box (a pasted
+beatport.com link to a track, release, chart, playlist, label, artist or genre
+lists its tracks), shows your Beatport playlists and the tracks you streamed
+before. Loading a track downloads it first (the deck shows the progress) and
+keeps it in `~/.cache/rille/beatport`, up to the cache size set in the
+settings; cues, beatgrid edits and analysis are kept like for any other track,
+also when the file has to be downloaded again. rille keeps the sign-in tokens
+in `~/.local/share/rille/beatport-token.json`, never the password.
+
 Files: settings in `~/.config/rille`, the library in `~/.local/share/rille`,
 cover thumbnails in `~/.cache/rille`. Set `RILLE_PROFILE=<dir>` to keep
 everything in one folder instead (portable setups, tests).
@@ -201,6 +212,7 @@ everything in one folder instead (portable setups, tests).
 | `rille-engine` | Audio engine: decks, beat-locked sync, keylock, mixer, cpal backends |
 | `rille-library` | SQLite collection, scanning, tags, covers, playlists, history, NML import |
 | `rille-midi` | MIDI mappings, learn, soft takeover, jog, LED feedback, devices |
+| `rille-beatport` | Beatport sign-in, catalog search and lists, track downloads |
 | `rille-app` | Application core without UI: loading, background analysis, persistence |
 | `rille-ui` | Qt Quick interface and the `rille` binary |
 | `rille-cli` | The `rille-cli` developer tool: `analyze`, `eval`, `gridplot`, `click`, `play`, `chroma-dump` |
@@ -224,6 +236,7 @@ rille-cli analyze song.mp3             # grid report for one file
 rille-cli play song.mp3 10             # engine on the real audio device
 RILLE_TIMING=1 RILLE_DEBUG_OBS=1 rille-cli analyze song.mp3   # analysis internals
 RILLE_DEBUG_DOWNBEAT=1 RILLE_DEBUG_BARS=1 rille-cli analyze song.mp3   # bar start evidence
+rille-cli beatport login <user>        # then: search <text>, list <url>, playlists, fetch <id> <dir>
 ```
 
 ## Limitations
@@ -243,6 +256,9 @@ RILLE_DEBUG_DOWNBEAT=1 RILLE_DEBUG_BARS=1 rille-cli analyze song.mp3   # bar sta
   contain "Xone:96", and the mixer must stay on MIDI channel 16.
 - Flatpak and AppImage builds need network access to build and have not been
   run yet; there are no prebuilt packages.
+- Beatport: a streamed track plays once it is fully downloaded (some seconds
+  for a lossless file), not while it downloads. The sign-in uses Beatport's
+  own web client, as beatportdl does, not an official partner integration.
 
 ## Website and brand
 

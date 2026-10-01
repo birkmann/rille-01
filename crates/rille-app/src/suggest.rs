@@ -159,6 +159,8 @@ mod tests {
             analysis_version: None,
             analysis_failed: false,
             missing: false,
+            beatport_id: None,
+            beatport_offline: false,
         }
     }
 

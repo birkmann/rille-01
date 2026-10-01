@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rille_analysis::synth::{self, Spec};
-use rille_app::{App, GridEdit, Paths, SortKey, Source, StartOptions};
+use rille_app::{App, BeatportList, GridEdit, Paths, SortKey, Source, StartOptions};
 use rille_core::{BeatClock, Control, ControlEvent, ControlTarget, ControlValue};
 
 fn write_wav(path: &Path, audio: &rille_decode::DecodedAudio) {
@@ -117,6 +117,89 @@ fn load_analyze_play_sync_and_persist() {
 
 /// Top-level playlist nodes: name, is folder, entries, children with entries.
 type Shape = Vec<(String, bool, usize, Vec<(String, usize)>)>;
+
+#[test]
+fn streamed_tracks_live_apart_from_the_collection() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::under(dir.path());
+    paths.create().unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir_all(&music).unwrap();
+    std::fs::create_dir_all(paths.beatport_cache()).unwrap();
+    let r = synth::render(&Spec { sections: vec![(32, 126.0)], seed: 3, ..Spec::default() });
+    write_wav(&music.join("local.wav"), &r.audio);
+    // Tracks streamed in an earlier session, still in the cache; 43 was
+    // downloaded for offline use.
+    let cached = paths.beatport_cache().join("42.wav");
+    write_wav(&cached, &r.audio);
+    let offline = paths.beatport_cache().join("43.wav");
+    write_wav(&offline, &r.audio);
+    let other = paths.beatport_cache().join("44.wav");
+    write_wav(&other, &r.audio);
+    {
+        let mut lib = rille_library::Library::open(&paths.library_db(), &paths.cache).unwrap();
+        for (bp, file, title) in [(42, &cached, "Streamed"), (43, &offline, "Offline"), (44, &other, "Other")] {
+            let tags = rille_library::Tags { title: title.into(), artist: "Someone".into(), ..Default::default() };
+            let id = lib.upsert_streamed(bp, file, &tags, None).unwrap();
+            lib.set_streamed_file(id, file).unwrap();
+            if bp == 43 {
+                lib.set_streamed_offline(&[id], true).unwrap();
+            }
+        }
+    }
+
+    let app = start(dir.path());
+    let mut s = app.settings();
+    s.background_analysis = false;
+    app.set_settings(s);
+    app.import_paths(vec![music.join("local.wav")], false);
+    wait_for("import", 20.0, || app.track_count() == 1);
+    assert_eq!((app.streamed_count(), app.offline_count()), (3, 1));
+    let collection = app.tracks(Source::Collection, "", SortKey::Artist, false);
+    assert_eq!(collection.len(), 1);
+    assert_eq!(collection[0].beatport_id, None);
+    let recent = app.tracks(Source::BeatportRecent, "", SortKey::Title, false);
+    assert_eq!(recent.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(), ["Offline", "Other", "Streamed"]);
+    let kept = app.tracks(Source::BeatportOffline, "", SortKey::Artist, false);
+    assert_eq!((kept.len(), kept[0].beatport_id), (1, Some(43)));
+    let recent: Vec<_> = recent.into_iter().filter(|r| r.beatport_id == Some(42)).collect();
+
+    // Cached: it loads without asking Beatport.
+    app.load_track(0, recent[0].id);
+    wait_for("load", 20.0, || app.deck(0).audio.is_some() && !app.deck(0).loading);
+    let deck = app.deck(0);
+    assert_eq!((deck.title.as_str(), deck.download, deck.error), ("Streamed", None, None));
+    assert_eq!(deck.path.as_deref(), Some(cached.as_path()));
+
+    // Signed out: an empty search lists nothing, a search reports why.
+    assert_eq!(app.beatport_account(), None);
+    let empty = BeatportList::Search(String::new());
+    app.beatport_open(empty.clone(), false);
+    assert!(app.beatport_rows(&empty).is_empty());
+    assert!(!app.beatport_status(&empty).loading);
+    let search = BeatportList::Search("solomun".into());
+    app.beatport_open(search.clone(), false);
+    wait_for("search", 10.0, || !app.beatport_status(&search).loading);
+    assert!(app.beatport_status(&search).error.is_some_and(|e| e.contains("not signed in")));
+
+    // Clearing the streamed files keeps the offline download and the
+    // file on the deck; the cleared track stays in the collection.
+    let usage = app.beatport_cache_usage();
+    assert_eq!((usage.files, usage.offline_files), (3, 1));
+    app.clear_beatport_cache(false);
+    assert!(cached.exists() && offline.exists() && !other.exists());
+    let other_row = app.tracks(Source::BeatportRecent, "Other", SortKey::Title, false);
+    assert!(other_row[0].missing, "out of the cache, downloads again when loaded");
+    // Removing the download lets the offline track go too.
+    app.beatport_remove_downloads(&[kept[0].id]);
+    assert!(!offline.exists());
+    assert_eq!(app.offline_count(), 0);
+    assert!(app.tracks(Source::BeatportOffline, "", SortKey::Artist, false).is_empty());
+    // Signed out, nothing is queued.
+    app.beatport_download(vec![99]);
+    assert!(!app.beatport_downloads().running);
+    app.shutdown();
+}
 
 #[test]
 fn import_folder_as_playlists() {
@@ -241,6 +324,45 @@ fn remix_deck_load_trigger_capture_and_persist() {
     app.set_settings(s);
     assert!(!app.is_remix_deck(2));
     wait_for("track deck", 5.0, || !app.snapshot().decks[2].remix);
+    app.shutdown();
+}
+
+/// Against the real Beatport API with a signed-in account (downloads about
+/// 25 MB): `RILLE_BEATPORT_TOKEN=~/.local/share/rille/beatport-token.json
+/// cargo test -p rille-app --test app beatport_live -- --ignored`.
+#[test]
+#[ignore]
+fn beatport_live_download_queue_and_covers() {
+    let Some(token) = std::env::var_os("RILLE_BEATPORT_TOKEN") else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::under(dir.path());
+    paths.create().unwrap();
+    std::fs::copy(token, paths.beatport_token()).unwrap();
+    let app = start(dir.path());
+    let mut s = app.settings();
+    s.background_analysis = false;
+    s.beatport_quality = "high".into();
+    app.set_settings(s);
+    assert!(app.beatport_account().is_some(), "signed in");
+
+    // Two tracks for offline use, from their ids alone.
+    app.beatport_download(vec![21298604, 19374165]);
+    wait_for("download start", 10.0, || app.beatport_downloads().running);
+    wait_for("downloads", 240.0, || !app.beatport_downloads().running);
+    let q = app.beatport_downloads();
+    assert_eq!((q.done, q.failed), (2, 0));
+    let kept = app.tracks(Source::BeatportOffline, "", SortKey::Artist, false);
+    assert_eq!(kept.len(), 2);
+    for r in &kept {
+        assert!(r.path.exists() && r.beatport_offline && !r.missing, "{:?}", r.path);
+        assert!(r.has_cover, "catalog cover for {}", r.title);
+    }
+
+    // A deck shows the cover while the track still downloads.
+    app.load_beatport(0, 20683478);
+    wait_for("cover", 30.0, || app.deck(0).cover.is_some());
+    wait_for("load", 240.0, || app.deck(0).audio.is_some() && !app.deck(0).loading);
+    assert!(app.deck(0).error.is_none());
     app.shutdown();
 }
 

@@ -33,7 +33,8 @@ pub mod qobject {
         fn toggle(self: Pin<&mut BrowserTreeModel>, row: i32);
 
         /// Kind of `row`: 0 collection, 1 playlist, 2 history session,
-        /// 3 folder, 4 group, 5 playlist folder, 6 suggestions, −1 none.
+        /// 3 folder, 4 group, 5 playlist folder, 6 suggestions, 7–10
+        /// Beatport (see the `KIND_BEATPORT_*` constants), −1 none.
         #[qinvokable]
         #[cxx_name = "kindAt"]
         fn kind_at(self: &BrowserTreeModel, row: i32) -> i32;
@@ -94,6 +95,21 @@ pub const KIND_FOLDER: i32 = 3;
 pub const KIND_GROUP: i32 = 4;
 pub const KIND_PLAYLIST_FOLDER: i32 = 5;
 pub const KIND_SUGGESTIONS: i32 = 6;
+/// Beatport search (or "Sign in" while signed out).
+pub const KIND_BEATPORT_SEARCH: i32 = 7;
+pub const KIND_BEATPORT_RECENT: i32 = 8;
+/// One of the user's Beatport playlists (id = Beatport's).
+pub const KIND_BEATPORT_PLAYLIST: i32 = 9;
+/// A Beatport chart: id [`BP_TOP100`], [`BP_PURCHASES`], or a genre id for
+/// that genre's Top 100.
+pub const KIND_BEATPORT_LIST: i32 = 10;
+pub const BP_TOP100: i64 = 0;
+pub const BP_PURCHASES: i64 = -1;
+/// Id of the "Offline" node (kind [`KIND_BEATPORT_RECENT`]; 0 = all streamed).
+pub const BP_OFFLINE: i64 = 1;
+/// Ids of the Beatport folders (kind [`KIND_PLAYLIST_FOLDER`]).
+pub const BP_FOLDER_PLAYLISTS: i64 = -1;
+pub const BP_FOLDER_GENRES: i64 = -2;
 
 struct Node {
     label: String,
@@ -118,7 +134,11 @@ pub struct BrowserTreeRust {
 
 impl Default for BrowserTreeRust {
     fn default() -> Self {
-        Self { count: 0, nodes: Vec::new(), expanded: ["g:playlists".to_string()].into_iter().collect() }
+        Self {
+            count: 0,
+            nodes: Vec::new(),
+            expanded: ["g:playlists", "g:beatport", "g:bp-playlists"].into_iter().map(String::from).collect(),
+        }
     }
 }
 
@@ -169,6 +189,11 @@ impl BrowserTreeRust {
             self.playlists(&app.playlists(), 1, &mut out);
         }
 
+        out.push(group("Beatport", "g:beatport", "cloud"));
+        if self.expanded.contains("g:beatport") {
+            self.beatport(app, &mut out);
+        }
+
         out.push(group("Explorer", "g:explorer", "folder"));
         if self.expanded.contains("g:explorer") {
             for place in explorer::places() {
@@ -206,6 +231,87 @@ impl BrowserTreeRust {
             }
         }
         out
+    }
+
+    /// Signed in: search, the Top 100, the user's playlists (open from the
+    /// start), the genres' Top 100s, purchases and the streamed tracks.
+    fn beatport(&self, app: &std::sync::Arc<rille_app::App>, out: &mut Vec<Node>) {
+        let account = app.beatport_account();
+        let node = |label: String, kind: i32, id: i64, depth: i32, key: String, icon: &'static str, detail: String| {
+            Node { label, kind, id, depth, expandable: false, key, icon, detail }
+        };
+        let recent = node(
+            "Recently streamed".into(),
+            KIND_BEATPORT_RECENT,
+            0,
+            1,
+            "bp:recent".into(),
+            "clock",
+            app.streamed_count().to_string(),
+        );
+        // Downloaded tracks play without a connection (and signed out).
+        let offline = node(
+            "Offline".into(),
+            KIND_BEATPORT_RECENT,
+            BP_OFFLINE,
+            1,
+            "bp:offline".into(),
+            "check",
+            app.offline_count().to_string(),
+        );
+        let Some(account) = account else {
+            out.push(node(
+                "Sign in to Beatport…".into(),
+                KIND_BEATPORT_SEARCH,
+                0,
+                1,
+                "bp:search".into(),
+                "search",
+                String::new(),
+            ));
+            out.push(offline);
+            out.push(recent);
+            return;
+        };
+        out.push(node("Search".into(), KIND_BEATPORT_SEARCH, 0, 1, "bp:search".into(), "search", account));
+        out.push(node("Top 100".into(), KIND_BEATPORT_LIST, BP_TOP100, 1, "bp:top".into(), "star", String::new()));
+
+        // A folder, filled (fetched the first time) while it is open.
+        let folder = |label: &str, id: i64, key: &str, out: &mut Vec<Node>| {
+            out.push(Node {
+                label: label.into(),
+                kind: KIND_PLAYLIST_FOLDER,
+                id,
+                depth: 1,
+                expandable: true,
+                key: key.into(),
+                icon: "folder",
+                detail: String::new(),
+            });
+            self.expanded.contains(key)
+        };
+        if folder("My playlists", BP_FOLDER_PLAYLISTS, "g:bp-playlists", out) {
+            for p in app.beatport_playlists() {
+                let detail = p.track_count.map_or_else(String::new, |n| n.to_string());
+                out.push(node(p.name, KIND_BEATPORT_PLAYLIST, p.id, 2, format!("bp:p:{}", p.id), "list", detail));
+            }
+        }
+        if folder("Genres · Top 100", BP_FOLDER_GENRES, "g:bp-genres", out) {
+            for g in app.beatport_genres() {
+                out.push(node(g.name, KIND_BEATPORT_LIST, g.id, 2, format!("bp:g:{}", g.id), "list", String::new()));
+            }
+        }
+        out.push(node(
+            "Purchases".into(),
+            KIND_BEATPORT_LIST,
+            BP_PURCHASES,
+            1,
+            "bp:purchases".into(),
+            "import",
+            String::new(),
+        ));
+        out.push(offline);
+        out.push(recent);
     }
 
     fn playlists(&self, nodes: &[rille_app::PlaylistNode], depth: i32, out: &mut Vec<Node>) {

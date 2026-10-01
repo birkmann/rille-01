@@ -9,6 +9,7 @@ mod engine_slot;
 pub mod explorer;
 pub mod remix;
 pub mod settings;
+pub mod suggest;
 pub mod timing;
 mod values;
 
@@ -38,6 +39,7 @@ pub use remix::{RemixCell, RemixSet};
 pub use rille_beatport::Quality as BeatportQuality;
 pub use rille_library::{HistorySession, PlaylistNode};
 pub use settings::{KeyNotation, MixingMode, Paths, Settings, WaveformStyle};
+pub use suggest::Suggestion;
 pub use timing::{Timing, format_duration};
 
 /// Something the UI should react to.
@@ -61,6 +63,8 @@ pub enum UiEvent {
     MidiChanged,
     MidiLearned(String),
     AudioChanged,
+    /// The track suggestions are for changed (see [`App::suggestion_reference`]).
+    SuggestionsChanged,
     /// Beatport sign-in, a list or the playlists changed.
     BeatportChanged,
     /// The download queue moved on (rows' indicators, the status bar).
@@ -128,6 +132,9 @@ pub enum GridEdit {
     BeatHere,
     /// The beat nearest to the play position becomes a downbeat.
     DownbeatHere,
+    /// Beat 1 of a bar on the play position (snapped to the kick there):
+    /// for grids whose first beat misses the track's first kick.
+    BarStartHere,
     /// Tap the tempo; four or more taps set the BPM.
     Tap,
     Lock(bool),
@@ -140,6 +147,8 @@ pub enum Source {
     Collection,
     Playlist(i64),
     History(i64),
+    /// Tracks that fit the playing one, best first (see [`suggest`]).
+    Suggestions,
     /// Tracks streamed from Beatport, most recent first.
     BeatportRecent,
     /// Streamed tracks kept offline (downloaded), most recent first.
@@ -169,6 +178,14 @@ pub enum SortKey {
     FileSize,
     LastPlayed,
     Path,
+}
+
+/// The track the suggestions are for (deck, track) and the tracks on the
+/// decks, which they leave out.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SuggestFor {
+    reference: Option<(u8, TrackId)>,
+    loaded: [Option<TrackId>; MAX_DECKS],
 }
 
 struct Tracks {
@@ -202,6 +219,8 @@ pub struct App {
     analysis_kick: Sender<()>,
     queue: Arc<AnalysisQueue>,
     history_session: Mutex<Option<i64>>,
+    /// What the suggestions were made for, while they are switched on.
+    suggest_for: Mutex<SuggestFor>,
     midi: Mutex<Option<MidiManager>>,
     mappings: Mutex<MappingStore>,
     learn: Arc<Mutex<Option<LearnSession>>>,
@@ -246,6 +265,7 @@ impl App {
             analysis_kick: kick_tx,
             queue: Arc::new(AnalysisQueue::default()),
             history_session: Mutex::new(None),
+            suggest_for: Mutex::default(),
             midi: Mutex::new(None),
             mappings: Mutex::new(MappingStore::load(&mapping_dirs)),
             learn: Arc::new(Mutex::new(None)),
@@ -259,6 +279,7 @@ impl App {
         if opts.midi && app.settings().midi {
             app.start_midi();
         }
+        app.queue.set_paused(app.settings().analysis_paused);
         app.clone().spawn_analysis_workers(kick_rx);
         if app.settings().background_analysis {
             let _ = app.analysis_kick.send(());
@@ -296,6 +317,14 @@ impl App {
         }
         if old.remix_decks != s.remix_decks {
             self.apply_deck_types();
+        }
+        if !old.background_analysis && s.background_analysis {
+            let _ = self.analysis_kick.send(());
+        }
+        if old.suggestions != s.suggestions {
+            // The browser shows or hides its Suggestions entry.
+            *self.suggest_for.lock().expect("suggest lock") = SuggestFor::default();
+            self.notify(UiEvent::LibraryChanged);
         }
     }
 
@@ -435,6 +464,9 @@ impl App {
             engine.poll(|e| self.on_engine_event(e));
             let snap = engine.snapshot();
             self.log_history(&snap, dt);
+            if self.settings.read().expect("settings lock").suggestions {
+                self.follow_playing_track(&snap);
+            }
         }
         if let Some(m) = self.midi.lock().expect("midi lock").as_mut() {
             m.send_feedback(&values::SnapshotValues(self.engine.clone()));
@@ -500,6 +532,60 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Points the suggestions at the track on air: the master deck while it
+    /// plays with its fader open, else the deck that has played longest
+    /// that way. With nothing audible they stay with the last track (or the
+    /// first loaded deck before anything played). Loading or ejecting a
+    /// track updates them too.
+    fn follow_playing_track(&self, snap: &Snapshot) {
+        let loaded = |d: usize| {
+            let info = self.decks[d].read().expect("deck lock");
+            info.track_id.filter(|_| info.remix.is_none()).map(|t| (t, info.play_secs))
+        };
+        let audible = |d: usize| snap.decks[d].playing && snap.channels[d].volume > 0.1;
+        let playing: Vec<(usize, TrackId, f64)> =
+            (0..MAX_DECKS).filter(|&d| audible(d)).filter_map(|d| loaded(d).map(|(t, secs)| (d, t, secs))).collect();
+        let on_air = playing
+            .iter()
+            .find(|(d, ..)| snap.decks[*d].master)
+            .or_else(|| playing.iter().max_by(|a, b| a.2.total_cmp(&b.2)))
+            .map(|&(d, t, _)| (d as u8, t));
+        let mut current = self.suggest_for.lock().expect("suggest lock");
+        let next = SuggestFor {
+            reference: on_air
+                .or(current.reference)
+                .or_else(|| (0..MAX_DECKS).find_map(|d| loaded(d).map(|(t, _)| (d as u8, t)))),
+            loaded: std::array::from_fn(|d| self.decks[d].read().expect("deck lock").track_id),
+        };
+        if next != *current {
+            *current = next;
+            drop(current);
+            self.notify(UiEvent::SuggestionsChanged);
+        }
+    }
+
+    /// The deck and track the suggestions are for.
+    pub fn suggestion_reference(&self) -> Option<(u8, TrackRow)> {
+        let (deck, id) = self.suggest_for.lock().expect("suggest lock").reference?;
+        Some((deck, self.track_row(id)?))
+    }
+
+    /// Suggested tracks for [`Self::suggestion_reference`], best first;
+    /// empty while suggestions are switched off. Leaves out the tracks on
+    /// the decks and those played in this session.
+    pub fn suggestions(&self) -> Vec<Suggestion> {
+        if !self.settings().suggestions {
+            return Vec::new();
+        }
+        let Some((_, reference)) = self.suggestion_reference() else { return Vec::new() };
+        let mut exclude: HashSet<TrackId> = (0..MAX_DECKS as u8).filter_map(|d| self.deck(d).track_id).collect();
+        let session = *self.history_session.lock().expect("history lock");
+        if let Some(s) = session {
+            exclude.extend(self.library.lock().expect("library lock").history_tracks(s).unwrap_or_default());
+        }
+        suggest::suggest(&reference, &self.tracks.read().expect("tracks lock").rows, &exclude)
     }
 
     // --------------------------------------------------------------- decks
@@ -741,6 +827,10 @@ impl App {
             (GridEdit::HalveTempo, Some(g)) => Some(g.scaled(0.5, pos)),
             (GridEdit::BeatHere, Some(g)) => Some(g.with_beat_at(pos)),
             (GridEdit::DownbeatHere, Some(g)) => Some(g.with_downbeat_at(pos)),
+            (GridEdit::BarStartHere, Some(g)) => {
+                let at = info.audio.as_deref().and_then(|a| attack_near(a, pos)).unwrap_or(pos);
+                Some(g.with_bar_start_at(at))
+            }
             (GridEdit::Lock(on), Some(g)) => {
                 let mut g = g.clone();
                 g.locked = on;
@@ -761,11 +851,14 @@ impl App {
 
     /// Rows for the browser.
     pub fn tracks(&self, source: Source, search: &str, sort: SortKey, descending: bool) -> Vec<TrackRow> {
+        // Before taking the tracks lock, which this reads too.
+        let suggested = (source == Source::Suggestions).then(|| self.suggestions().into_iter().map(|s| s.id).collect());
         let t = self.tracks.read().expect("tracks lock");
         let ids: Option<Vec<TrackId>> = match source {
             Source::Collection => None,
             Source::Playlist(p) => self.library.lock().expect("library lock").playlist_tracks(p).ok(),
             Source::History(h) => self.library.lock().expect("library lock").history_tracks(h).ok(),
+            Source::Suggestions => suggested,
             Source::BeatportRecent => self.library.lock().expect("library lock").streamed_tracks(false).ok(),
             Source::BeatportOffline => self.library.lock().expect("library lock").streamed_tracks(true).ok(),
         };
@@ -773,7 +866,7 @@ impl App {
             (!search.trim().is_empty()).then(|| t.index.search(search).into_iter().collect());
         let by_id = |id: TrackId| t.by_id.get(&id).copied();
         let mut rows: Vec<TrackRow> = match ids {
-            // Playlists and history keep their own order unless sorted.
+            // Playlists, history and suggestions keep their own order unless sorted.
             Some(ids) => ids
                 .into_iter()
                 .filter_map(by_id)
@@ -791,7 +884,11 @@ impl App {
         };
         let ordered = matches!(
             source,
-            Source::Playlist(_) | Source::History(_) | Source::BeatportRecent | Source::BeatportOffline
+            Source::Playlist(_)
+                | Source::History(_)
+                | Source::Suggestions
+                | Source::BeatportRecent
+                | Source::BeatportOffline
         );
         if !ordered || descending || sort != SortKey::Artist {
             sort_rows(&mut rows, sort, descending);
@@ -1020,13 +1117,31 @@ impl App {
         }
     }
 
-    pub fn cancel_analysis(&self) {
+    /// Drops the waiting jobs and turns the background pass off, so they
+    /// don't come back until the user turns it on again.
+    pub fn cancel_analysis(self: &Arc<Self>) {
+        // Off before clearing, so the planner can't refill the queue.
+        let mut s = self.settings();
+        let was_on = s.background_analysis;
+        s.background_analysis = false;
+        s.analysis_paused = false;
+        self.set_settings(s);
         self.queue.cancel();
+        self.queue.set_paused(false);
+        if was_on {
+            self.notify(UiEvent::Status(
+                "Analysis cancelled; background analysis is off (Settings → Analyze in the background)".into(),
+            ));
+        }
         self.notify_progress();
     }
 
-    pub fn set_analysis_paused(&self, paused: bool) {
+    /// Pauses or resumes the queue; a pause lasts over restarts.
+    pub fn set_analysis_paused(self: &Arc<Self>, paused: bool) {
         self.queue.set_paused(paused);
+        let mut s = self.settings();
+        s.analysis_paused = paused;
+        self.set_settings(s);
         self.notify_progress();
     }
 
@@ -1543,6 +1658,28 @@ fn analysis_config(s: &Settings) -> AnalysisConfig {
     AnalysisConfig { bpm_range: (s.bpm_min, s.bpm_max) }
 }
 
+/// Start of the kick attack within 50 ms of `secs` (the broadband attack for
+/// tracks without a kick), where the analyzer would put the beat. `None` if
+/// nothing clearly starts there.
+fn attack_near(audio: &TrackAudio, secs: f64) -> Option<f64> {
+    use rille_analysis::refine::{Band, TransientFinder};
+    // At least 4 dB, so noise or a fading tail doesn't count as an attack.
+    const MIN_STRENGTH: f64 = 0.92;
+    const RADIUS: f64 = 0.05;
+    let sr = f64::from(audio.sample_rate.max(1));
+    let first = ((secs - 0.5) * sr).max(0.0) as usize;
+    let last = (((secs + 0.5) * sr).max(0.0) as usize).min(audio.frames.len());
+    if last <= first {
+        return None;
+    }
+    let mono: Vec<f32> = audio.frames[first..last].iter().map(|[l, r]| 0.5 * (l + r)).collect();
+    let offset = first as f64 / sr;
+    [Band::Low, Band::Broad].into_iter().find_map(|band| {
+        let t = TransientFinder::new(&mono, sr, band).attack(secs - offset, RADIUS)?;
+        (t.strength >= MIN_STRENGTH).then_some(t.secs + offset)
+    })
+}
+
 fn hotcues_from(cues: &TrackCues) -> [Option<Hotcue>; HOTCUES] {
     std::array::from_fn(|slot| {
         cues.hotcue(slot as u8).map(|c| Hotcue { secs: c.start_secs, kind: c.kind, len_secs: c.len_secs })
@@ -1587,4 +1724,36 @@ pub fn sort_rows(rows: &mut [TrackRow], key: SortKey, descending: bool) {
 /// Scope helper for the UI: is this control handled per deck?
 pub fn is_deck_control(c: Control) -> bool {
     c.scope() == Scope::Deck
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Silence, then a pitch-swept kick at `at` seconds.
+    fn kick_at(sr: u32, at: f64) -> TrackAudio {
+        let sr_f = f64::from(sr);
+        let mut frames = vec![[0.0f32; 2]; (3.0 * sr_f) as usize];
+        let start = (at * sr_f).round() as usize;
+        let mut phase = 0.0f64;
+        for (k, f) in frames[start..].iter_mut().enumerate().take((0.4 * sr_f) as usize) {
+            let t = k as f64 / sr_f;
+            phase += 2.0 * std::f64::consts::PI * (45.0 + 100.0 * (-t * 30.0).exp()) / sr_f;
+            let v = (phase.sin() * (-t * 12.0).exp() * 0.8) as f32;
+            *f = [v, v];
+        }
+        TrackAudio { sample_rate: sr, frames }
+    }
+
+    #[test]
+    fn attack_near_snaps_onto_the_kick() {
+        let audio = kick_at(44_100, 1.2);
+        for pos in [1.17, 1.2, 1.23] {
+            let t = attack_near(&audio, pos).expect("kick found");
+            assert!((t - 1.2).abs() < 0.001, "from {pos}: {t}");
+        }
+        // Nothing starts in silence; the play position is used as it is.
+        assert!(attack_near(&audio, 0.5).is_none());
+        assert!(attack_near(&audio, 2.9).is_none());
+    }
 }

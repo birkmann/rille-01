@@ -25,8 +25,8 @@ pub mod qobject {
         #[base = QAbstractListModel]
         #[qproperty(QString, search)]
         /// 0 collection, 1 playlist, 2 history session, 3 explorer folder,
-        /// 6 Beatport search, 7 streamed tracks, 8 Beatport playlist,
-        /// 9 Beatport chart (the browser tree's kinds).
+        /// 6 suggestions, 7 Beatport search, 8 streamed tracks, 9 Beatport
+        /// playlist, 10 Beatport chart (the browser tree's kinds).
         #[qproperty(i32, source_kind, cxx_name = "sourceKind")]
         /// Playlist or session id, the folder's path token, or the Beatport
         /// playlist id.
@@ -190,7 +190,7 @@ pub mod qobject {
 }
 
 use core::pin::Pin;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use cxx_qt::CxxQtType;
@@ -201,6 +201,10 @@ use rille_library::{CoverSize, TrackRow};
 
 use crate::deck_controller::key_color;
 use crate::global::{app, changed_since, changes_seq, path_token, token_path};
+use crate::tree_model::{
+    BP_OFFLINE, BP_PURCHASES, BP_TOP100, KIND_BEATPORT_LIST, KIND_BEATPORT_PLAYLIST, KIND_BEATPORT_RECENT,
+    KIND_BEATPORT_SEARCH,
+};
 
 const TRACK_ROLES: &[&str] = &[
     "trackId",
@@ -237,6 +241,8 @@ const TRACK_ROLES: &[&str] = &[
     "dateAdded",
     "lastPlayed",
     "filePath",
+    "match",
+    "coverLarge",
     "beatportId",
     "streamed",
     "offlineState",
@@ -261,6 +267,8 @@ pub struct TrackListRust {
     anchor: Option<usize>,
     /// Last change sequence number seen (see `global::push_changed`).
     seen: u64,
+    /// Suggestion scores (0..=1) by track id, in the suggestions view.
+    scores: HashMap<i64, f32>,
 }
 
 fn roles(names: &[&str]) -> QHash<QHashPair_i32_QByteArray> {
@@ -358,16 +366,15 @@ impl TrackListRust {
         self.selected_rows().iter().filter(|r| r.id >= 0).map(|r| r.id).collect()
     }
 
-    /// The Beatport list shown: the search box searches Beatport (kind 6);
-    /// playlists (kind 8) and charts (kind 9) are filtered locally.
+    /// The Beatport list shown: the search box searches Beatport; playlists
+    /// and charts are filtered locally.
     fn beatport_list(&self) -> Option<BeatportList> {
-        use crate::tree_model::{BP_PURCHASES, BP_TOP100};
         match (self.source_kind, self.source_id) {
-            (6, _) => Some(BeatportList::Search(self.search.to_string().trim().to_owned())),
-            (8, id) => Some(BeatportList::Playlist(id)),
-            (9, BP_TOP100) => Some(BeatportList::Top100),
-            (9, BP_PURCHASES) => Some(BeatportList::Purchases),
-            (9, genre) => Some(BeatportList::Genre(genre)),
+            (KIND_BEATPORT_SEARCH, _) => Some(BeatportList::Search(self.search.to_string().trim().to_owned())),
+            (KIND_BEATPORT_PLAYLIST, id) => Some(BeatportList::Playlist(id)),
+            (KIND_BEATPORT_LIST, BP_TOP100) => Some(BeatportList::Top100),
+            (KIND_BEATPORT_LIST, BP_PURCHASES) => Some(BeatportList::Purchases),
+            (KIND_BEATPORT_LIST, genre) => Some(BeatportList::Genre(genre)),
             _ => None,
         }
     }
@@ -383,10 +390,11 @@ impl qobject::TrackListModel {
             app.beatport_open(list.clone(), false);
         }
         let mut rows = match *self.source_kind() {
-            6 | 8 | 9 => app.beatport_rows(beatport.as_ref().expect("beatport list")),
-            // Id 1: only the tracks kept offline.
-            7 => app.tracks(
-                if *self.source_id() == 1 { Source::BeatportOffline } else { Source::BeatportRecent },
+            KIND_BEATPORT_SEARCH | KIND_BEATPORT_PLAYLIST | KIND_BEATPORT_LIST => {
+                app.beatport_rows(beatport.as_ref().expect("beatport list"))
+            }
+            KIND_BEATPORT_RECENT => app.tracks(
+                if *self.source_id() == BP_OFFLINE { Source::BeatportOffline } else { Source::BeatportRecent },
                 &search,
                 sort_key(&self.sort_key().to_string()),
                 *self.descending(),
@@ -404,6 +412,7 @@ impl qobject::TrackListModel {
                 *self.descending(),
             ),
             3 => token_path(*self.source_id()).map(|dir| app.folder_rows(&dir)).unwrap_or_default(),
+            6 => app.tracks(Source::Suggestions, &search, sort_key(&self.sort_key().to_string()), *self.descending()),
             _ => app.tracks(Source::Collection, &search, sort_key(&self.sort_key().to_string()), *self.descending()),
         };
         if *self.source_kind() == 3 {
@@ -419,7 +428,7 @@ impl qobject::TrackListModel {
                 rille_app::sort_rows(&mut rows, sort_key(&self.sort_key().to_string()), *self.descending());
             }
         }
-        if matches!(*self.source_kind(), 8 | 9) {
+        if matches!(*self.source_kind(), KIND_BEATPORT_PLAYLIST | KIND_BEATPORT_LIST) {
             let needle = search.to_lowercase();
             if !needle.is_empty() {
                 rows.retain(|r| {
@@ -433,9 +442,23 @@ impl qobject::TrackListModel {
         }
         let total_secs: f64 = rows.iter().map(|r| r.duration_secs).sum();
         let new = rows.iter().filter(|r| r.id < 0).count();
+        let scores: HashMap<i64, f32> = if *self.source_kind() == 6 {
+            app.suggestions().into_iter().map(|s| (s.id, s.score)).collect()
+        } else {
+            HashMap::new()
+        };
         let tracks = format!("{} tracks, {:.1} hours", rows.len(), total_secs / 3600.0 + 0.0);
         let summary = match (*self.source_kind(), &beatport) {
             (3, _) => format!("{} files, {} not in the collection", rows.len(), new),
+            (6, _) => match app.suggestion_reference() {
+                Some((deck, r)) => format!(
+                    "{} tracks fitting deck {}: {}",
+                    rows.len(),
+                    char::from(b'A' + deck),
+                    if r.artist.is_empty() { r.title } else { format!("{} – {}", r.artist, r.title) }
+                ),
+                None => "Load or play a track to get suggestions".into(),
+            },
             (_, Some(list)) => {
                 let status = app.beatport_status(list);
                 match (status.loading, status.error, list) {
@@ -458,6 +481,7 @@ impl qobject::TrackListModel {
             r.rows = rows;
             r.anchor = None;
             r.seen = seen;
+            r.scores = scores;
         }
         self.as_mut().end_reset_model();
         let n = self.rust().rows.len() as i32;
@@ -743,14 +767,16 @@ impl qobject::TrackListModel {
             "rating" => QVariant::from(&i32::from(r.rating)),
             "duration" => s(&fmt_time(r.duration_secs)),
             "fileName" => s(&r.path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()),
-            "cover" => s(&r
-                .cover
-                .as_deref()
-                .and_then(|c| app.cover_file(c, CoverSize::Small))
-                .map(|p| format!("file://{}", p.display()))
-                // Catalog tracks: Beatport's image.
-                .or_else(|| r.beatport_id.filter(|_| r.id < 0).and_then(|bp| app.beatport_cover_url(bp, 100)))
-                .unwrap_or_default()),
+            "cover" | "coverLarge" => {
+                let (size, px) = if name == "cover" { (CoverSize::Small, 100) } else { (CoverSize::Large, 500) };
+                s(&r.cover
+                    .as_deref()
+                    .and_then(|c| app.cover_file(c, size))
+                    .map(|p| format!("file://{}", p.display()))
+                    // Catalog tracks: Beatport's image.
+                    .or_else(|| r.beatport_id.filter(|_| r.id < 0).and_then(|bp| app.beatport_cover_url(bp, px)))
+                    .unwrap_or_default())
+            }
             "analyzed" => QVariant::from(&r.analyzed),
             "gridNote" | "gridAttention" => s(if r.analyzed { grid_attention(r) } else { "" }),
             "playCount" => QVariant::from(&(r.play_count as i32)),
@@ -782,6 +808,7 @@ impl qobject::TrackListModel {
             }),
             "lastPlayed" => s(&r.last_played.map_or(String::new(), crate::tree_model::format_date)),
             "filePath" => s(&r.path.display().to_string()),
+            "match" => s(&self.rust().scores.get(&r.id).map_or(String::new(), |m| format!("{:.0} %", m * 100.0))),
             "beatportId" => QVariant::from(&r.beatport_id.unwrap_or(-1)),
             "streamed" => QVariant::from(&r.beatport_id.is_some()),
             "offlineState" => s(offline_state(app, r)),

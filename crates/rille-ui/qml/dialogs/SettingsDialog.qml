@@ -304,7 +304,7 @@ Popup {
                             title: "Analysis"
                             SettingRow {
                                 label: "Analyze in the background"
-                                hint: "New and changed tracks are analyzed automatically."
+                                hint: "New and changed tracks are analyzed automatically. Cancelling the analysis turns this off."
                                 ToggleSwitch { checked: !!dialog.s.background_analysis; onToggled: dialog.set("background_analysis", checked) }
                             }
                             SettingRow {
@@ -452,6 +452,14 @@ Popup {
                                 label: "Traktor collection"
                                 hint: "Brings over beatgrids you corrected, cue points, loops and ratings from a collection.nml. Imported grids are kept when tracks are re-analyzed."
                                 DjButton { icon: "import"; text: "IMPORT…"; onClicked: nmlDialog.open() }
+                            }
+                        }
+                        SettingsSection {
+                            title: "Suggestions"
+                            SettingRow {
+                                label: "Suggest tracks"
+                                hint: "Adds Suggestions to the browser: tracks that fit the one playing, by tempo (half and double time count), key (Camelot neighbours) and genre, best first. Tracks on the decks and those played in this session are left out."
+                                ToggleSwitch { checked: !!dialog.s.suggestions; onToggled: dialog.set("suggestions", checked) }
                             }
                         }
                     }

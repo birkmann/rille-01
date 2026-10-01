@@ -46,12 +46,16 @@ automatically and precisely enough that sync never drifts.**
 - **Library:** scans your music folders, reads tags and cover art, search,
   sorting, star ratings, color tags, playlists, play history, and import of a
   Traktor `collection.nml` (your corrected grids, cues, loops and ratings).
+  Optional track suggestions (Settings → Library) list what fits the
+  playing track by tempo, key and genre.
 - **File explorer:** browse any folder, drive or USB stick in the browser,
   load files straight onto a deck, import and analyze folders (with
   subfolders) or add them as music folders. Analysis runs in the background
   with priorities (loaded decks first, then what you asked for, then the rest
   of the collection); progress, pause and cancel are in the status bar, and
-  files that cannot be analyzed are not retried.
+  files that cannot be analyzed are not retried. A pause lasts until you
+  resume, also over restarts; cancel turns the background analysis off until
+  you turn it on again in Settings.
 - **Controllers:** MIDI mappings (bundled: Pioneer DDJ-400, Hercules DJControl
   Inpulse 200, Allen & Heath Xone:K2 as a 4-deck controller, and a documented
   generic template), the Native Instruments Traktor Kontrol Z1, X1 MK2 and F1
@@ -102,7 +106,8 @@ Other options: `packaging/arch/PKGBUILD` (`makepkg -si` in that folder),
    that appear when hovering a row). Files can also be dropped from the file
    manager, or opened under **Explorer** in the browser. Right-click rows or
    folders for analysis, import, colors and playlists; Ctrl/Shift-click
-   selects several rows.
+   selects several rows. **S / M / L** next to COLUMNS switches between
+   compact rows and taller rows with larger cover art.
 3. Press **SYNC** on the deck you bring in: it plays in tempo and in phase with
    the master deck.
 
@@ -116,11 +121,21 @@ Keyboard (while not typing in the search field):
 | Loop on/off | S | K |
 | Load selected track | Shift+← | Shift+→ |
 
+**Suggestions:** switch on "Suggest tracks" under Settings → Library and
+**Suggestions** appears under Track Collection in the browser. It lists the
+tracks that fit the one on air (the master deck while it plays, else the deck
+that has played longest), best first: the tempo has to be within 6 % (half or
+double time counts), then key (Camelot neighbours) and genre decide the order.
+Tracks on the decks and those played in this session are left out, and the
+list follows along as the mix moves on. The **Match** column (COLUMNS) shows
+the score.
+
 **Correcting a grid:** press **GRID** on a deck. The arrows move the grid by
 10/1 ms, ×2/÷2 fix half/double tempo, BEAT HERE puts a beat on the play
-position, BAR START marks the first beat of a bar, TAP sets the tempo by
-tapping, the lock protects the grid from re-analysis, RESET returns to the
-analyzed grid. Corrections are saved immediately.
+position, BAR START marks the first beat of a bar, GRID START does both at
+once (put the play position on the first kick and press it: the grid snaps
+onto the kick and its bars start there), TAP sets the tempo by tapping, the
+lock protects the grid from re-analysis, RESET returns to the analyzed grid. Corrections are saved immediately.
 
 **Controllers:** Settings → Controllers lists MIDI inputs; choose a mapping or
 use **MIDI LEARN** (click a control on screen, then move the control on the
@@ -260,7 +275,7 @@ community mappings; each file in `mappings/` names its sources and authors.
 
 ## License
 
-Copyright (C) 2026 Rafael Birkmann
+Copyright (C) 2026 The rille contributors
 
 GPL-3.0-or-later. See `LICENSE`. The bundled Geist and Geist Mono fonts are
 under the SIL Open Font License (`crates/rille-ui/assets/fonts/OFL.txt`).

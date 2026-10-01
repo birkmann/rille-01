@@ -13,7 +13,8 @@ Rectangle {
     property bool gridEditing: false
     readonly property string letter: String.fromCharCode(65 + dc.deck)
     readonly property var hotcues: JSON.parse(dc.hotcuesJson || "[]")
-    readonly property color gridColor: !dc.hasGrid ? Theme.textFaint : (dc.gridText.length ? Theme.warn : Theme.play)
+    // Muted on purpose: only a grid that needs a check gets a (dimmed) color.
+    readonly property color gridColor: dc.hasGrid && dc.gridText.length && !dc.gridLocked ? Theme.warn : Theme.textFaint
 
     function t(name) {
         return dc.target(name)
@@ -246,20 +247,20 @@ Rectangle {
                     }
                 }
             }
-            // Grid state as an icon: green check when clean, amber alert with
-            // notes to check, lock when locked; the details on hover.
+            // Grid state as a small bare icon: faint check when clean, dim amber
+            // alert with notes to check, lock when locked; the details on hover.
             Rectangle {
                 visible: deck.dc.loaded
-                Layout.preferredWidth: 24
+                Layout.preferredWidth: 18
                 Layout.preferredHeight: 24
-                radius: 12
-                color: gridArea.containsMouse ? Qt.darker(deck.gridColor, 2.2) : Qt.darker(deck.gridColor, 3)
-                border.color: deck.gridColor
+                radius: 3
+                color: gridArea.containsMouse ? Theme.controlHover : "transparent"
                 Icon {
                     anchors.centerIn: parent
                     name: deck.dc.gridLocked ? "lock" : (deck.dc.gridText.length && deck.dc.hasGrid ? "alert" : (deck.dc.hasGrid ? "check" : (deck.dc.analyzing ? "analyze" : "grid")))
-                    size: 14
+                    size: 11
                     color: deck.gridColor
+                    opacity: gridArea.containsMouse ? 1 : 0.7
                 }
                 MouseArea {
                     id: gridArea

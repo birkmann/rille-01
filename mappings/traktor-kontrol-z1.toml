@@ -1,8 +1,8 @@
 # Native Instruments Traktor Kontrol Z1
 #
-# The Z1 is a HID device, not MIDI: rille reads its reports directly (see
-# crates/rille-midi/src/hid.rs) and presents them as MIDI on channel 1, which is
-# what this file maps. The report layout comes from the Mixxx HID mapping
+# The Z1 is a HID device, not MIDI: rille reads its reports as described in
+# the [hid] table below (see crates/rille-midi/src/hid.rs) and presents them
+# as MIDI on channel 1, which is what the rest of this file maps. The report layout comes from the Mixxx HID mapping
 # (Traktor-Kontrol-Z1-scripts.js, Mixxx 2.4, GPL-2.0-or-later; author
 # djantti). The crossfader is calibrated from the device's own end points.
 #
@@ -45,6 +45,22 @@ name = "Traktor Kontrol Z1"
 device = '(?i)traktor kontrol z1 hid'
 description = "Native Instruments Traktor Kontrol Z1 (HID) as a 2-channel mixer"
 deck_layouts = ["AB", "CD"]
+
+# Report layout. Byte offsets count the report ID as byte 0.
+[hid]
+name = "Traktor Kontrol Z1"
+vendor_id = 0x17cc
+product_id = 0x1210
+input_report = 0x01
+# Gain, hi, mid, lo, filter of channel 1, the same of channel 2, cue mix,
+# volume 1, volume 2, crossfader.
+knobs = [0x01, 0x03, 0x05, 0x07, 0x09, 0x0B, 0x0D, 0x0F, 0x11, 0x13, 0x15, 0x17, 0x19, 0x1B]
+knob_max = 4095
+buttons = [0x1D, 1]
+outputs = [[0x80, 0x16]]
+# MODE lights while held.
+held_leds = [[1, 0x13, 0x0A]]
+calibration = { knob = 13, report = 0xD2, offset = 0x1D, margin = 5 }
 
 # MODE
 [[input]]

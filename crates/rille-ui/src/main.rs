@@ -5,6 +5,7 @@ mod deck_controller;
 mod global;
 mod models;
 mod power;
+mod startup;
 mod tree_model;
 mod waveform;
 
@@ -130,21 +131,6 @@ fn main() {
         None if headless => Paths::under(&throwaway),
         None => Paths::xdg(),
     };
-    let app = match App::start(StartOptions {
-        paths,
-        audio: !headless,
-        midi: !headless,
-        bundled_mappings: bundled_mappings(),
-    }) {
-        Ok(app) => app,
-        Err(e) => {
-            eprintln!("rille: cannot start: {e}");
-            std::process::exit(1);
-        }
-    };
-    global::set_app(app.clone());
-    demo_loads(&app, &args);
-
     let mut qapp = QGuiApplication::new();
     if let Some(mut q) = qapp.as_mut() {
         q.as_mut().set_application_name(&QString::from("rille"));
@@ -153,6 +139,23 @@ fn main() {
     // Wayland app id: lets the desktop match the window to rille.desktop and
     // show its icon in the dock.
     QGuiApplication::set_desktop_file_name(&QString::from("rille"));
+    let opts = StartOptions { paths, audio: !headless, midi: !headless, bundled_mappings: bundled_mappings() };
+    // A failed start shows the error in a window (retry, or reset the
+    // library) instead of quitting without a word.
+    let app = loop {
+        match App::start(opts.clone()) {
+            Ok(app) => break app,
+            Err(e) => {
+                eprintln!("rille: cannot start: {e}");
+                if headless || !startup::show_error(&mut qapp, &e, &opts.paths) {
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
+    global::set_app(app.clone());
+    demo_loads(&app, &args);
+
     let mut engine = QQmlApplicationEngine::new();
     if let Some(engine) = engine.as_mut() {
         engine.load(&QUrl::from(MAIN_QML));

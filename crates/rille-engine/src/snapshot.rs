@@ -2,7 +2,7 @@
 
 use rille_core::remix::{CELLS, SLOTS};
 
-use crate::types::{FX_UNITS, HOTCUES, Hotcue, MAX_DECKS};
+use crate::types::{FX_UNITS, HOTCUES, Hotcue, MAX_DECKS, STEMS};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DeckState {
@@ -46,6 +46,16 @@ pub struct DeckState {
     pub speed: f64,
     pub cue_held: bool,
     pub end_warning: bool,
+    /// Seconds of the track that have arrived; less than `duration_secs`
+    /// while it streams.
+    pub arrived_secs: f64,
+    /// Playing, but waiting for the stream to bring the next seconds.
+    pub buffering: bool,
+    /// The track has stems loaded; their controls (drums, bass, other,
+    /// vocals).
+    pub stems: bool,
+    pub stem_volume: [f32; STEMS],
+    pub stem_mute: [bool; STEMS],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

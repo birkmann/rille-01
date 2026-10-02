@@ -24,8 +24,8 @@ pub use mixer::{band_gains, crossfader_gain, fader_gain, fader_level, gain_knob_
 pub use remix::{DEFAULT_REMIX_QUANT, REMIX_QUANT_SIZES, RemixDeck, RemixSample, remix_grid};
 pub use snapshot::{ChannelState, DeckState, FxState, RemixCellState, RemixSlotState, RemixState, Snapshot};
 pub use types::{
-    Command, DEFAULT_LOOP_SIZE, Event, FX_UNITS, HOTCUES, Hotcue, LOOP_SIZES, LoadedTrack, MAX_DECKS, Settings,
-    TrackAudio,
+    Command, DEFAULT_LOOP_SIZE, Event, FX_UNITS, HOTCUES, Hotcue, LOOP_SIZES, LoadedTrack, MAX_DECKS, Recorder,
+    STEM_NAMES, STEMS, Settings, StemAudio, TrackAudio,
 };
 
 use types::Garbage;

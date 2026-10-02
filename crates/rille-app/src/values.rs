@@ -2,15 +2,18 @@
 //! and controller LEDs.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rille_core::remix::{CELLS, SLOTS, led_code, pad_cell};
 use rille_core::{Control, ControlTarget};
 use rille_engine::{EngineHandle, MAX_DECKS, REMIX_QUANT_SIZES, RemixState};
 use rille_midi::ValueSource;
+use rille_midi::hid::DISPLAY_LOOP_SIZE;
 
 use crate::engine_slot::EngineSlot;
 
-pub struct SnapshotValues(pub Arc<EngineSlot>);
+/// The engine's state, plus whether the main mix is being recorded.
+pub struct SnapshotValues(pub Arc<EngineSlot>, pub Arc<AtomicBool>);
 
 fn b(v: bool) -> f32 {
     if v { 1.0 } else { 0.0 }
@@ -27,6 +30,9 @@ fn cell_led(r: &RemixState, cell: usize, beat_phase: f64) -> f32 {
 
 impl ValueSource for SnapshotValues {
     fn value(&self, t: ControlTarget) -> f32 {
+        if t.control == Control::Record {
+            return b(self.1.load(Ordering::Relaxed));
+        }
         let Some(engine): Option<Arc<EngineHandle>> = self.0.get() else { return t.control.default_value() };
         let s = engine.snapshot();
         let u = usize::from(t.unit);
@@ -47,6 +53,8 @@ impl ValueSource for SnapshotValues {
             Control::Tick => b(d.tick),
             Control::Hotcue(n) => b(n >= 1 && d.hotcues.get(usize::from(n - 1)).is_some_and(|h| h.is_some())),
             Control::LoopToggle | Control::LoopIn | Control::LoopOut => b(d.loop_active),
+            // The loop size as a segment display code.
+            Control::LoopSizeUp | Control::LoopSizeDown => f32::from(DISPLAY_LOOP_SIZE) + d.loop_size_idx as f32,
             Control::Tempo => d.tempo_fader,
             Control::KeyShift => d.key_shift / 24.0 + 0.5,
             Control::Seek => (d.position_secs / d.duration_secs.max(1e-9)) as f32,
@@ -90,6 +98,8 @@ impl ValueSource for SnapshotValues {
                     127.0
                 }
             }
+            Control::StemVolume(n @ 1..=4) => d.stem_volume[usize::from(n - 1)],
+            Control::StemMute(n @ 1..=4) => b(d.stem_mute[usize::from(n - 1)]),
             Control::RemixStop(n) => b(slot(n).is_some_and(|s| s.cell.is_some())),
             Control::RemixMute(n) => b(slot(n).is_some_and(|s| s.muted)),
             Control::RemixVolume(n) => slot(n).map_or(1.0, |s| s.volume),
@@ -104,5 +114,19 @@ impl ValueSource for SnapshotValues {
 
     fn beat_phase(&self) -> f64 {
         self.0.get().map_or(0.0, |e| e.snapshot().clock_beat.rem_euclid(1.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rille_engine::LOOP_SIZES;
+    use rille_midi::hid::{DISPLAY_LOOP_SIZE, display_text};
+
+    #[test]
+    fn display_codes_cover_the_loop_sizes() {
+        for (i, size) in LOOP_SIZES.iter().enumerate() {
+            let text = display_text(DISPLAY_LOOP_SIZE + i as u8);
+            assert_eq!(text.parse::<f64>().ok(), Some(*size), "{text}");
+        }
     }
 }

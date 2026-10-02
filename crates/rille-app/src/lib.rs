@@ -7,8 +7,10 @@ mod audio;
 pub mod beatport;
 mod engine_slot;
 pub mod explorer;
+pub mod record;
 pub mod remix;
 pub mod settings;
+pub mod stems;
 pub mod suggest;
 pub mod timing;
 mod values;
@@ -69,6 +71,8 @@ pub enum UiEvent {
     BeatportChanged,
     /// The download queue moved on (rows' indicators, the status bar).
     BeatportDownloads,
+    /// The stem model's download moved on, or finished.
+    StemsChanged,
 }
 
 /// The analysis queue's state for the status bar.
@@ -114,6 +118,7 @@ pub struct DeckInfo {
     pub loading: bool,
     /// A streamed track is being downloaded.
     pub download: Option<beatport::Download>,
+    pub stems: stems::DeckStems,
     pub analyzing: bool,
     pub error: Option<String>,
     /// Bumped on every change.
@@ -205,6 +210,15 @@ impl Tracks {
     }
 }
 
+/// Seconds of a streamed track decoded before it starts to play.
+const STREAM_START_SECS: usize = 5;
+
+/// A streamed track for a deck: the whole audio and the downloaded file.
+enum Streamed {
+    Decoded(rille_decode::DecodedAudio, PathBuf),
+    Failed(String),
+}
+
 pub struct App {
     pub paths: Paths,
     settings: RwLock<Settings>,
@@ -225,10 +239,16 @@ pub struct App {
     suggest_for: Mutex<SuggestFor>,
     midi: Mutex<Option<MidiManager>>,
     mappings: Mutex<MappingStore>,
+    /// Where mappings are loaded from: the user's folder, then the bundled.
+    mapping_dirs: Vec<PathBuf>,
     learn: Arc<Mutex<Option<LearnSession>>>,
     last_tick: Mutex<Instant>,
     shutdown: Arc<AtomicBool>,
     beatport: beatport::BeatportState,
+    recording: Mutex<Option<record::Recording>>,
+    /// A recording is running (for controller LEDs).
+    recording_on: Arc<AtomicBool>,
+    stems: stems::StemsState,
 }
 
 /// Options for [`App::start`].
@@ -247,12 +267,14 @@ impl App {
         let paths = opts.paths;
         paths.create().map_err(|e| format!("cannot create app folders: {e}"))?;
         let settings = Settings::load(&paths.settings_file());
-        let library = Library::open(&paths.library_db(), &paths.cache).map_err(|e| e.to_string())?;
-        let rows = library.tracks().map_err(|e| e.to_string())?;
+        let library =
+            Library::open(&paths.library_db(), &paths.cache).map_err(|e| format!("cannot open the library: {e}"))?;
+        let rows = library.tracks().map_err(|e| format!("cannot read the library: {e}"))?;
         let (ui_tx, ui_rx) = crossbeam_channel::unbounded();
         let (kick_tx, kick_rx) = crossbeam_channel::unbounded();
         let mut mapping_dirs = vec![paths.user_mappings()];
         mapping_dirs.extend(opts.bundled_mappings.clone());
+        let mappings = MappingStore::load_with_channels(&mapping_dirs, &settings.midi_channels);
         let app = Arc::new(App {
             settings: RwLock::new(settings),
             engine: Arc::new(EngineSlot::default()),
@@ -269,11 +291,15 @@ impl App {
             history_session: Mutex::new(None),
             suggest_for: Mutex::default(),
             midi: Mutex::new(None),
-            mappings: Mutex::new(MappingStore::load(&mapping_dirs)),
+            mappings: Mutex::new(mappings),
+            mapping_dirs,
             learn: Arc::new(Mutex::new(None)),
             last_tick: Mutex::new(Instant::now()),
             shutdown: Arc::new(AtomicBool::new(false)),
             beatport: beatport::BeatportState::new(paths.beatport_token()),
+            recording: Mutex::new(None),
+            recording_on: Arc::new(AtomicBool::new(false)),
+            stems: stems::StemsState::default(),
             paths,
         });
         app.restart_audio(opts.audio);
@@ -295,6 +321,7 @@ impl App {
         let _ = self.analysis_kick.send(());
         self.queue.shutdown();
         *self.midi.lock().expect("midi lock") = None;
+        self.stop_recording();
         *self.audio_runner.lock().expect("audio lock") = None;
     }
 
@@ -371,6 +398,10 @@ impl App {
     // ---------------------------------------------------------------- audio
 
     fn restart_audio(self: &Arc<Self>, device: bool) {
+        // The recording belongs to the old engine.
+        if self.stop_recording().is_some() {
+            self.notify(UiEvent::Status("Recording stopped: the audio output changed".into()));
+        }
         let s = self.settings();
         // Stop the old stream first so the device is free.
         *self.audio_runner.lock().expect("audio lock") = None;
@@ -435,6 +466,11 @@ impl App {
                 self.notify(UiEvent::Browser(ev));
             }
             Control::Eject if matches!(ev.value, ControlValue::Press(true)) => self.eject(ev.target.unit),
+            Control::Record => {
+                if matches!(ev.value, ControlValue::Press(true)) {
+                    self.toggle_recording();
+                }
+            }
             // Cell edits need the app (files, the other decks' audio).
             Control::RemixPadLoad(_) => self.notify(UiEvent::Browser(ev)),
             Control::RemixPadDelete(pad) | Control::RemixPadCapture(pad) | Control::RemixPadType(pad) => {
@@ -471,7 +507,7 @@ impl App {
             }
         }
         if let Some(m) = self.midi.lock().expect("midi lock").as_mut() {
-            m.send_feedback(&values::SnapshotValues(self.engine.clone()));
+            m.send_feedback(&values::SnapshotValues(self.engine.clone(), self.recording_on.clone()));
         }
     }
 
@@ -531,9 +567,77 @@ impl App {
                     if let Some(s) = *session {
                         let _ = lib.log_played(s, id, d as u8);
                     }
+                    drop((session, lib));
+                    self.add_recorded_track(id, d);
                 }
             }
         }
+    }
+
+    /// Puts a track that counts as played into the recording's cue sheet,
+    /// from when it became audible.
+    fn add_recorded_track(&self, id: TrackId, deck: usize) {
+        let mut recording = self.recording.lock().expect("recording lock");
+        let Some(rec) = recording.as_mut() else { return };
+        let Some(row) = self.track_row(id) else { return };
+        let played = self.decks[deck].read().expect("deck lock").play_secs;
+        rec.add_track(rec.secs() - played, &row.artist, &row.title);
+    }
+
+    /// Starts recording the main mix, or stops the recording.
+    pub fn toggle_recording(&self) {
+        if self.recording_on.load(Ordering::Relaxed) {
+            self.stop_recording();
+        } else if let Err(e) = self.start_recording() {
+            self.notify(UiEvent::Status(e));
+        }
+    }
+
+    /// Records the main mix to a new WAV file (with a cue sheet of the tracks
+    /// played) in the recordings folder; returns its path.
+    pub fn start_recording(&self) -> Result<PathBuf, String> {
+        let mut slot = self.recording.lock().expect("recording lock");
+        if let Some(r) = slot.as_ref() {
+            return Ok(r.path.clone());
+        }
+        if self.external_mixing() {
+            return Err("Recording takes the internal mix; with external mixing, record on the mixer".into());
+        }
+        let engine = self.engine.get().ok_or("Recording needs the audio engine")?;
+        let (rec, recorder) = record::Recording::start(&self.paths.recordings, self.audio_status().sample_rate)
+            .map_err(|e| format!("Cannot start recording: {e}"))?;
+        if engine.send(Command::Record(Some(recorder))).is_err() {
+            return Err("Cannot start recording: the engine is busy".into());
+        }
+        let path = rec.path.clone();
+        *slot = Some(rec);
+        self.recording_on.store(true, Ordering::Relaxed);
+        self.notify(UiEvent::Status(format!("Recording to {}", path.display())));
+        Ok(path)
+    }
+
+    /// Stops the recording and saves the rest of it; `None` if none ran.
+    pub fn stop_recording(&self) -> Option<record::Recorded> {
+        let rec = self.recording.lock().expect("recording lock").take()?;
+        self.recording_on.store(false, Ordering::Relaxed);
+        self.send(Command::Record(None));
+        match rec.finish() {
+            Ok(done) => {
+                let lost = if done.dropped > 0 { " (the disk was too slow: some audio is missing)" } else { "" };
+                let (m, s) = ((done.secs / 60.0) as u64, (done.secs % 60.0) as u64);
+                self.notify(UiEvent::Status(format!("Recorded {m}:{s:02} to {}{lost}", done.path.display())));
+                Some(done)
+            }
+            Err(e) => {
+                self.notify(UiEvent::Status(format!("Recording failed: {e}")));
+                None
+            }
+        }
+    }
+
+    /// The running recording: its file and seconds recorded.
+    pub fn recording(&self) -> Option<(PathBuf, f64)> {
+        self.recording.lock().expect("recording lock").as_ref().map(|r| (r.path.clone(), r.secs()))
     }
 
     /// Points the suggestions at the track on air: the master deck while it
@@ -600,6 +704,9 @@ impl App {
             self.load_remix_cell(deck, None, id);
             return;
         }
+        if self.refuse_load(deck) {
+            return;
+        }
         let d = usize::from(deck).min(MAX_DECKS - 1);
         let row = match self.library.lock().expect("library lock").track(id) {
             Ok(Some(r)) => r,
@@ -634,10 +741,41 @@ impl App {
             .expect("spawn loader");
     }
 
+    /// Whether the load lock keeps tracks off `deck`: it is protected,
+    /// playing, its channel fader is at the lock level or above and the
+    /// crossfader does not cut it. Remix decks are never locked (a load
+    /// fills a free cell).
+    pub fn load_locked(&self, deck: u8) -> bool {
+        let s = self.settings();
+        let letter = char::from(b'A' + deck.min(MAX_DECKS as u8 - 1));
+        if !s.load_lock || !s.load_lock_decks.contains(letter) || self.is_remix_deck(deck) {
+            return false;
+        }
+        let snap = self.snapshot();
+        let d = usize::from(deck).min(MAX_DECKS - 1);
+        snap.decks[d].playing && snap.channels[d].volume >= s.load_lock_level && snap.crossfader_gain(d) > 0.0
+    }
+
+    /// Tells the user and returns true when the load lock keeps tracks off
+    /// `deck`.
+    fn refuse_load(&self, deck: u8) -> bool {
+        if !self.load_locked(deck) {
+            return false;
+        }
+        let letter = char::from(b'A' + deck.min(MAX_DECKS as u8 - 1));
+        self.notify(UiEvent::Status(format!(
+            "Deck {letter} is on air: pull its fader down or stop it to load a track"
+        )));
+        true
+    }
+
     /// Imports a file (drag and drop, file browser) and loads it.
     pub fn load_file(self: &Arc<Self>, deck: u8, path: &Path) {
         if self.is_remix_deck(deck) {
             self.load_remix_file(deck, None, path);
+            return;
+        }
+        if self.refuse_load(deck) {
             return;
         }
         let id = self.library.lock().expect("library lock").import_file(path);
@@ -678,20 +816,48 @@ impl App {
     }
 
     fn load_worker(self: Arc<Self>, deck: u8, id: TrackId, seq: u64, path: PathBuf) {
-        // A streamed track whose file is not in the cache downloads first.
-        let streamed = self.library.lock().expect("library lock").track(id).ok().flatten();
-        let path = match streamed.filter(|r| r.beatport_id.is_some()) {
-            Some(row) => match self.streamed_file(&row, Some((deck, seq))) {
-                Ok(p) => {
+        // What the library knows already: the analysis, cues and gain.
+        let (stored, waveform, cues) = {
+            let lib = self.library.lock().expect("library lock");
+            (lib.analysis(id).ok().flatten(), lib.waveform(id).ok().flatten(), lib.cues(id).unwrap_or_default())
+        };
+        let fresh = stored.as_ref().is_some_and(|a| a.analyzer_version >= ANALYZER_VERSION) && waveform.is_some();
+        let settings = self.settings();
+        let auto_gain = if settings.auto_gain {
+            stored.as_ref().and_then(|a| a.lufs).map_or(0.0, |l| (settings.target_lufs - l).clamp(-12.0, 12.0))
+        } else {
+            0.0
+        };
+        let grid = stored.as_ref().and_then(|a| a.grid.clone()).map(Arc::new);
+        let load = |audio: Arc<TrackAudio>| {
+            self.send(Command::Load {
+                deck,
+                track: LoadedTrack {
+                    id: seq,
+                    audio,
+                    grid: if fresh { grid.clone() } else { None },
+                    main_cue_secs: cues.main_cue_secs,
+                    hotcues: hotcues_from(&cues),
+                    auto_gain_db: auto_gain,
+                },
+            });
+        };
+
+        // A streamed track whose file is not in the cache downloads first;
+        // it starts playing while the rest comes.
+        let row = self.library.lock().expect("library lock").track(id).ok().flatten();
+        let audio = match row.filter(|r| r.beatport_id.is_some()) {
+            Some(row) => match self.stream_to_deck(deck, seq, &row, &load) {
+                Some(Streamed::Decoded(audio, file)) => {
                     // The downloaded file may bring the cover the catalog had not.
                     let cover = self.library.lock().expect("library lock").cover_path(id, CoverSize::Large);
                     self.update_deck(deck, seq, |i| {
-                        i.path = Some(p.clone());
+                        i.path = Some(file);
                         i.cover = i.cover.take().or(cover);
                     });
-                    p
+                    audio
                 }
-                Err(e) => {
+                Some(Streamed::Failed(e)) => {
                     if self.update_deck(deck, seq, |i| {
                         i.loading = false;
                         i.error = Some(e.clone());
@@ -700,49 +866,37 @@ impl App {
                     }
                     return;
                 }
+                None => return,
             },
-            None => path,
-        };
-        let audio = match rille_decode::decode_file(&path, None, &mut |_| {}) {
-            Ok(a) => a,
-            Err(e) => {
-                self.update_deck(deck, seq, |i| {
-                    i.loading = false;
-                    i.error = Some(e.to_string());
-                });
-                self.notify(UiEvent::Status(format!("Cannot decode {}: {e}", path.display())));
-                return;
-            }
+            None => match rille_decode::decode_file(&path, None, &mut |_| {}) {
+                Ok(audio) => audio,
+                Err(e) => {
+                    self.update_deck(deck, seq, |i| {
+                        i.loading = false;
+                        i.error = Some(e.to_string());
+                    });
+                    self.notify(UiEvent::Status(format!("Cannot decode {}: {e}", path.display())));
+                    return;
+                }
+            },
         };
         if self.deck(deck).engine_id != seq {
             return;
         }
-        let (stored, waveform, cues) = {
-            let lib = self.library.lock().expect("library lock");
-            (lib.analysis(id).ok().flatten(), lib.waveform(id).ok().flatten(), lib.cues(id).unwrap_or_default())
-        };
-        let fresh = stored.as_ref().is_some_and(|a| a.analyzer_version >= ANALYZER_VERSION) && waveform.is_some();
-        let settings = self.settings();
         let track_audio = Arc::new(TrackAudio { sample_rate: audio.sample_rate, frames: audio.frames.clone() });
-        let auto_gain = |lufs: Option<f32>| {
-            if settings.auto_gain { lufs.map_or(0.0, |l| (settings.target_lufs - l).clamp(-12.0, 12.0)) } else { 0.0 }
-        };
-        let hotcues = hotcues_from(&cues);
-        let grid = stored.as_ref().and_then(|a| a.grid.clone()).map(Arc::new);
+        let streamed = self.deck(deck).audio.is_some();
         if !self.update_deck(deck, seq, |i| i.audio = Some(track_audio.clone())) {
             return;
         }
-        self.send(Command::Load {
-            deck,
-            track: LoadedTrack {
-                id: seq,
-                audio: track_audio,
-                grid: if fresh { grid.clone() } else { None },
-                main_cue_secs: cues.main_cue_secs,
-                hotcues,
-                auto_gain_db: auto_gain(stored.as_ref().and_then(|a| a.lufs)),
-            },
-        });
+        if streamed {
+            // Already playing the first part: now all of it.
+            let length_secs = None;
+            self.send(Command::ExtendTrack { deck, track_id: seq, audio: track_audio.clone(), length_secs });
+        } else {
+            load(track_audio.clone());
+        }
+        // Stems separated before come along.
+        self.load_cached_stems(deck, seq, id, &track_audio);
         if fresh {
             let wf = waveform.and_then(|b| WaveformSummary::from_bytes(&b)).map(Arc::new);
             self.update_deck(deck, seq, |i| {
@@ -781,6 +935,109 @@ impl App {
             i.key = out.analysis.key.or(i.key);
         });
         self.refresh_track(id);
+    }
+
+    /// A streamed track for a deck: from the cache, or downloaded. While it
+    /// downloads, the first seconds are decoded and `load`ed as soon as they
+    /// are there, and the deck gets longer copies as more arrives
+    /// ([`Command::ExtendTrack`]); the caller sends the whole track. `None`
+    /// when the deck moved on to another track.
+    fn stream_to_deck(
+        self: &Arc<Self>,
+        deck: u8,
+        seq: u64,
+        row: &TrackRow,
+        load: &dyn Fn(Arc<TrackAudio>),
+    ) -> Option<Streamed> {
+        let decode = |path: &Path| match rille_decode::decode_file(path, None, &mut |_| {}) {
+            Ok(audio) => Streamed::Decoded(audio, path.to_owned()),
+            Err(e) => Streamed::Failed(e.to_string()),
+        };
+        if row.path.exists() {
+            return Some(match self.streamed_file(row, Some((deck, seq)), None) {
+                Ok(p) => decode(&p),
+                Err(e) => Streamed::Failed(e),
+            });
+        }
+        let arrived = rille_beatport::Arrived::new();
+        let download = {
+            let (app, row, arrived) = (self.clone(), row.clone(), arrived.clone());
+            std::thread::Builder::new()
+                .name(format!("stream-deck-{deck}"))
+                .spawn(move || app.streamed_file(&row, Some((deck, seq)), Some(&arrived)))
+                .expect("spawn stream download")
+        };
+        // Wait for the first bytes, or for the download to end (it was in
+        // the cache after all, another download had it, or it failed).
+        let started = loop {
+            if let Some(s) = arrived.started(Duration::from_millis(100)) {
+                break Some(s);
+            }
+            if download.is_finished() {
+                break None;
+            }
+        };
+        let finished = |download: std::thread::JoinHandle<Result<PathBuf, String>>| {
+            download.join().unwrap_or_else(|_| Err("the download crashed".into()))
+        };
+        let Some((_, total)) = started else {
+            return Some(finished(download).map_or_else(Streamed::Failed, |p| decode(&p)));
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let reader = match arrived.reader(cancel.clone()) {
+            Ok(r) => r,
+            // Gone already: it finished and was renamed.
+            Err(_) => return Some(finished(download).map_or_else(Streamed::Failed, |p| decode(&p))),
+        };
+        // A hint only: the file type is probed from its first bytes.
+        let ext = row.path.extension().and_then(|e| e.to_str());
+        let mut next_push = 0usize;
+        let mut on_frames = |so_far: &rille_decode::DecodedAudio| {
+            let sr = so_far.sample_rate as usize;
+            if self.deck(deck).engine_id != seq {
+                cancel.store(true, Ordering::Relaxed);
+                return;
+            }
+            if sr == 0 || so_far.frames.len() < next_push.max(STREAM_START_SECS * sr) {
+                return;
+            }
+            // Longer copies at doubling lengths: about twice the track copied
+            // in all.
+            next_push = 2 * so_far.frames.len();
+            let audio = Arc::new(TrackAudio { sample_rate: so_far.sample_rate, frames: so_far.frames.clone() });
+            let secs = audio.duration_secs();
+            // The whole length from the catalog, else estimated from the bytes.
+            let arrived_bytes = arrived.contiguous().max(1) as f64;
+            let length = if row.duration_secs > secs { row.duration_secs } else { secs * total as f64 / arrived_bytes };
+            let first = self.deck(deck).audio.is_none();
+            if !self.update_deck(deck, seq, |i| {
+                i.audio = Some(audio.clone());
+                i.loading = false;
+            }) {
+                return;
+            }
+            if first {
+                load(audio.clone());
+            }
+            let length_secs = Some(length.max(secs));
+            self.send(Command::ExtendTrack { deck, track_id: seq, audio, length_secs });
+        };
+        let decoded = rille_decode::decode_reader(reader, ext, None, &mut on_frames);
+        let file = finished(download);
+        if self.deck(deck).engine_id != seq {
+            return None;
+        }
+        match (decoded, file) {
+            (Ok(audio), Ok(file)) => Some(Streamed::Decoded(audio, file)),
+            (_, Err(e)) | (Err(rille_decode::DecodeError::Unsupported(e)), _) => {
+                // What already plays ends where the download stopped.
+                if let Some(audio) = self.deck(deck).audio {
+                    self.send(Command::ExtendTrack { deck, track_id: seq, audio, length_secs: None });
+                }
+                Some(Streamed::Failed(e))
+            }
+            (Err(e), Ok(_)) => Some(Streamed::Failed(e.to_string())),
+        }
     }
 
     /// Applies a beatgrid correction to the track on `deck` and saves it.
@@ -1418,10 +1675,11 @@ impl App {
 
     fn start_midi(self: &Arc<Self>) {
         let (tx, rx) = crossbeam_channel::unbounded::<MidiEvent>();
-        let values = Arc::new(values::SnapshotValues(self.engine.clone()));
+        let values = Arc::new(values::SnapshotValues(self.engine.clone(), self.recording_on.clone()));
         match MidiManager::new("rille", tx, values) {
             Ok(mut m) => {
                 let store = self.mappings.lock().expect("mappings lock");
+                m.set_hid_layouts(store.hid_layouts());
                 m.refresh_with(|port| self.pick_mapping(&store, port));
                 drop(store);
                 *self.midi.lock().expect("midi lock") = Some(m);
@@ -1523,6 +1781,36 @@ impl App {
 
     pub fn mapping_names(&self) -> Vec<String> {
         self.mappings.lock().expect("mappings lock").entries().iter().map(|e| e.mapping.name.clone()).collect()
+    }
+
+    /// The MIDI channels of mapping `name` and of the mappings it includes,
+    /// as (mapping name as written in its file, channel).
+    pub fn mapping_channels(&self, name: &str) -> Vec<(String, u8)> {
+        self.mappings.lock().expect("mappings lock").channels(name).to_vec()
+    }
+
+    /// The controller of mapping `name` (as written in its file) sends on
+    /// MIDI `channel`: remembers it, reloads the mappings and gives every
+    /// connected controller its mapping again.
+    pub fn set_mapping_channel(&self, name: &str, channel: u8) {
+        let settings = {
+            let mut s = self.settings.write().expect("settings lock");
+            s.midi_channels.insert(name.to_owned(), channel.clamp(1, 16));
+            s.clone()
+        };
+        let _ = settings.save(&self.paths.settings_file());
+        let mut store = self.mappings.lock().expect("mappings lock");
+        *store = MappingStore::load_with_channels(&self.mapping_dirs, &settings.midi_channels);
+        if let Some(m) = self.midi.lock().expect("midi lock").as_mut() {
+            m.set_hid_layouts(store.hid_layouts());
+            for (port, current) in m.connected() {
+                if let Some(fresh) = current.and_then(|name| store.by_name(&name).cloned()) {
+                    let _ = m.set_mapping(&port, Some(fresh));
+                }
+            }
+        }
+        drop(store);
+        self.notify(UiEvent::MidiChanged);
     }
 
     /// Uses mapping `name` (or none) for MIDI input `port`, and remembers

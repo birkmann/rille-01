@@ -18,6 +18,7 @@ Rectangle {
         ColumnLayout {
             Layout.fillHeight: true
             Layout.preferredWidth: 62
+            Layout.minimumWidth: 72
             spacing: 2
             DjButton { Layout.fillWidth: true; Layout.fillHeight: true; subtle: true; text: "SNAP"; target: "global.snap"; lit: AppController.snap; litColor: Theme.sync; tip: "Snap: new cue points and hotcues land on the nearest beat" }
             DjButton { Layout.fillWidth: true; Layout.fillHeight: true; subtle: true; text: "QUANT"; target: "global.quantize"; lit: AppController.quantize; litColor: Theme.sync; tip: "Quantize: jumps while playing keep the beat phase, so the mix stays in time" }
@@ -38,12 +39,12 @@ Rectangle {
             spacing: 0
             RowLayout {
                 Layout.alignment: Qt.AlignHCenter
-                spacing: 4
+                spacing: 2
                 // − and + step to the next whole BPM (140.12 → 140 → 139).
                 DjButton {
                     text: "−"
                     subtle: true
-                    implicitWidth: 22
+                    implicitWidth: 20
                     implicitHeight: 22
                     tip: "Master tempo down to the next whole BPM"
                     onClicked: AppController.setClockTempo(Math.ceil(AppController.clockBpm - 0.005) - 1)
@@ -100,7 +101,7 @@ Rectangle {
                 DjButton {
                     text: "+"
                     subtle: true
-                    implicitWidth: 22
+                    implicitWidth: 20
                     implicitHeight: 22
                     tip: "Master tempo up to the next whole BPM"
                     onClicked: AppController.setClockTempo(Math.floor(AppController.clockBpm + 0.005) + 1)

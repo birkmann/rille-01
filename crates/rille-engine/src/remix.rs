@@ -137,7 +137,7 @@ impl SlotPlayer {
         }
         let voice = &mut self.voices[self.active];
         voice.set_wrap(sample.looped.then_some(sample.audio.frames.len()));
-        voice.jump(&sample.audio, target, speed, stretch);
+        voice.jump(&mut &*sample.audio, target, speed, stretch);
         self.voice_cell[self.active] = Some(cell);
     }
 
@@ -217,7 +217,7 @@ impl SlotPlayer {
         {
             Some(s) => {
                 let transpose = (f64::from(s.audio.sample_rate) / ctx.sr_out) as f32;
-                voice.render(&s.audio, out, s.speed(bpf), stretch, transpose, ctx.sinc, false);
+                voice.render(&mut &*s.audio, out, s.speed(bpf), stretch, transpose, ctx.sinc, false);
             }
             None => out.fill([0.0; 2]),
         };

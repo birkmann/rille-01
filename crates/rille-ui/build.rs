@@ -2,8 +2,14 @@ use std::path::{Path, PathBuf};
 
 use cxx_qt_build::{CxxQtBuilder, QmlFile, QmlModule};
 
-const BRIDGES: &[&str] =
-    &["src/app_controller.rs", "src/deck_controller.rs", "src/waveform.rs", "src/models.rs", "src/tree_model.rs"];
+const BRIDGES: &[&str] = &[
+    "src/app_controller.rs",
+    "src/deck_controller.rs",
+    "src/waveform.rs",
+    "src/models.rs",
+    "src/tree_model.rs",
+    "src/startup.rs",
+];
 const SINGLETONS: &[&str] = &["Theme.qml"];
 /// Bundled fonts (SIL OFL, see `assets/fonts/OFL.txt`), loaded by `Theme.qml`
 /// from `qrc:/qt/qml/rille/ui/assets/fonts/`.

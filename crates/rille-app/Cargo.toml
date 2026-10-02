@@ -14,7 +14,12 @@ rille-decode = { path = "../rille-decode" }
 rille-library = { path = "../rille-library" }
 rille-midi = { path = "../rille-midi" }
 rille-beatport = { path = "../rille-beatport" }
+rille-stems = { path = "../rille-stems" }
 crossbeam-channel = "0.5"
+hound = "3"
+libc = "0.2"
+rtrb = "0.4"
+sha2 = "0.10"
 serde.workspace = true
 toml = "0.8"
 

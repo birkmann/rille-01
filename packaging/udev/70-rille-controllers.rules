@@ -2,6 +2,10 @@
 # (MIDI controllers need no rule). Install to /usr/lib/udev/rules.d/ or
 # /etc/udev/rules.d/, then: udevadm control --reload && udevadm trigger
 # The number must stay below 73 so the uaccess tag takes effect.
+#
+# A HID controller added with its own mapping file (a [hid] table, see
+# crates/rille-midi/src/hid.rs) needs a line like these with its USB vendor
+# and product ID (lsusb shows them as vendor:product).
 
 # Native Instruments Traktor Kontrol Z1
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1210", TAG+="uaccess"

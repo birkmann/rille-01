@@ -53,13 +53,19 @@ pub fn run(args: &[String]) {
                 eprintln!("{} → {}", d.stream_quality, dest.display());
                 let mut shown = -1;
                 let started = std::time::Instant::now();
-                let bytes = client.fetch_file(&d.location, &dest, &AtomicBool::new(false), &mut |p| {
-                    let pct = p.fraction().map_or(0, |f| (f * 100.0) as i32);
-                    if pct / 10 != shown / 10 {
-                        shown = pct;
-                        eprint!("{pct}% ");
-                    }
-                })?;
+                let bytes = client.fetch_file(
+                    &d.location,
+                    &dest,
+                    &AtomicBool::new(false),
+                    &mut |p| {
+                        let pct = p.fraction().map_or(0, |f| (f * 100.0) as i32);
+                        if pct / 10 != shown / 10 {
+                            shown = pct;
+                            eprint!("{pct}% ");
+                        }
+                    },
+                    None,
+                )?;
                 eprintln!();
                 let secs = started.elapsed().as_secs_f64();
                 println!(

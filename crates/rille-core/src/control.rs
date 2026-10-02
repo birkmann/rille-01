@@ -153,6 +153,12 @@ pub enum Control {
     BrowserScroll,
     BrowserTreeScroll,
     BrowserToggleNode,
+    /// Start or stop recording the main mix.
+    Record,
+    /// Level of stem 1..=4 (drums, bass, other, vocals) of a deck's track.
+    StemVolume(u8),
+    /// Mutes or unmutes stem 1..=4 (toggles on press).
+    StemMute(u8),
 }
 
 impl Control {
@@ -161,9 +167,8 @@ impl Control {
         match self {
             FxOn | FxDryWet | FxKnob(_) | FxButton(_) | FxParam(_) | FxSelect(_) => Scope::Fx,
             Crossfader | CrossfaderCurve | CrossfaderReverse | MainLevel | MainMeter(_) | CueMix | CueVolume
-            | Quantize | Snap | Limiter | ClockTempo | BrowserScroll | BrowserTreeScroll | BrowserToggleNode => {
-                Scope::Global
-            }
+            | Quantize | Snap | Limiter | ClockTempo | BrowserScroll | BrowserTreeScroll | BrowserToggleNode
+            | Record => Scope::Global,
             _ => Scope::Deck,
         }
     }
@@ -173,7 +178,7 @@ impl Control {
         match self {
             Tempo | Seek | Gain | EqHi | EqMid | EqLo | Filter | Volume | KeyShift | Meter | FxDryWet | FxKnob(_)
             | FxParam(_) | Crossfader | CrossfaderCurve | MainLevel | MainMeter(_) | CueMix | CueVolume
-            | ClockTempo | RemixVolume(_) | RemixFilter(_) => ControlKind::Continuous,
+            | ClockTempo | RemixVolume(_) | RemixFilter(_) | StemVolume(_) => ControlKind::Continuous,
             Jog | FxSelect(_) | BrowserScroll | BrowserTreeScroll | RemixPage | RemixQuantizeSize
             | RemixCaptureSource => ControlKind::Relative,
             _ => ControlKind::Button,
@@ -214,7 +219,7 @@ impl Control {
         match self {
             Tempo | Gain | EqHi | EqMid | EqLo | Filter | KeyShift | Crossfader | CrossfaderCurve | CueMix
             | RemixFilter(_) => 0.5,
-            Volume | RemixVolume(_) => 1.0,
+            Volume | RemixVolume(_) | StemVolume(_) => 1.0,
             MainLevel | CueVolume => 0.8,
             _ => 0.0,
         }
@@ -280,11 +285,14 @@ impl Control {
             BrowserScroll,
             BrowserTreeScroll,
             BrowserToggleNode,
+            Record,
             RemixPage,
             RemixQuantize,
             RemixQuantizeSize,
             RemixCaptureSource,
         ];
+        v.extend((1..=4).map(StemVolume));
+        v.extend((1..=4).map(StemMute));
         v.extend((1..=8).map(Hotcue));
         v.extend((1..=8).map(HotcueDelete));
         v.extend((1..=2).map(FxAssign));
@@ -370,6 +378,9 @@ impl Control {
             BrowserScroll => ("scroll", None),
             BrowserTreeScroll => ("tree_scroll", None),
             BrowserToggleNode => ("toggle_node", None),
+            Record => ("record", None),
+            StemVolume(n) => ("stem_volume", Some(n)),
+            StemMute(n) => ("stem_mute", Some(n)),
             RemixCell(n) => ("remix_cell", Some(n)),
             RemixPad(n) => ("remix_pad", Some(n)),
             RemixPadDelete(n) => ("remix_pad_delete", Some(n)),

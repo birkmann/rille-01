@@ -5,7 +5,7 @@
 <p align="center"><b>dj software for linux</b> · four decks, remix decks, beat-locked sync<br>
 <a href="#installing">Install</a> · <a href="#using-it">Manual</a></p>
 
-![rille with two decks in sync](website/assets/img/rille-2-decks.png)
+![rille with four decks in sync: three track decks and a remix deck](website/assets/img/rille-4-decks.png)
 
 rille (German for the groove in a record) is a native Linux DJ application:
 four decks, remix decks, a mixer with FX, a music library and MIDI/HID
@@ -31,8 +31,17 @@ automatically and precisely enough that sync never drifts.**
   Half/double-time tracks sync at their natural tempo.
 - **Decks:** play, CUE / CUP, 8 hotcues (cue or loop), auto loops 1/32–32
   beats, loop in/out, beatjump, flux mode, reverse, keylock (high-quality time
-  stretching), key shift, tempo fader (±2–100 %), pitch bend, scratching on the
+  stretching), key shift (a KEY knob on each mixer channel, turned on under
+  Settings → Audio), tempo fader (±2–100 %), pitch bend, scratching on the
   waveform or a jog wheel, quantize and snap.
+- **Stems:** **STEMS** on a deck splits its track into drums, bass, other and
+  vocals, each with a level and a mute (also from a controller). The
+  separation runs in the background with Meta's HTDemucs model (downloaded
+  once under Settings → Decks & Analysis → Stems), takes a few minutes per
+  track, and is kept for the next time the track is loaded.
+- **Recording:** **REC** in the title bar records the main mix to a 24-bit
+  WAV in your music folder's `rille recordings`, with a cue sheet (`.cue`)
+  of the tracks played.
 - **Remix decks:** any deck can be one (Settings → Decks). Four slots of 16
   sample cells each — loops and one-shots, loaded from the library or captured
   from a playing track deck's loop — started in time with the deck (quantized
@@ -59,8 +68,9 @@ automatically and precisely enough that sync never drifts.**
 - **Controllers:** MIDI mappings (bundled: Pioneer DDJ-400, Hercules DJControl
   Inpulse 200, Allen & Heath Xone:K2 as a 4-deck controller, and a documented
   generic template), the Native Instruments Traktor Kontrol Z1, X1 MK2 and F1
-  (remix decks, RGB pads) over HID, MIDI learn, soft takeover, jog wheels, LED
-  feedback, hotplug.
+  (remix decks, RGB pads, segment displays) over HID, MIDI learn, soft
+  takeover, jog wheels, LED feedback, hotplug. A HID controller is described
+  in its mapping file, so others can be added without changing the code.
 - **Audio:** PipeWire natively, JACK, or ALSA. Headphone cue on outputs 3/4 of
   a 4-channel interface, or split mono on 2 channels. External mixer mode for
   hardware mixers such as the Allen & Heath Xone:96: every deck on its own
@@ -96,7 +106,11 @@ rille
 ```
 
 Other options: `packaging/arch/PKGBUILD` (`makepkg -si` in that folder),
-`packaging/flatpak/io.github.birkmann.rille.yml`, `packaging/appimage/build-appimage.sh`.
+`packaging/flatpak/io.github.birkmann.rille.yml` (KDE 6.11 runtime),
+`packaging/appimage/build-appimage.sh`. The release workflow
+(`.github/workflows/release.yml`) builds the Flatpak bundle and the AppImage
+and attaches them to the GitHub release of every `v*` tag; it can also be
+started by hand from the Actions tab.
 
 ## Using it
 
@@ -142,11 +156,16 @@ use **MIDI LEARN** (click a control on screen, then move the control on the
 hardware). Learned mappings are saved in `~/.config/rille/mappings`. The mapping
 you choose for a device is remembered for the next time it is plugged in.
 
+A mapping that names its controller's factory MIDI channel (`channel = 15`
+in the Xone:K2's file) gets a channel setting under the controller in
+Settings → Controllers, for a controller set to another channel.
+
 Some mappings come in several deck orders. The Xone:K2 drives decks C A B D
 from left to right by default, so the middle columns are decks A and B;
 choose "Allen & Heath Xone:K2 (ABCD)" for A B C D. A mapping file offers this
 with `deck_layouts = ["CABD", "ABCD"]`, see `mappings/allen-heath-xone-k2.toml`.
 The Z1 and X1 MK2 drive decks A and B, or C and D with their "(CD)" mapping.
+The X1 MK2's displays show each deck's loop size.
 The F1 drives remix deck C (or D, A, B with its other mappings): the pads play
 the cells of the visible page (the encoder turns pages), faders and knobs are
 the slot volumes and filters, the buttons below them stop the slots. Hold
@@ -161,7 +180,9 @@ VOL knobs are analog and act on those outputs directly.
 
 **External mixer (Allen & Heath Xone:96):** connect USB 1 (or USB 2) and set
 the mixer's channels 1-4 to that USB input. When no output device is chosen
-(or any of the Xone:96's is), rille plays through the Xone:96, and with
+(or any of the Xone:96's is), rille plays through the Xone:96 (it recognizes
+the card by "Xone:96" in its name; under another name, choose it as the output
+device and set Mixing to External), and with
 Settings → Audio → Mixing on Automatic every deck goes to its own channel:
 C A B D on channels 1-4 by default (outputs 1/2, 3/4, 5/6, 7/8), or A B C D
 under "Mixer channels". The Xone:96 then does the faders, EQ, filters,
@@ -171,7 +192,7 @@ first deck assigned to them. The on-screen fader, crossfader and headphone
 controls are hidden, and each channel shows the mixer channel it feeds.
 Under PipeWire switch the Xone:96's card to the "Pro Audio" profile
 (pavucontrol → Configuration): its stereo profile only reaches channel 1.
-The Xone:96's MIDI (channel 16, sent while the MIDI 1/2 switch is lit) moves
+The Xone:96's MIDI (channel 16 by default, sent while the MIDI 1/2 switch is lit) moves
 rille's faders and crossfader, which only matters for "Dim with fader". A
 Xone:K2 on its X:LINK port works through the Xone:96's USB MIDI with the
 K2 mapping included in `mappings/allen-heath-xone-96.toml` (a mapping file
@@ -180,8 +201,13 @@ can pull in another with `include = ["…"]`).
 The Traktor Kontrol Z1, X1 MK2 and F1 speak HID rather than MIDI. rille reads them
 directly and presents them as MIDI (`crates/rille-midi/src/hid.rs`), so their
 mapping files, MIDI learn and soft takeover work like any other controller's.
+The report layout of a HID controller is the `[hid]` table of its mapping file
+(byte offsets of knobs, buttons, encoders, touch strip, LEDs, RGB pads and
+segment displays); a mapping with such a table makes rille look for that
+device, so a new HID controller needs a mapping file, not a new build. See the
+three Traktor files in `mappings/` and the field list in `hid.rs`.
 Opening them needs a udev rule, which the Arch package installs; otherwise
-install it once:
+install it once (a new HID controller needs its own line in the rule):
 
     sudo install -m644 packaging/udev/70-rille-controllers.rules /etc/udev/rules.d/
     sudo udevadm control --reload && sudo udevadm trigger
@@ -191,8 +217,10 @@ streaming subscription; lossless FLAC needs Professional). The browser's
 **Beatport** section then searches the catalog from the search box (a pasted
 beatport.com link to a track, release, chart, playlist, label, artist or genre
 lists its tracks), shows your Beatport playlists and the tracks you streamed
-before. Loading a track downloads it first (the deck shows the progress) and
-keeps it in `~/.cache/rille/beatport`, up to the cache size set in the
+before. A loaded track starts playing once its first seconds have arrived and
+keeps downloading while it plays (the deck shows how far; should playback
+catch up, the deck waits with "Buffering…"). The file is kept in
+`~/.cache/rille/beatport`, up to the cache size set in the
 settings; cues, beatgrid edits and analysis are kept like for any other track,
 also when the file has to be downloaded again. rille keeps the sign-in tokens
 in `~/.local/share/rille/beatport-token.json`, never the password.
@@ -212,10 +240,11 @@ everything in one folder instead (portable setups, tests).
 | `rille-engine` | Audio engine: decks, beat-locked sync, keylock, mixer, cpal backends |
 | `rille-library` | SQLite collection, scanning, tags, covers, playlists, history, NML import |
 | `rille-midi` | MIDI mappings, learn, soft takeover, jog, LED feedback, devices |
-| `rille-beatport` | Beatport sign-in, catalog search and lists, track downloads |
+| `rille-beatport` | Beatport sign-in, catalog search and lists, track downloads (readable while they download) |
+| `rille-stems` | Stem separation with HTDemucs on the CPU (tract) |
 | `rille-app` | Application core without UI: loading, background analysis, persistence |
 | `rille-ui` | Qt Quick interface and the `rille` binary |
-| `rille-cli` | The `rille-cli` developer tool: `analyze`, `eval`, `gridplot`, `click`, `play`, `chroma-dump` |
+| `rille-cli` | The `rille-cli` developer tool: `analyze`, `eval`, `gridplot`, `click`, `play`, `chroma-dump`, `downbeat-dump` |
 
 The audio thread never allocates, locks or waits: commands arrive through a
 lock-free queue, state goes out through a triple buffer, and memory it no longer
@@ -237,28 +266,35 @@ rille-cli play song.mp3 10             # engine on the real audio device
 RILLE_TIMING=1 RILLE_DEBUG_OBS=1 rille-cli analyze song.mp3   # analysis internals
 RILLE_DEBUG_DOWNBEAT=1 RILLE_DEBUG_BARS=1 rille-cli analyze song.mp3   # bar start evidence
 rille-cli beatport login <user>        # then: search <text>, list <url>, playlists, fetch <id> <dir>
+RILLE_STEM_MODEL=htdemucs.onnx cargo test --release -p rille-stems -p rille-app -- --ignored   # stems with the real model
 ```
 
 ## Limitations
 
-- No stem separation or recording yet. HID controllers other than the
-  Traktor Kontrol Z1, X1 MK2 and F1 are not supported.
-- The bar start is found from the track's section changes (drops,
-  breakdowns); on loop-based music without them, and when the kick comes back
-  a beat early, it can be off by a beat. Such tracks are marked "check bar
-  start"; fix them with BAR START in the grid editor.
+- Stems need the HTDemucs model, downloaded once (316 MB; Meta released its
+  weights for research use only, so they are not part of rille), and a few
+  minutes of CPU time per track. There is no GPU path.
+- The bar start comes from the track's section changes (drops, breakdowns),
+  helped by a model of what bar 1 sounds like (fitted on tracks whose section
+  changes agree). On loop-based music without section changes it can still
+  be off by a beat. Such tracks are marked "check bar start"; fix them with
+  BAR START in the grid editor.
 - The bundled DDJ-400, Inpulse 200, Xone:K2, Z1, X1 MK2, F1 and AMX mappings
   were converted from Mixxx or community mappings and have not all been
   tested on the hardware; the tempo fader direction may need `invert = true`.
-  The Xone:K2 must stay on its factory MIDI channel 15. The X1 MK2's segment
-  displays are not driven. Xone:96 support follows its user guide and has not
-  been tested on the hardware either; the PipeWire device name is assumed to
-  contain "Xone:96", and the mixer must stay on MIDI channel 16.
-- Flatpak and AppImage builds need network access to build and have not been
-  run yet; there are no prebuilt packages.
-- Beatport: a streamed track plays once it is fully downloaded (some seconds
-  for a lossless file), not while it downloads. The sign-in uses Beatport's
-  own web client, as beatportdl does, not an official partner integration.
+  The X1 MK2's display layout comes from a community script and has not been
+  checked on a device. Xone:96 support follows its user guide and has not
+  been tested on the hardware either. Other HID controllers need a mapping
+  file with their report layout.
+- The Flatpak and AppImage are built by the release workflow on GitHub,
+  which has not run yet; until the first `v*` tag there are no prebuilt
+  packages. A local Flatpak build needs network access for its runtime and
+  crates.
+- Recording takes the internal main mix; with external mixing, record on the
+  hardware mixer. A recording stops when the audio output changes.
+- Beatport: AAC files whose index sits at the end of the file only play once
+  that part has arrived. The sign-in uses Beatport's own web client, as
+  beatportdl does, not an official partner integration.
 
 ## Website and brand
 

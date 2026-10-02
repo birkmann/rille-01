@@ -1,6 +1,7 @@
 //! Data passed between the app and the audio thread.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use rille_core::{BeatGrid, ControlEvent, CueKind};
 
@@ -29,6 +30,26 @@ impl std::fmt::Debug for TrackAudio {
 impl TrackAudio {
     pub fn duration_secs(&self) -> f64 {
         self.frames.len() as f64 / f64::from(self.sample_rate.max(1))
+    }
+}
+
+/// Stems of a track, in the order of the stem controls: drums, bass, other
+/// (everything else), vocals.
+pub const STEMS: usize = 4;
+pub const STEM_NAMES: [&str; STEMS] = ["Drums", "Bass", "Other", "Vocals"];
+
+/// Drums, bass and vocals of a track as 16-bit stereo, interleaved per frame
+/// (drums L R, bass L R, vocals L R), at the track's sample rate and length.
+/// The other stem is the track minus these three, so the stems add up to the
+/// track exactly.
+pub struct StemAudio {
+    pub sample_rate: u32,
+    pub frames: Vec<[i16; 6]>,
+}
+
+impl std::fmt::Debug for StemAudio {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "StemAudio({} frames at {} Hz)", self.frames.len(), self.sample_rate)
     }
 }
 
@@ -124,6 +145,56 @@ pub enum Command {
         cell: u8,
         sample: Option<RemixSample>,
     },
+    /// Start recording the main mix into `Some` recorder, or stop.
+    Record(Option<Box<Recorder>>),
+    /// Stems for the track on `deck` (`None` removes them). They must match
+    /// the track's sample rate and length, or they are dropped.
+    SetStems {
+        deck: u8,
+        track_id: u64,
+        stems: Option<Arc<StemAudio>>,
+    },
+    /// More of a track that is still arriving (streamed while it downloads):
+    /// `audio` starts like the deck's track and is longer. `length_secs` is
+    /// the whole track's length while more is to come, `None` once `audio`
+    /// is all of it. Until then the deck waits at the end of what it has
+    /// instead of ending the track. Sent right after [`Command::Load`] with
+    /// the same audio, it marks the loaded track as still arriving.
+    ExtendTrack {
+        deck: u8,
+        track_id: u64,
+        audio: Arc<TrackAudio>,
+        length_secs: Option<f64>,
+    },
+}
+
+/// Where the audio thread copies every rendered block of the main mix while
+/// recording. Frames that do not fit (the reader fell behind) are left out
+/// and counted in `dropped`.
+pub struct Recorder {
+    pub frames: rtrb::Producer<[f32; 2]>,
+    pub dropped: Arc<AtomicU64>,
+}
+
+impl Recorder {
+    /// A recorder and the consumer to read its frames from; `capacity` frames
+    /// can wait to be read.
+    pub fn new(capacity: usize) -> (Box<Recorder>, rtrb::Consumer<[f32; 2]>, Arc<AtomicU64>) {
+        let (frames, consumer) = rtrb::RingBuffer::new(capacity);
+        let dropped = Arc::new(AtomicU64::new(0));
+        (Box::new(Recorder { frames, dropped: dropped.clone() }), consumer, dropped)
+    }
+
+    /// Copies `block` (never blocks, never allocates).
+    pub fn push(&mut self, block: &[[f32; 2]]) {
+        let n = block.len().min(self.frames.slots());
+        if let Ok(chunk) = self.frames.write_chunk_uninit(n) {
+            chunk.fill_from_iter(block.iter().copied());
+        }
+        if n < block.len() {
+            self.dropped.fetch_add((block.len() - n) as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 /// Things the app must know about, e.g. to persist cue points.
@@ -143,4 +214,6 @@ pub(crate) enum Garbage {
     Grid(Arc<BeatGrid>),
     Remix(Box<RemixDeck>),
     Sample(RemixSample),
+    Recorder(Box<Recorder>),
+    Stems(Arc<StemAudio>),
 }

@@ -20,7 +20,7 @@ use rille_dsp::{FxCtx, FxUnit, PeakLimiter, PeakMeter, SincTable, SoftClip, flus
 use crate::deck::{Deck, Modes, RenderCtx, filter_roll_beats};
 use crate::mixer::{Strip, crossfader_gain};
 use crate::snapshot::{ChannelState, DeckState, FxState, Snapshot};
-use crate::types::{Command, Event, FX_UNITS, Garbage, LOOP_SIZES, MAX_DECKS, Settings};
+use crate::types::{Command, Event, FX_UNITS, Garbage, LOOP_SIZES, MAX_DECKS, Recorder, Settings};
 
 /// Phase errors are corrected over roughly this time.
 const PHASE_CORRECTION_SECS: f64 = 0.08;
@@ -78,6 +78,7 @@ pub struct Engine {
     frames: u64,
     started: Instant,
     cpu_load: f32,
+    recorder: Option<Box<Recorder>>,
 }
 
 pub(crate) struct Channels {
@@ -143,6 +144,7 @@ impl Engine {
             frames: 0,
             started: Instant::now(),
             cpu_load: 0.0,
+            recorder: None,
         }
     }
 
@@ -213,6 +215,9 @@ impl Engine {
         self.drain_commands();
         self.render_decks(n);
         self.mix(n);
+        if let Some(r) = self.recorder.as_mut() {
+            r.push(&self.master[..n]);
+        }
         self.frames += n as u64;
         let block_secs = n as f64 / self.sr;
         let load = (t0.elapsed().as_secs_f64() / block_secs) as f32;
@@ -279,6 +284,21 @@ impl Engine {
                     };
                     if let Some(s) = old {
                         let _ = self.garbage.push(Garbage::Sample(s));
+                    }
+                }
+                Command::SetStems { deck, track_id, stems } => {
+                    let d = usize::from(deck).min(MAX_DECKS - 1);
+                    let mut garbage = |g| drop(self.garbage.push(g));
+                    self.decks[d].set_stems(track_id, stems, &mut garbage);
+                }
+                Command::ExtendTrack { deck, track_id, audio, length_secs } => {
+                    let d = usize::from(deck).min(MAX_DECKS - 1);
+                    let mut garbage = |g| drop(self.garbage.push(g));
+                    self.decks[d].extend(track_id, audio, length_secs, &mut garbage);
+                }
+                Command::Record(recorder) => {
+                    if let Some(old) = std::mem::replace(&mut self.recorder, recorder) {
+                        let _ = self.garbage.push(Garbage::Recorder(old));
                     }
                 }
             }
@@ -880,6 +900,11 @@ impl Engine {
                 speed: d.speed,
                 cue_held: d.cue_held(),
                 end_warning: d.playing && d.track.is_some() && d.duration() - pos < 30.0,
+                arrived_secs: d.arrived_secs(),
+                buffering: d.buffering,
+                stems: d.stems.is_some(),
+                stem_volume: d.stem_volume,
+                stem_mute: d.stem_mute,
             };
             snap.channels[i] = ChannelState {
                 gain: s.gain,

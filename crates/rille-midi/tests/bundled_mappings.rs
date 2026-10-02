@@ -32,6 +32,8 @@ fn all_bundled_mappings_load() {
                 assert!(seen.insert((k, b.condition.clone())), "{}: {k:?} used twice", path.display());
             }
         }
+        // MIDI learn saves a copy; it must read back the same.
+        assert_eq!(Mapping::from_toml(&m.to_toml()).as_ref(), Ok(&m), "{}", path.display());
         // Smoke: the engine accepts the mapping.
         let mut engine = MappingEngine::new(m);
         let mut out = Vec::new();
@@ -51,11 +53,20 @@ fn all_bundled_mappings_load() {
     assert_eq!(store.find("Traktor Kontrol X1 MK2 HID").unwrap().name, "Traktor Kontrol X1 MK2 (AB)");
     assert!(store.find("Traktor Kontrol X1 MK2 MIDI 1 24:0").is_none(), "MIDI mode is a different device");
     assert_eq!(store.find("Traktor Kontrol F1 HID (1A2B3C4D)").unwrap().name, "Traktor Kontrol F1 (C)");
+    // One HID layout per device, from the mapping files; each mapping's
+    // device pattern matches the port name its layout gives.
+    let hid: Vec<String> = store.hid_layouts().iter().map(|l| l.name.clone()).collect();
+    assert_eq!(hid, ["Traktor Kontrol F1", "Traktor Kontrol X1 MK2", "Traktor Kontrol Z1"]);
+    for l in store.hid_layouts() {
+        let m = store.find(&format!("{} HID (SERIAL)", l.name)).unwrap();
+        assert_eq!(m.hid.as_ref().map(|h| &h.name), Some(&l.name));
+    }
 }
 
 /// HID reports through the translator and the mapping: the targets pressed
 /// or moved, in order.
-fn hid_targets(m: &Mapping, layout: &'static rille_midi::hid::HidLayout, reports: &[Vec<u8>]) -> Vec<String> {
+fn hid_targets(m: &Mapping, reports: &[Vec<u8>]) -> Vec<String> {
+    let layout = std::sync::Arc::new(m.hid.clone().expect("a HID mapping"));
     let mut hid = rille_midi::hid::HidTranslator::new(layout);
     let mut engine = MappingEngine::new(m.clone());
     let (mut msgs, mut out, values) = (Vec::new(), Vec::new(), ValueMap::default());
@@ -72,7 +83,6 @@ fn hid_targets(m: &Mapping, layout: &'static rille_midi::hid::HidLayout, reports
 
 #[test]
 fn traktor_hid_controllers() {
-    use rille_midi::hid::{TRAKTOR_KONTROL_X1_MK2, TRAKTOR_KONTROL_Z1};
     let store = MappingStore::load(&[bundled_dir()]);
     let x1 = |r: &[(usize, u8)]| {
         let mut v = vec![0u8; 0x1F];
@@ -85,10 +95,10 @@ fn traktor_hid_controllers() {
     let ab = store.by_name("Traktor Kontrol X1 MK2 (AB)").unwrap();
     let cd = store.by_name("Traktor Kontrol X1 MK2 (CD)").unwrap();
     let moved = |t: &Vec<String>| t.iter().filter(|t| !t.starts_with("fx.")).cloned().collect::<Vec<_>>();
-    assert_eq!(moved(&hid_targets(ab, &TRAKTOR_KONTROL_X1_MK2, &reports)), ["deck.A.play", "deck.B.hotcue_delete.1"]);
-    assert_eq!(moved(&hid_targets(cd, &TRAKTOR_KONTROL_X1_MK2, &reports)), ["deck.C.play", "deck.D.hotcue_delete.1"]);
+    assert_eq!(moved(&hid_targets(ab, &reports)), ["deck.A.play", "deck.B.hotcue_delete.1"]);
+    assert_eq!(moved(&hid_targets(cd, &reports)), ["deck.C.play", "deck.D.hotcue_delete.1"]);
     // The left deck encoder turning clockwise doubles the loop.
-    let enc = hid_targets(ab, &TRAKTOR_KONTROL_X1_MK2, &[x1(&[(0x11, 0x05)]), x1(&[(0x11, 0x06)])]);
+    let enc = hid_targets(ab, &[x1(&[(0x11, 0x05)]), x1(&[(0x11, 0x06)])]);
     assert!(enc.ends_with(&["deck.A.loop_double".to_string()]), "{enc:?}");
 
     // Z1: MODE (bit 1) held turns FX 1 (bit 2) into play for deck A.
@@ -101,7 +111,7 @@ fn traktor_hid_controllers() {
         v
     };
     let z1_map = store.by_name("Traktor Kontrol Z1 (AB)").unwrap();
-    let targets = hid_targets(z1_map, &TRAKTOR_KONTROL_Z1, &[z1(&[], 0), z1(&[], 0x02), z1(&[(11, 4095)], 0x06)]);
+    let targets = hid_targets(z1_map, &[z1(&[], 0), z1(&[], 0x02), z1(&[(11, 4095)], 0x06)]);
     assert!(targets.contains(&"deck.A.play".to_string()), "{targets:?}");
     assert!(!targets.contains(&"deck.A.fx_assign.1".to_string()), "{targets:?}");
 
@@ -112,7 +122,7 @@ fn traktor_hid_controllers() {
     values.set(rille_core::ControlTarget::deck(1, rille_core::Control::Meter), 1.0);
     let (mut fb, mut msgs) = (rille_midi::FeedbackState::new(), Vec::new());
     fb.collect(z1_map, &values, &mut msgs);
-    let mut hid = rille_midi::hid::HidTranslator::new(&TRAKTOR_KONTROL_Z1);
+    let mut hid = rille_midi::hid::HidTranslator::new(std::sync::Arc::new(z1_map.hid.clone().unwrap()));
     msgs.iter().for_each(|m| hid.output(*m));
     let mut report = Vec::new();
     hid.flush(|r| report = r.to_vec());
@@ -254,7 +264,6 @@ fn akai_amx() {
 fn traktor_kontrol_f1() {
     use rille_core::remix::led_code;
     use rille_core::{Control, ControlTarget};
-    use rille_midi::hid::TRAKTOR_KONTROL_F1;
     let store = MappingStore::load(&[bundled_dir()]);
     let c = store.by_name("Traktor Kontrol F1 (C)").unwrap();
     let a = store.by_name("Traktor Kontrol F1 (A)").unwrap();
@@ -276,7 +285,7 @@ fn traktor_kontrol_f1() {
     ];
     // The first report sets every slot filter and volume (no soft takeover:
     // the F1's knobs and faders are where the slots are).
-    let all = hid_targets(c, &TRAKTOR_KONTROL_F1, &reports);
+    let all = hid_targets(c, &reports);
     let (slots, rest): (Vec<_>, Vec<_>) =
         all.iter().cloned().partition(|t| t.contains("remix_filter") || t.contains("remix_volume"));
     for s in 1..=4 {
@@ -285,10 +294,10 @@ fn traktor_kontrol_f1() {
         );
     }
     assert_eq!(rest, ["deck.C.remix_pad.1", "deck.C.remix_pad_delete.16", "deck.C.tempo"]);
-    let first_pad = hid_targets(a, &TRAKTOR_KONTROL_F1, &reports[..2]);
+    let first_pad = hid_targets(a, &reports[..2]);
     assert_eq!(first_pad.last().map(String::as_str), Some("deck.A.remix_pad.1"));
     // The encoder alone pages back across the wrap; STOP 1 (byte 4 bit 7) stops slot 1.
-    let turn: Vec<String> = hid_targets(c, &TRAKTOR_KONTROL_F1, &[f1(&[(5, 2)]), f1(&[(5, 255), (4, 0x80)])])
+    let turn: Vec<String> = hid_targets(c, &[f1(&[(5, 2)]), f1(&[(5, 255), (4, 0x80)])])
         .into_iter()
         .filter(|t| !t.contains("remix_filter") && !t.contains("remix_volume"))
         .collect();
@@ -303,7 +312,7 @@ fn traktor_kontrol_f1() {
     values.set(deck(Control::Sync), 1.0);
     let (mut fb, mut msgs) = (rille_midi::FeedbackState::new(), Vec::new());
     fb.collect(c, &values, &mut msgs);
-    let mut hid = rille_midi::hid::HidTranslator::new(&TRAKTOR_KONTROL_F1);
+    let mut hid = rille_midi::hid::HidTranslator::new(std::sync::Arc::new(c.hid.clone().unwrap()));
     msgs.iter().for_each(|m| hid.output(*m));
     let mut r = Vec::new();
     hid.flush(|report| r = report.to_vec());
@@ -315,4 +324,23 @@ fn traktor_kontrol_f1() {
     assert!(r[10..=16].iter().all(|&b| b == 0), "no leading zero");
     assert_eq!(r[73..=80], [10, 10, 10, 10, 10, 10, 127, 127], "STOP 4..1");
     assert_eq!((r[23], r[24]), (10, 127), "QUANT dim, SYNC on");
+}
+
+#[test]
+fn xone_channels_follow_the_settings() {
+    let (k2, x96) = ("Allen & Heath Xone:K2", "Allen & Heath Xone:96");
+    let store = MappingStore::load(&[bundled_dir()]);
+    let factory = [(x96.to_owned(), 16), (k2.to_owned(), 15)];
+    assert_eq!(store.channels("Allen & Heath Xone:96 (CABD)"), factory);
+    // A K2 on channel 14 behind the Xone:96: its notes move, the mixer's
+    // faders stay on 16.
+    let channels = std::collections::BTreeMap::from([(k2.to_owned(), 14)]);
+    let store = MappingStore::load_with_channels(&[bundled_dir()], &channels);
+    let m = store.by_name("Allen & Heath Xone:96 (CABD)").unwrap();
+    assert_eq!(store.channels(&m.name), [(x96.to_owned(), 16), (k2.to_owned(), 14)]);
+    let on_14 = events(m, &[[0x9d, 40, 127], [0xbf, 0, 127]]);
+    assert_eq!(on_14, ["deck.C.play=down", "deck.C.volume=1.000"]);
+    assert!(presses(m, &[40]).is_empty(), "channel 15 is no longer the K2's");
+    let alone = store.by_name("Allen & Heath Xone:K2 (CABD)").unwrap();
+    assert_eq!(events(alone, &[[0x9d, 40, 127]]), ["deck.C.play=down"]);
 }

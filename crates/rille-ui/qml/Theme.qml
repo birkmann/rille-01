@@ -53,7 +53,7 @@ QtObject {
     readonly property int deckRowHeight4: 520
     readonly property int stripHeight: 34
     readonly property int mixerWidth: 272
-    readonly property int mixerWidth4: 328
+    readonly property int mixerWidth4: 296
 
     // Geist and Geist Mono are bundled (SIL OFL); every weight registers
     // under the same family, picked by font.weight.

@@ -13,11 +13,13 @@ pub struct Paths {
     pub config: PathBuf,
     pub data: PathBuf,
     pub cache: PathBuf,
+    /// Recordings of the main mix (created on the first recording).
+    pub recordings: PathBuf,
 }
 
 impl Paths {
     /// XDG locations: `~/.config/rille`, `~/.local/share/rille`,
-    /// `~/.cache/rille`.
+    /// `~/.cache/rille`; recordings in the music folder's `rille recordings`.
     pub fn xdg() -> Self {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
         let xdg = |var: &str, fallback: &str| {
@@ -27,16 +29,28 @@ impl Paths {
                 .unwrap_or_else(|| home.join(fallback));
             base.join(APP_DIR)
         };
+        let config = xdg("XDG_CONFIG_HOME", ".config");
+        let user_dirs = config.parent().map(|c| c.join("user-dirs.dirs"));
+        let music = user_dirs
+            .and_then(|f| std::fs::read_to_string(f).ok())
+            .and_then(|text| xdg_user_dir(&text, "XDG_MUSIC_DIR", &home))
+            .unwrap_or_else(|| home.join("Music"));
         Self {
-            config: xdg("XDG_CONFIG_HOME", ".config"),
+            config,
             data: xdg("XDG_DATA_HOME", ".local/share"),
             cache: xdg("XDG_CACHE_HOME", ".cache"),
+            recordings: music.join("rille recordings"),
         }
     }
 
     /// Everything under one directory (tests, portable installs).
     pub fn under(root: &Path) -> Self {
-        Self { config: root.join("config"), data: root.join("data"), cache: root.join("cache") }
+        Self {
+            config: root.join("config"),
+            data: root.join("data"),
+            cache: root.join("cache"),
+            recordings: root.join("recordings"),
+        }
     }
 
     pub fn create(&self) -> std::io::Result<()> {
@@ -54,6 +68,23 @@ impl Paths {
         self.data.join("library.db")
     }
 
+    /// Moves the library database (with its WAL files) aside to
+    /// `library.db.reset-<unix secs>.bak`, so the next start begins with an
+    /// empty library. Music files are not touched. Returns the backup.
+    pub fn set_library_aside(&self) -> std::io::Result<PathBuf> {
+        let db = self.library_db();
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let backup = self.data.join(format!("library.db.reset-{secs}.bak"));
+        std::fs::rename(&db, &backup)?;
+        for suffix in ["-wal", "-shm"] {
+            let side = PathBuf::from(format!("{}{suffix}", db.display()));
+            if side.exists() {
+                std::fs::rename(&side, format!("{}{suffix}", backup.display()))?;
+            }
+        }
+        Ok(backup)
+    }
+
     pub fn user_mappings(&self) -> PathBuf {
         self.config.join("mappings")
     }
@@ -67,6 +98,18 @@ impl Paths {
     pub fn beatport_token(&self) -> PathBuf {
         self.data.join("beatport-token.json")
     }
+}
+
+/// A folder from `user-dirs.dirs` (lines like `XDG_MUSIC_DIR="$HOME/Music"`);
+/// `None` when it is missing or the home folder itself.
+fn xdg_user_dir(text: &str, key: &str, home: &Path) -> Option<PathBuf> {
+    let value = text.lines().find_map(|l| l.trim().strip_prefix(key)?.trim_start().strip_prefix('='))?;
+    let value = value.trim().trim_matches('"');
+    let path = match value.strip_prefix("$HOME") {
+        Some(rest) => home.join(rest.trim_start_matches('/')),
+        None => PathBuf::from(value),
+    };
+    (path.is_absolute() && path != home).then_some(path)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -192,10 +235,25 @@ pub struct Settings {
     /// The on-screen mixer and crossfader; off leaves the room to the decks
     /// when a controller has the knobs and faders.
     pub show_mixer: bool,
+    /// A KEY (key shift) knob on each mixer channel.
+    pub mixer_key: bool,
+    /// Refuse to load a track onto a deck that is on air: playing with its
+    /// channel fader at `load_lock_level` or above and the crossfader not
+    /// cutting it.
+    pub load_lock: bool,
+    /// Channel fader position (`0..1`) from which a playing deck counts as
+    /// on air.
+    pub load_lock_level: f32,
+    /// Letters of the decks the load lock protects, e.g. "ABCD".
+    pub load_lock_decks: String,
     /// Mapping chosen per MIDI device (port name without the ALSA
     /// `client:port` numbers); an empty name means no mapping. Other devices
     /// get the first mapping whose device pattern matches.
     pub midi_mappings: BTreeMap<String, String>,
+    /// MIDI channel (`1..=16`) per controller whose mapping names its
+    /// factory channel (by mapping name as written in its file), for a
+    /// controller set to another channel.
+    pub midi_channels: BTreeMap<String, u8>,
     /// The browser's track columns as JSON (`[{"key":…,"width":…}]` in
     /// display order); empty = the default layout.
     pub browser_columns: String,
@@ -213,6 +271,9 @@ pub struct Settings {
     /// Streamed tracks kept on disk, in megabytes; the least recently
     /// played go first, never those downloaded for offline use.
     pub beatport_cache_mb: u32,
+    /// Separated stems kept on disk, in megabytes (a 6-minute track takes
+    /// about 190); the least recently used go first.
+    pub stems_cache_mb: u32,
 }
 
 impl Default for Settings {
@@ -243,13 +304,19 @@ impl Default for Settings {
             analysis_paused: false,
             header_meter: false,
             show_mixer: true,
+            mixer_key: false,
+            load_lock: false,
+            load_lock_level: 0.5,
+            load_lock_decks: "ABCD".into(),
             midi_mappings: BTreeMap::new(),
+            midi_channels: BTreeMap::new(),
             browser_columns: String::new(),
             browser_row_size: 0,
             browser_sidebar_width: 250,
             suggestions: false,
             beatport_quality: "lossless".into(),
             beatport_cache_mb: 20 * 1024,
+            stems_cache_mb: 10 * 1024,
         }
     }
 }
@@ -292,6 +359,30 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn music_folder_from_user_dirs() {
+        let home = Path::new("/home/u");
+        let text = "# comment\nXDG_DESKTOP_DIR=\"$HOME/Desktop\"\nXDG_MUSIC_DIR=\"$HOME/Musik\"\n";
+        assert_eq!(xdg_user_dir(text, "XDG_MUSIC_DIR", home), Some(PathBuf::from("/home/u/Musik")));
+        assert_eq!(xdg_user_dir("XDG_MUSIC_DIR=\"/data/music\"", "XDG_MUSIC_DIR", home), Some("/data/music".into()));
+        assert_eq!(xdg_user_dir("XDG_MUSIC_DIR=\"$HOME/\"", "XDG_MUSIC_DIR", home), None);
+        assert_eq!(xdg_user_dir(text, "XDG_VIDEOS_DIR", home), None);
+    }
+
+    #[test]
+    fn library_set_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        paths.create().unwrap();
+        std::fs::write(paths.library_db(), "db").unwrap();
+        std::fs::write(paths.data.join("library.db-wal"), "wal").unwrap();
+        let backup = paths.set_library_aside().unwrap();
+        assert!(!paths.library_db().exists());
+        assert!(!paths.data.join("library.db-wal").exists());
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "db");
+        assert_eq!(std::fs::read_to_string(format!("{}-wal", backup.display())).unwrap(), "wal");
+    }
 
     #[test]
     fn roundtrip_and_defaults() {

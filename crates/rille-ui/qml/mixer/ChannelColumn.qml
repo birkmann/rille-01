@@ -3,9 +3,10 @@ import QtQuick.Layouts
 import rille.ui
 
 // One channel of the 4-channel mixer in a single column: deck letter,
-// GAIN and KEY side by side, the 3-band EQ and filter, FX assign and
-// headphone cue, then the channel fader beside its level meter. The knobs
-// shrink on short windows so the fader keeps its travel.
+// GAIN (and KEY beside it when turned on in the settings), the 3-band EQ
+// and filter, FX assign and headphone cue, then the channel fader beside
+// its level meter. The knobs shrink on short windows so the fader keeps
+// its travel.
 Item {
     id: strip
     required property DeckController dc
@@ -38,7 +39,7 @@ Item {
             Layout.alignment: Qt.AlignHCenter
             spacing: 0
             Knob { size: strip.knobSize - 8; label: "GAIN"; value: strip.dc.gain; target: strip.t("gain"); bipolar: true; format: Theme.gainText }
-            Knob { size: strip.knobSize - 8; label: "KEY"; value: strip.dc.keyShift / 24 + 0.5; target: strip.t("key_shift"); bipolar: true; color: Theme.fx; format: Theme.keyShiftText }
+            Knob { visible: AppController.mixerKey; size: strip.knobSize - 8; label: "KEY"; value: strip.dc.keyShift / 24 + 0.5; target: strip.t("key_shift"); bipolar: true; color: Theme.fx; format: Theme.keyShiftText }
         }
         Knob { Layout.alignment: Qt.AlignHCenter; size: strip.knobSize; label: "HI"; value: strip.dc.eqHi; target: strip.t("eq_hi"); bipolar: true; color: Theme.eqColor(value); format: Theme.eqText }
         Knob { Layout.alignment: Qt.AlignHCenter; size: strip.knobSize; label: "MID"; value: strip.dc.eqMid; target: strip.t("eq_mid"); bipolar: true; color: Theme.eqColor(value); format: Theme.eqText }
@@ -46,10 +47,10 @@ Item {
         Knob { Layout.alignment: Qt.AlignHCenter; size: strip.knobSize; label: "FILTER"; value: strip.dc.filter; target: strip.t("filter"); bipolar: true; color: Theme.warn; format: Theme.filterText }
         RowLayout {
             Layout.alignment: Qt.AlignHCenter
-            spacing: 2
-            DjButton { text: "1"; target: strip.t("fx_assign.1"); lit: strip.dc.fx1; litColor: Theme.fx; implicitWidth: 22; implicitHeight: 22 }
-            DjButton { text: "2"; target: strip.t("fx_assign.2"); lit: strip.dc.fx2; litColor: Theme.fx; implicitWidth: 22; implicitHeight: 22 }
-            DjButton { visible: !strip.external; icon: "headphones"; target: strip.t("pfl"); lit: strip.dc.pfl; litColor: Theme.warn; implicitWidth: 26; implicitHeight: 22 }
+            spacing: 1
+            DjButton { text: "1"; target: strip.t("fx_assign.1"); lit: strip.dc.fx1; litColor: Theme.fx; implicitWidth: 20; implicitHeight: 22 }
+            DjButton { text: "2"; target: strip.t("fx_assign.2"); lit: strip.dc.fx2; litColor: Theme.fx; implicitWidth: 20; implicitHeight: 22 }
+            DjButton { visible: !strip.external; icon: "headphones"; target: strip.t("pfl"); lit: strip.dc.pfl; litColor: Theme.warn; implicitWidth: 23; implicitHeight: 22 }
         }
         RowLayout {
             Layout.alignment: Qt.AlignHCenter

@@ -6,7 +6,75 @@
 use rille_dsp::{SincTable, cubic_hermite};
 use signalsmith_stretch::Stretch;
 
-use crate::types::TrackAudio;
+use crate::types::{StemAudio, TrackAudio};
+
+/// The audio a voice reads: a track, or a track with its stems at their own
+/// levels ([`StemMix`]).
+pub(crate) trait Source {
+    fn len(&self) -> usize;
+    /// Frame `i` (`< len`).
+    fn frame(&self, i: usize) -> [f32; 2];
+    /// A slice that holds frames `lo..hi` (clipped to the source), and the
+    /// source index of the slice's first frame.
+    fn window(&mut self, lo: usize, hi: usize) -> (&[[f32; 2]], usize);
+}
+
+impl Source for &TrackAudio {
+    fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    fn frame(&self, i: usize) -> [f32; 2] {
+        self.frames[i]
+    }
+
+    fn window(&mut self, _lo: usize, _hi: usize) -> (&[[f32; 2]], usize) {
+        (&self.frames, 0)
+    }
+}
+
+/// A track with its stems at `gains` (drums, bass, other, vocals; 1 =
+/// unchanged), mixed on the fly into `scratch` for the frames a block reads.
+pub(crate) struct StemMix<'a> {
+    pub track: &'a TrackAudio,
+    pub stems: &'a StemAudio,
+    pub gains: [f32; 4],
+    pub scratch: &'a mut [[f32; 2]],
+}
+
+/// The mixed frame: the track at the other stem's gain, plus each stored
+/// stem at the difference to it.
+fn mix_frame(track: &TrackAudio, stems: &StemAudio, gains: &[f32; 4], i: usize) -> [f32; 2] {
+    const SCALE: f32 = 1.0 / 32768.0;
+    let (t, s) = (track.frames[i], stems.frames.get(i).copied().unwrap_or_default());
+    let [drums, bass, other, vocals] = *gains;
+    let (d, b, v) = ((drums - other) * SCALE, (bass - other) * SCALE, (vocals - other) * SCALE);
+    let ch = |c: usize| t[c] * other + d * f32::from(s[c]) + b * f32::from(s[2 + c]) + v * f32::from(s[4 + c]);
+    [ch(0), ch(1)]
+}
+
+impl Source for StemMix<'_> {
+    fn len(&self) -> usize {
+        self.track.frames.len()
+    }
+
+    fn frame(&self, i: usize) -> [f32; 2] {
+        mix_frame(self.track, self.stems, &self.gains, i)
+    }
+
+    fn window(&mut self, lo: usize, hi: usize) -> (&[[f32; 2]], usize) {
+        let hi = hi.min(self.len()).min(lo + self.scratch.len());
+        let lo = lo.min(hi);
+        for (k, out) in self.scratch[..hi - lo].iter_mut().enumerate() {
+            *out = mix_frame(self.track, self.stems, &self.gains, lo + k);
+        }
+        (&self.scratch[..hi - lo], lo)
+    }
+}
+
+/// Source frames the sinc interpolator reads on either side of a position
+/// (at its lowest cutoff).
+pub(crate) const READ_REACH: usize = 130;
 
 pub(crate) struct Voice {
     /// Sinc path: source frame of the next output frame. Stretch path: next
@@ -124,7 +192,7 @@ impl Voice {
     /// before the jump and runs for one output latency with the output
     /// discarded. A seek alone would leave its output fading in over ~50 ms,
     /// swallowing an attack right at the target (a hotcue on a kick).
-    pub fn jump(&mut self, audio: &TrackAudio, target: f64, speed: f64, stretch: bool) {
+    pub fn jump(&mut self, audio: &mut impl Source, target: f64, speed: f64, stretch: bool) {
         self.last_speed = speed;
         self.carry = 0.0;
         self.hist_len = 0;
@@ -158,7 +226,7 @@ impl Voice {
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
-        audio: &TrackAudio,
+        audio: &mut impl Source,
         out: &mut [[f32; 2]],
         speed: f64,
         stretch: bool,
@@ -190,9 +258,15 @@ impl Voice {
                 self.stretching = false;
             }
             let cutoff = SincTable::cutoff_for_ratio(speed);
+            // The frames this block reads, and where they start.
+            let last = self.pos + speed * n.saturating_sub(1) as f64;
+            let lo = (self.pos.min(last).floor() - READ_REACH as f64).max(0.0) as usize;
+            let hi = (self.pos.max(last).ceil() + READ_REACH as f64).max(0.0) as usize + 1;
+            let (frames, base) = audio.window(lo, hi);
+            let base = base as f64;
             for (i, o) in out.iter_mut().enumerate() {
-                let p = self.pos + speed * i as f64;
-                *o = if cubic { cubic_hermite(&audio.frames, p) } else { sinc.sample(&audio.frames, p, cutoff) };
+                let p = self.pos + speed * i as f64 - base;
+                *o = if cubic { cubic_hermite(frames, p) } else { sinc.sample(frames, p, cutoff) };
             }
             self.pos += speed * n as f64;
         }
@@ -202,14 +276,14 @@ impl Voice {
 
 /// Copies frames `[start, start + dst.len()/2)` interleaved; silence outside
 /// the track, or the track repeated every `wrap` frames.
-fn read_frames(audio: &TrackAudio, start: i64, dst: &mut [f32], wrap: Option<usize>) {
-    let len = audio.frames.len() as i64;
+fn read_frames(audio: &impl Source, start: i64, dst: &mut [f32], wrap: Option<usize>) {
+    let len = audio.len() as i64;
     for (i, d) in dst.chunks_exact_mut(2).enumerate() {
         let mut idx = start + i as i64;
         if let Some(w) = wrap {
             idx = idx.rem_euclid(w as i64);
         }
-        let f = if idx >= 0 && idx < len { audio.frames[idx as usize] } else { [0.0, 0.0] };
+        let f = if idx >= 0 && idx < len { audio.frame(idx as usize) } else { [0.0, 0.0] };
         d[0] = f[0];
         d[1] = f[1];
     }
@@ -230,12 +304,12 @@ mod tests {
         let sinc = SincTable::new(32, 256);
         for back in [0usize, 48, 480, 4800] {
             let mut v = Voice::new(SR, 256);
-            v.jump(&audio, (24_000 - back) as f64, 1.0, true);
+            v.jump(&mut &audio, (24_000 - back) as f64, 1.0, true);
             assert!((v.audible() - (24_000 - back) as f64).abs() < 1.0, "{}", v.audible());
             let mut out = vec![[0.0f32; 2]; 256];
             let mut all = Vec::new();
             for _ in 0..30 {
-                v.render(&audio, &mut out, 1.0, true, 1.0, &sinc, false);
+                v.render(&mut &audio, &mut out, 1.0, true, 1.0, &sinc, false);
                 all.extend(out.iter().map(|f| f[0]));
             }
             let onset = all.iter().position(|v| v.abs() > 0.5);
@@ -247,11 +321,11 @@ mod tests {
     fn wrapped_stream_repeats_the_source() {
         let audio = TrackAudio { sample_rate: 48_000, frames: (0..10).map(|i| [i as f32, 0.0]).collect() };
         let mut dst = vec![0.0f32; 2 * 25];
-        read_frames(&audio, -3, &mut dst, Some(10));
+        read_frames(&&audio, -3, &mut dst, Some(10));
         let got: Vec<f32> = dst.chunks(2).map(|f| f[0]).collect();
         assert_eq!(&got[..5], &[7.0, 8.0, 9.0, 0.0, 1.0]);
         assert_eq!(got[24], 1.0);
-        read_frames(&audio, 8, &mut dst[..8], None);
+        read_frames(&&audio, 8, &mut dst[..8], None);
         assert_eq!(dst[..8], [8.0, 0.0, 9.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
     }
 }

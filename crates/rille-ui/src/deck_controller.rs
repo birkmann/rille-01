@@ -64,6 +64,13 @@ pub mod qobject {
         #[qproperty(bool, grid_locked, cxx_name = "gridLocked")]
         #[qproperty(bool, has_grid, cxx_name = "hasGrid")]
         #[qproperty(bool, end_warning, cxx_name = "endWarning")]
+        /// A streamed track playing while the rest downloads: how far it is
+        /// ("Downloading 40 %"), or "Buffering…" while it waits for it.
+        #[qproperty(QString, stream_text, cxx_name = "streamText")]
+        #[qproperty(bool, buffering)]
+        /// Stems: `{"state": "none|waiting|model|separating|ready|failed",
+        /// "progress": 0..1, "error": "", "volume": [4], "mute": [4]}`.
+        #[qproperty(QString, stems_json, cxx_name = "stemsJson")]
         #[qproperty(f64, key_shift, cxx_name = "keyShift")]
         #[qproperty(f64, gain)]
         #[qproperty(f64, eq_hi, cxx_name = "eqHi")]
@@ -159,6 +166,7 @@ use core::pin::Pin;
 use cxx_qt::CxxQtType;
 
 use cxx_qt_lib::{QString, QUrl};
+use rille_app::stems::DeckStems;
 use rille_core::remix::{CELLS, COLORS};
 use rille_core::{BeatClock, GridFlags};
 use rille_engine::{LOOP_SIZES, REMIX_QUANT_SIZES};
@@ -212,6 +220,9 @@ pub struct DeckControllerRust {
     grid_locked: bool,
     has_grid: bool,
     end_warning: bool,
+    stream_text: QString,
+    buffering: bool,
+    stems_json: QString,
     key_shift: f64,
     gain: f64,
     eq_hi: f64,
@@ -404,6 +415,34 @@ impl qobject::DeckController {
         self.as_mut().set_phase_error(s.phase_error);
         self.as_mut().set_beat(s.beat);
         self.as_mut().set_end_warning(s.end_warning);
+        let stream = match (s.buffering, info.download.filter(|_| !info.loading)) {
+            (true, _) => "Buffering…".to_owned(),
+            (false, Some(d)) => format!("Downloading {} %", (d.fraction * 100.0).floor() as i32),
+            (false, None) => String::new(),
+        };
+        if *self.stream_text() != QString::from(&stream) {
+            self.as_mut().set_stream_text(QString::from(stream));
+        }
+        self.as_mut().set_buffering(s.buffering);
+        let (state, progress, error) = match &info.stems {
+            DeckStems::None => ("none", 0.0, String::new()),
+            DeckStems::Waiting => ("waiting", 0.0, String::new()),
+            DeckStems::LoadingModel => ("model", 0.0, String::new()),
+            DeckStems::Separating(p) => ("separating", *p, String::new()),
+            DeckStems::Ready if s.stems => ("ready", 1.0, String::new()),
+            DeckStems::Ready => ("none", 0.0, String::new()),
+            DeckStems::Failed(e) => ("failed", 0.0, e.clone()),
+        };
+        let list = |v: &[String]| v.join(",");
+        let stems = format!(
+            r#"{{"state":"{state}","progress":{progress:.3},"error":{},"volume":[{}],"mute":[{}]}}"#,
+            json_str(&error),
+            list(&s.stem_volume.map(|v| format!("{v:.4}"))),
+            list(&s.stem_mute.map(|m| m.to_string()))
+        );
+        if *self.stems_json() != QString::from(&stems) {
+            self.as_mut().set_stems_json(QString::from(stems));
+        }
         self.as_mut().set_key_shift(f64::from(s.key_shift));
         self.as_mut().set_gain(f64::from(ch.gain));
         self.as_mut().set_eq_hi(f64::from(ch.eq[2]));

@@ -29,12 +29,14 @@ Popup {
     ]
     // "12 tracks · 480 MB" in the Beatport cache.
     property string cacheText: ""
+    property var stemModel: ({ state: "missing", progress: 0, error: "", notice: "" })
 
     function reload() {
         s = JSON.parse(AppController.settingsJson())
         devices = JSON.parse(AppController.audioDevicesJson())
         midi = JSON.parse(AppController.midiJson())
         cacheText = AppController.beatportCacheText()
+        stemModel = JSON.parse(AppController.stemModelJson())
     }
     function set(name, value) {
         AppController.setSetting(name, String(value))
@@ -47,6 +49,10 @@ Popup {
         function onMidiRevisionChanged() {
             if (dialog.opened)
                 dialog.midi = JSON.parse(AppController.midiJson())
+        }
+        function onStemsRevisionChanged() {
+            if (dialog.opened)
+                dialog.stemModel = JSON.parse(AppController.stemModelJson())
         }
     }
 
@@ -185,6 +191,11 @@ Popup {
                                 ToggleSwitch { checked: dialog.s.show_mixer !== false; onToggled: dialog.set("show_mixer", checked) }
                             }
                             SettingRow {
+                                label: "Key knob on the mixer"
+                                hint: "A KEY knob on each channel that transposes the deck in semitones; the tempo stays."
+                                ToggleSwitch { checked: !!dialog.s.mixer_key; onToggled: dialog.set("mixer_key", checked) }
+                            }
+                            SettingRow {
                                 label: "Buffer size"
                                 hint: "Smaller is more direct, larger is safer against dropouts."
                                 StyledCombo {
@@ -301,6 +312,48 @@ Popup {
                             }
                         }
                         SettingsSection {
+                            title: "Load lock"
+                            SettingRow {
+                                label: "Protect decks on air"
+                                hint: "No track loads onto a deck that is playing with its channel fader up (and not cut by the crossfader), so a wrong load cannot stop what the room hears. With an external mixer the faders are unknown: every playing deck counts as on air."
+                                ToggleSwitch { checked: !!dialog.s.load_lock; onToggled: dialog.set("load_lock", checked) }
+                            }
+                            SettingRow {
+                                label: "Fader threshold"
+                                hint: "A playing deck is on air from this channel fader position up."
+                                enabled: !!dialog.s.load_lock
+                                StyledCombo {
+                                    id: lockCombo
+                                    readonly property var values: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+                                    width: 140
+                                    model: lockCombo.values.map(v => Math.round(v * 100) + " %")
+                                    currentIndex: Math.max(0, Math.min(9, Math.round((dialog.s.load_lock_level || 0.5) * 10) - 1))
+                                    onActivated: idx => dialog.set("load_lock_level", lockCombo.values[idx])
+                                }
+                            }
+                            SettingRow {
+                                label: "Protected decks"
+                                enabled: !!dialog.s.load_lock
+                                Row {
+                                    spacing: 4
+                                    Repeater {
+                                        model: dialog.s.deck_count === 4 ? ["A", "B", "C", "D"] : ["A", "B"]
+                                        DjButton {
+                                            required property string modelData
+                                            readonly property string decks: dialog.s.load_lock_decks || ""
+                                            text: modelData
+                                            implicitWidth: 34
+                                            implicitHeight: 26
+                                            lit: decks.indexOf(modelData) >= 0
+                                            litColor: Theme.sync
+                                            tip: "Deck " + modelData + (lit ? " is protected" : " always loads")
+                                            onClicked: dialog.set("load_lock_decks", lit ? decks.replace(modelData, "") : decks + modelData)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        SettingsSection {
                             title: "Analysis"
                             SettingRow {
                                 label: "Analyze in the background"
@@ -315,6 +368,35 @@ Popup {
                                     StyledSpin { from: 40; to: 200; value: Math.round(dialog.s.bpm_min || 88); onValueModified: dialog.set("bpm_min", value) }
                                     UiText { text: "to"; color: Theme.textDim }
                                     StyledSpin { from: 60; to: 300; value: Math.round(dialog.s.bpm_max || 175); onValueModified: dialog.set("bpm_max", value) }
+                                }
+                            }
+                        }
+                        SettingsSection {
+                            title: "Stems"
+                            SettingRow {
+                                label: "Separation model"
+                                hint: dialog.stemModel.notice + (dialog.stemModel.state === "failed" ? "\n" + dialog.stemModel.error : "")
+                                    + "\nWith the model, STEMS on a deck splits its track into drums, bass, other and vocals (a few minutes per track, in the background)."
+                                DjButton {
+                                    visible: dialog.stemModel.state === "missing" || dialog.stemModel.state === "failed"
+                                    icon: "import"
+                                    text: "DOWNLOAD"
+                                    onClicked: AppController.downloadStemModel()
+                                }
+                                UiText {
+                                    visible: dialog.stemModel.state === "downloading" || dialog.stemModel.state === "ready"
+                                    text: dialog.stemModel.state === "ready" ? "Installed" : "Downloading " + Math.floor(dialog.stemModel.progress * 100) + " %"
+                                    color: dialog.stemModel.state === "ready" ? Theme.sync : Theme.textDim
+                                }
+                            }
+                            SettingRow {
+                                label: "Storage limit"
+                                hint: "Separated stems are kept, so a track's stems are there at once next time (about 190 MB for a 6-minute track). When the limit is reached, the least recently used go first."
+                                StyledSpin {
+                                    from: 1; to: 500
+                                    suffix: "GB"
+                                    value: Math.max(1, Math.round((dialog.s.stems_cache_mb || 10240) / 1024))
+                                    onValueModified: dialog.set("stems_cache_mb", value * 1024)
                                 }
                             }
                         }
@@ -490,29 +572,64 @@ Popup {
                                 Rectangle {
                                     id: portRow
                                     required property string modelData
-                                    readonly property string current: {
+                                    readonly property var entry: {
                                         for (var i = 0; i < dialog.midi.connected.length; i++)
                                             if (dialog.midi.connected[i].port === portRow.modelData)
-                                                return dialog.midi.connected[i].mapping || ""
-                                        return ""
+                                                return dialog.midi.connected[i]
+                                        return null
                                     }
+                                    readonly property string current: entry ? entry.mapping || "" : ""
+                                    // The MIDI channel of the mapping's controller (and of
+                                    // one on its X:LINK), for a controller moved off its
+                                    // factory channel.
+                                    readonly property var channels: entry && entry.channels ? entry.channels : []
                                     Layout.fillWidth: true
-                                    implicitHeight: 42
+                                    implicitHeight: portColumn.implicitHeight
                                     radius: 4
                                     color: Theme.bg
                                     border.color: Theme.panelEdge
-                                    RowLayout {
-                                        anchors.fill: parent
-                                        anchors.leftMargin: 10
-                                        anchors.rightMargin: 6
-                                        spacing: 8
-                                        Rectangle { implicitWidth: 8; implicitHeight: 8; radius: 4; color: portRow.current.length ? Theme.play : Theme.textFaint }
-                                        UiText { Layout.fillWidth: true; text: portRow.modelData; elide: Text.ElideRight; font.bold: true }
-                                        StyledCombo {
-                                            Layout.preferredWidth: 280
-                                            model: ["No mapping"].concat(dialog.midi.mappings)
-                                            currentIndex: portRow.current.length ? Math.max(0, dialog.midi.mappings.indexOf(portRow.current) + 1) : 0
-                                            onActivated: idx => AppController.setPortMapping(portRow.modelData, idx === 0 ? "" : dialog.midi.mappings[idx - 1])
+                                    ColumnLayout {
+                                        id: portColumn
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        spacing: 0
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 42
+                                            Layout.leftMargin: 10
+                                            Layout.rightMargin: 6
+                                            spacing: 8
+                                            Rectangle { implicitWidth: 8; implicitHeight: 8; radius: 4; color: portRow.current.length ? Theme.play : Theme.textFaint }
+                                            UiText { Layout.fillWidth: true; text: portRow.modelData; elide: Text.ElideRight; font.bold: true }
+                                            StyledCombo {
+                                                Layout.preferredWidth: 280
+                                                model: ["No mapping"].concat(dialog.midi.mappings)
+                                                currentIndex: portRow.current.length ? Math.max(0, dialog.midi.mappings.indexOf(portRow.current) + 1) : 0
+                                                onActivated: idx => AppController.setPortMapping(portRow.modelData, idx === 0 ? "" : dialog.midi.mappings[idx - 1])
+                                            }
+                                        }
+                                        Repeater {
+                                            model: portRow.channels
+                                            RowLayout {
+                                                id: channelRow
+                                                required property var modelData
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: 36
+                                                Layout.leftMargin: 26
+                                                Layout.rightMargin: 6
+                                                spacing: 8
+                                                UiText {
+                                                    Layout.fillWidth: true
+                                                    text: channelRow.modelData.name + " MIDI channel"
+                                                    color: Theme.textDim
+                                                    elide: Text.ElideRight
+                                                }
+                                                StyledSpin {
+                                                    from: 1; to: 16
+                                                    value: channelRow.modelData.channel
+                                                    onValueModified: AppController.setMappingChannel(channelRow.modelData.name, value)
+                                                }
+                                            }
                                         }
                                     }
                                 }

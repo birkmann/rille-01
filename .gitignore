@@ -12,3 +12,4 @@
 /flatpak-cargo-generator.py
 *.AppImage
 *.flatpak
+*.dmg

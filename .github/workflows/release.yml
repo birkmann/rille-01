@@ -1,7 +1,8 @@
 name: Release
 
-# Builds the Flatpak bundle and the AppImage. On a version tag (v*) both are
-# attached to a GitHub release; a manual run keeps them as workflow artifacts.
+# Builds the Flatpak bundle, the AppImage and the macOS disk image. On a
+# version tag (v*) all three are attached to a GitHub release; a manual run
+# keeps them as workflow artifacts.
 on:
   push:
     tags: ['v*']
@@ -58,9 +59,29 @@ jobs:
           name: rille-x86_64.AppImage
           path: rille-*.AppImage
 
+  macos:
+    # Apple silicon. Qt's own macOS build (not Homebrew's) runs on macOS 12+.
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build app and disk image
+        run: ./packaging/macos/build-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rille-macos-arm64.dmg
+          path: target/macos/rille-macos-*.dmg
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [flatpak, appimage]
+    needs: [flatpak, appimage, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -75,4 +96,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --title "rille ${GITHUB_REF_NAME#v}" --generate-notes \
-            dist/*.flatpak dist/*.AppImage
+            dist/*.flatpak dist/*.AppImage dist/*.dmg

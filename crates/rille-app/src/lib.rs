@@ -418,13 +418,24 @@ impl App {
         // Stop the old stream first so the device is free.
         *self.audio_runner.lock().expect("audio lock") = None;
         let cfg = AudioConfig { device: s.audio_device.clone(), buffer_frames: s.buffer_frames };
-        let (handle, status, runner) = audio::start(&cfg, device);
+        let app = Arc::downgrade(self);
+        let (handle, status, runner) = audio::start(&cfg, device, move |status| {
+            if let Some(app) = app.upgrade() {
+                app.audio_device_changed(status);
+            }
+        });
         self.engine.set(Some(handle));
         *self.audio_status.write().expect("audio status lock") = status.clone();
         *self.audio_runner.lock().expect("audio lock") = Some(runner);
         self.send_engine_settings();
-        if let Some(err) = status.error {
-            self.notify(UiEvent::Status(format!("Audio output unavailable ({err}); running silent")));
+        match (status.error, status.waiting_for) {
+            (Some(err), Some(device)) => self.notify(UiEvent::Status(format!(
+                "Audio output unavailable ({err}); running silent until {device} is connected"
+            ))),
+            (Some(err), None) => {
+                self.notify(UiEvent::Status(format!("Audio output unavailable ({err}); running silent")))
+            }
+            (None, _) => {}
         }
         // A new engine starts empty: reload whatever the decks held.
         for d in 0..MAX_DECKS as u8 {
@@ -435,6 +446,20 @@ impl App {
                 self.load_track(d, id);
             }
         }
+        self.notify(UiEvent::AudioChanged);
+    }
+
+    /// The audio device went away or came back. The engine (and what the
+    /// decks play) carries on either way.
+    fn audio_device_changed(&self, status: AudioStatus) {
+        let message = match (&status.waiting_for, &status.error) {
+            (Some(device), _) => format!("Audio output lost: {device}. The decks play on; waiting for it to come back"),
+            (None, None) => format!("Audio output back: {}", status.device),
+            (None, Some(e)) => format!("Audio output: {e}"),
+        };
+        *self.audio_status.write().expect("audio status lock") = status;
+        self.send_engine_settings();
+        self.notify(UiEvent::Status(message));
         self.notify(UiEvent::AudioChanged);
     }
 
@@ -1747,13 +1772,14 @@ impl App {
                 }
             })
             .expect("spawn midi dispatch");
-        // Hotplug.
+        // Hotplug: a controller unplugged and plugged in again carries on
+        // within a second.
         let app = Arc::downgrade(self);
         std::thread::Builder::new()
             .name("midi-hotplug".into())
             .spawn(move || {
                 loop {
-                    std::thread::sleep(Duration::from_secs(2));
+                    std::thread::sleep(Duration::from_secs(1));
                     let Some(app) = app.upgrade() else { break };
                     if app.shutdown.load(Ordering::Relaxed) {
                         break;

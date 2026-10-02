@@ -575,6 +575,8 @@ fn lock(s: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
 pub struct HidLink {
     shared: Arc<Mutex<Shared>>,
     stop: Arc<AtomicBool>,
+    /// Cleared when reading fails: the device went away.
+    alive: Arc<AtomicBool>,
 }
 
 #[cfg(target_os = "linux")]
@@ -595,7 +597,8 @@ impl HidLink {
         let shared = Arc::new(Mutex::new(Shared { translator, writer }));
         lock(&shared).flush();
         let stop = Arc::new(AtomicBool::new(false));
-        let (thread_shared, thread_stop) = (shared.clone(), stop.clone());
+        let alive = Arc::new(AtomicBool::new(true));
+        let (thread_shared, thread_stop, thread_alive) = (shared.clone(), stop.clone(), alive.clone());
         std::thread::Builder::new()
             .name(format!("hid {}", port.layout.name))
             .spawn(move || {
@@ -604,7 +607,10 @@ impl HidLink {
                     let n = match reader.read_timeout(&mut buf, 100) {
                         Ok(0) => continue,
                         Ok(n) => n,
-                        Err(_) => break,
+                        Err(_) => {
+                            thread_alive.store(false, Ordering::Relaxed);
+                            break;
+                        }
                     };
                     msgs.clear();
                     {
@@ -616,7 +622,13 @@ impl HidLink {
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Self { shared, stop })
+        Ok(Self { shared, stop, alive })
+    }
+
+    /// False once the device went away (unplugged); it may come back under
+    /// the same name, to be opened again.
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Relaxed)
     }
 
     /// Sends LED messages.
@@ -652,6 +664,10 @@ impl HidLink {
     }
 
     pub fn send(&self, _msgs: &[[u8; 3]]) {}
+
+    pub fn is_alive(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

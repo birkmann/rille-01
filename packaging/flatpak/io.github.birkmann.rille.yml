@@ -21,8 +21,8 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri
-  # Audio through PipeWire (and its JACK/ALSA layers).
-  - --socket=pipewire
+  # Audio through PipeWire (and its JACK/ALSA layers). Not --socket=pipewire:
+  # older flatpak versions, including the one that builds the bundle, reject it.
   - --filesystem=xdg-run/pipewire-0
   # MIDI controllers (ALSA sequencer, raw MIDI) and HID controllers
   # (/dev/hidraw*; the host still needs packaging/udev/70-rille-controllers.rules).

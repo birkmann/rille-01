@@ -42,9 +42,13 @@ Item {
         readonly property real ring: width / 2 - stroke / 2
         readonly property real body: width / 2 - stroke - 3
 
+        // The geometry renderer, smoothed by multisampling: Qt 6.8's curve
+        // renderer keeps a ring's first path when the knob is resized before
+        // the window's first frame (the mixer columns), drawing it off-centre.
         Shape {
             anchors.fill: parent
-            preferredRendererType: Shape.CurveRenderer
+            layer.enabled: true
+            layer.samples: 4
             // Track of the ring.
             ShapePath {
                 strokeColor: Theme.knobTrack

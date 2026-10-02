@@ -4,8 +4,9 @@
 # Allen-and-Heath-Xone-K2-scripts.js, Mixxx 2.x, GPL-2.0-or-later; author Be).
 # The functions are laid out for rille: all four columns are decks.
 #
-# The K2 must be on its factory MIDI channel 15 with latching layers off
-# (both are the defaults). Every note and CC below is on channel 15.
+# Every note and CC below is on the K2's factory MIDI channel 15; for a K2
+# set to another channel, pick it in Settings -> Controllers. Latching layers
+# must be off (the default).
 #
 # DECK ORDER. Columns are written left to right as decks A B C D; the
 # `deck_layouts` line decides which app deck each column drives. The mapping
@@ -58,6 +59,7 @@ name = "Allen & Heath Xone:K2"
 device = '(?i)xone:?\s*k2'
 description = "Allen & Heath Xone:K2 as a 4-deck controller (MIDI channel 15)"
 deck_layouts = ["CABD", "ABCD"]
+channel = 15
 
 # Modifiers
 [[input]]

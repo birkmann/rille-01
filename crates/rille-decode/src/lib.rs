@@ -6,6 +6,7 @@
 
 use std::fmt;
 use std::fs::File;
+use std::io::{Read, Seek};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -13,7 +14,7 @@ use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 
 /// Fully decoded track: interleaved stereo frames.
@@ -69,9 +70,59 @@ pub fn decode_file(
     progress: &mut dyn FnMut(f32),
 ) -> Result<DecodedAudio, DecodeError> {
     let file = File::open(path)?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let ext = path.extension().and_then(|e| e.to_str());
+    decode_source(Box::new(file), ext, cancel, progress, &mut |_| {})
+}
+
+/// Decodes from `reader` (`ext` is the file type's extension), such as a
+/// file that is still downloading: reads may block until their bytes are
+/// there. `on_frames` sees the audio decoded so far after every packet.
+pub fn decode_reader<R: Read + Seek + Send + Sync + 'static>(
+    reader: R,
+    ext: Option<&str>,
+    cancel: Option<&AtomicBool>,
+    on_frames: &mut dyn FnMut(&DecodedAudio),
+) -> Result<DecodedAudio, DecodeError> {
+    decode_source(Box::new(Streaming(reader)), ext, cancel, &mut |_| {}, on_frames)
+}
+
+/// A seekable reader whose length is not told: the probe would otherwise
+/// read the end of the file first, for tags, and wait for all of it to
+/// download.
+struct Streaming<R>(R);
+
+impl<R: Read> Read for Streaming<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl<R: Seek> Seek for Streaming<R> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.0.seek(pos)
+    }
+}
+
+impl<R: Read + Seek + Send + Sync> MediaSource for Streaming<R> {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        None
+    }
+}
+
+fn decode_source(
+    source: Box<dyn MediaSource>,
+    ext: Option<&str>,
+    cancel: Option<&AtomicBool>,
+    progress: &mut dyn FnMut(f32),
+    on_frames: &mut dyn FnMut(&DecodedAudio),
+) -> Result<DecodedAudio, DecodeError> {
+    let mss = MediaSourceStream::new(source, Default::default());
     let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = ext {
         hint.with_extension(ext);
     }
 
@@ -131,6 +182,7 @@ pub fn decode_file(
             1 => [s[0], s[0]],
             _ => [s[0], s[1]],
         }));
+        on_frames(&out);
 
         if let Some(total) = total_frames.filter(|&t| t > 0) {
             let p = (out.frames.len() as f64 / total as f64).min(1.0) as f32;
@@ -201,6 +253,24 @@ mod tests {
         let m = decode_file(&mono, None, &mut |_| {}).unwrap();
         assert_eq!(m.frames.len(), 3);
         assert_eq!(m.frames[0][0], m.frames[0][1]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn decodes_from_a_reader_and_reports_progress() {
+        let dir = std::env::temp_dir().join(format!("rille-decode-reader-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.wav");
+        write_wav(&path, 44_100, 2, &vec![1000i16; 44_100 * 2]);
+        let bytes = std::fs::read(&path).unwrap();
+        let mut seen = Vec::new();
+        let a = decode_reader(std::io::Cursor::new(bytes), Some("wav"), None, &mut |so_far| {
+            seen.push(so_far.frames.len());
+        })
+        .unwrap();
+        assert_eq!(a.frames.len(), 44_100);
+        assert!(seen.len() > 1 && seen.windows(2).all(|w| w[0] < w[1]), "{seen:?}");
+        assert_eq!(seen.last(), Some(&44_100));
         std::fs::remove_dir_all(&dir).ok();
     }
 

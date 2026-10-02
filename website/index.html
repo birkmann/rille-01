@@ -88,6 +88,8 @@ try {
     <article><span class="idx">06</span><h3>FX</h3><p>Two FX units with three slots each. Delay, reverb, LFO filter, flanger, gater and beatmasher, all tempo-synced.</p></article>
     <article><span class="idx">07</span><h3>Library &amp; explorer</h3><p>Music folders, tags, cover art, search, ratings, colors, playlists, history and Traktor collection import.</p></article>
     <article><span class="idx">08</span><h3>Controllers</h3><p>MIDI and HID mappings with LED feedback, MIDI learn, soft takeover and hotplug. Settings are saved per device.</p></article>
+    <article><span class="idx">09</span><h3>Stems</h3><p>Each track can be split into drums, bass, other and vocals, each with its own level and mute. Separated stems are kept for the next time.</p></article>
+    <article><span class="idx">10</span><h3>Recording</h3><p>The main mix is recorded to a WAV file, with a cue sheet listing the tracks played.</p></article>
   </div>
 </section>
 
@@ -110,7 +112,7 @@ try {
     <figure class="shot">
       <picture>
         <source srcset="assets/img/rille-4-decks.webp" type="image/webp">
-        <img src="assets/img/rille-4-decks.png" width="1592" height="992" alt="rille with four decks: two decks stacked on each side of a four-channel mixer." loading="lazy">
+        <img src="assets/img/rille-4-decks.png" width="1592" height="992" alt="rille with four decks in sync: three track decks and a remix deck, stacked on each side of a four-channel mixer." loading="lazy">
       </picture>
     </figure>
     <div class="copy">
@@ -137,7 +139,7 @@ try {
   <ol class="steps" aria-label="How Beatport streaming works">
     <li><span class="idx">01</span><div><h3>Sign in</h3><p>Under Settings → Beatport. rille keeps the sign-in token, never your password.</p></div></li>
     <li><span class="idx">02</span><div><h3>Find</h3><p>Search from the browser's search box, paste a link, or open your playlists and the tracks you streamed before.</p></div></li>
-    <li><span class="idx">03</span><div><h3>Load</h3><p>The deck shows the download progress, and the track starts once it is complete, usually within a few seconds.</p></div></li>
+    <li><span class="idx">03</span><div><h3>Load</h3><p>The track plays as soon as its first seconds have arrived, while the rest downloads.</p></div></li>
     <li><span class="idx">04</span><div><h3>Mix</h3><p>Sync, key lock, hotcues and loops work as with your own files. Tracks stay in a local cache up to the size you set.</p></div></li>
   </ol>
   <p class="note split-note">Needs a Beatport streaming subscription; lossless FLAC needs the Professional plan. rille is an independent project, not a Beatport partner integration, and is not affiliated with or endorsed by Beatport.</p>
@@ -145,7 +147,7 @@ try {
 
 <section class="wrap section" id="controllers">
   <h2>Controllers</h2>
-  <p class="lead narrow">rille includes mappings for these controllers. Other MIDI controllers can be mapped with MIDI learn.</p>
+  <p class="lead narrow">rille includes mappings for these controllers. Other MIDI controllers can be mapped with MIDI learn; other HID controllers can be described in a mapping file.</p>
   <ul class="grid hardware">
     <li><span class="hw">Allen &amp; Heath Xone:K2</span><span class="proto">midi · 4 decks</span></li>
     <li><span class="hw">Allen &amp; Heath Xone:96</span><span class="proto">audio · external mixer</span></li>

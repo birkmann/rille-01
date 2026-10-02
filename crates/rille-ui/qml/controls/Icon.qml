@@ -22,6 +22,7 @@ Item {
         "chevron-down": "M6 9 L12 15 L18 9",
         "chevron-up": "M6 15 L12 9 L18 15",
         "columns": "M4 5 H20 V19 H4 Z M9.5 5 V19 M14.5 5 V19",
+        "rows": "M4 5 H20 V19 H4 Z M4 9.67 H20 M4 14.33 H20",
         "star-off": "M12 3 L14.8 8.8 L21 9.6 L16.5 14 L17.6 20.3 L12 17.3 L6.4 20.3 L7.5 14 L3 9.6 L9.2 8.8 Z",
         "chevron-left": "M15 6 L9 12 L15 18",
         "chevrons-left": "M11 6 L5 12 L11 18 M19 6 L13 12 L19 18",

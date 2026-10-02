@@ -7,6 +7,7 @@
 //! rille-cli click <out-dir> <files...>           track + metronome click WAV per file
 //! rille-cli eval <files or dirs...> [--mixxx <mixxxdb.sqlite>] [--bpm-range lo:hi]
 //! rille-cli audit <files or dirs...>             grid vs audio, independent of the analyzer
+//! rille-cli downbeat-dump <files or dirs...>     bar phase evidence as JSON lines (stdout)
 //! rille-cli beatport <command>                   Beatport sign-in, search, lists, downloads
 //! ```
 //! `eval` compares BPM and key with the files' tags and, when given, with a
@@ -62,6 +63,7 @@ fn main() {
         "eval" => eval::run(&files, &cfg, mixxx.as_deref()),
         "audit" => audit::run(&files, &cfg),
         "chroma-dump" => eval::chroma_dump(&files),
+        "downbeat-dump" => downbeat_dump(&files, &cfg),
         "play" => play(files.first().unwrap_or_else(|| usage()), seconds, buffer, &cfg),
         "synccheck" => {
             let (Some(a), Some(b)) = (files.first(), files.get(1)) else { usage() };
@@ -94,6 +96,26 @@ fn main() {
         }
         _ => usage(),
     }
+}
+
+/// One JSON line per track on stdout: the bar phase evidence and per-beat
+/// cues (see `GridReport::downbeat_dump`), for fitting the bar position
+/// model.
+fn downbeat_dump(files: &[PathBuf], cfg: &AnalysisConfig) {
+    // SAFETY: set before any other thread runs.
+    unsafe { std::env::set_var("RILLE_DOWNBEAT_DUMP", "1") };
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    files.par_iter().for_each(|path| {
+        let Ok((_, out)) = analyze_file(path, cfg, None) else { return };
+        let dump = &out.report.downbeat_dump;
+        if dump.len() > 1 {
+            println!("{{\"path\":{:?},{}", path.display().to_string(), &dump[1..]);
+        }
+        let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if n % 100 == 0 {
+            eprintln!("{n}/{}", files.len());
+        }
+    });
 }
 
 fn usage() -> ! {

@@ -1,0 +1,14 @@
+[package]
+name = "rille-stems"
+description = "Stem separation (drums, bass, other, vocals) with the HTDemucs model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rille-dsp = { path = "../rille-dsp" }
+tract-onnx = "0.23"
+
+[lints]
+workspace = true

@@ -3,3 +3,12 @@
 .qmlls.ini
 .vscode/
 .claude/worktrees/
+# Packaging outputs
+/packaging/appimage/tools/
+/packaging/appimage/AppDir/
+/packaging/flatpak/cargo-sources.json
+/packaging/flatpak/build/
+/packaging/flatpak/.flatpak-builder/
+/flatpak-cargo-generator.py
+*.AppImage
+*.flatpak

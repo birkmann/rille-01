@@ -379,7 +379,7 @@ impl App {
             .name(format!("remix-cell-{}", letter(deck)))
             .spawn(move || {
                 // A streamed track out of the cache downloads first.
-                match app.streamed_file(&row, None) {
+                match app.streamed_file(&row, None, None) {
                     Ok(p) => row.path = p,
                     Err(e) => {
                         app.notify(UiEvent::Status(format!("Cannot stream {}: {e}", row.title)));

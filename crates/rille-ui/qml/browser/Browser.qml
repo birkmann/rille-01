@@ -233,6 +233,19 @@ Item {
             tracks.loadRow(list.currentIndex, deck)
     }
 
+    // Page Up / Page Down: the current row moves by the rows in view, the
+    // list follows. `extend` (Shift) grows the selection like Up/Down.
+    function pageRows(dir, extend) {
+        if (list.count === 0)
+            return
+        var page = Math.max(1, Math.floor((list.height - 28) / rowHeight) - 1)
+        var from = list.currentIndex >= 0 ? list.currentIndex : (dir > 0 ? -1 : list.count)
+        var next = Math.max(0, Math.min(list.count - 1, from + dir * page))
+        list.currentIndex = next
+        tracks.select(next, extend ? 2 : 0)
+        list.forceActiveFocus()
+    }
+
     // The tree row of the open source again, after the tree changed (rows
     // added or removed above it); -1 when it is not shown.
     function syncSourceRow() {
@@ -623,26 +636,13 @@ Item {
                             tip: "Download for offline use: the tracks stay on this computer and play without a connection"
                             onClicked: tracks.downloadBeatport()
                         }
-                        // Row size: compact, medium, large.
-                        Row {
-                            spacing: 0
-                            Repeater {
-                                model: [
-                                    { text: "S", tip: "Compact rows" },
-                                    { text: "M", tip: "Taller rows with larger cover art" },
-                                    { text: "L", tip: "Large rows with big cover art" }
-                                ]
-                                DjButton {
-                                    required property int index
-                                    required property var modelData
-                                    flat: true
-                                    text: modelData.text
-                                    tip: modelData.tip
-                                    implicitWidth: 24
-                                    lit: browser.rowSize === index
-                                    onClicked: browser.setRowSize(index)
-                                }
-                            }
+                        // Row size: compact, medium, large. Click steps up, right-click back.
+                        DjButton {
+                            icon: "rows"
+                            text: ["S", "M", "L"][browser.rowSize] || "S"
+                            tip: "Row size: " + (["compact", "medium", "large"][browser.rowSize] || "compact") + ". Click for the next size, right-click for the previous"
+                            onClicked: browser.setRowSize((browser.rowSize + 1) % 3)
+                            onRightClicked: browser.setRowSize((browser.rowSize + 2) % 3)
                         }
                         DjButton {
                             icon: "columns"

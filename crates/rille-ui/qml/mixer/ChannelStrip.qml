@@ -2,10 +2,11 @@ import QtQuick
 import QtQuick.Layouts
 import rille.ui
 
-// One mixer channel: outer column gain, filter, FX assign, key and
-// headphone cue; the channel's level meter; inner column the 3-band EQ
-// above the channel fader. `mirrored` for the right-hand channel, so both
-// EQ/fader columns sit in the middle of the mixer.
+// One mixer channel: outer column gain, filter, FX assign, key (when
+// turned on in the settings) and headphone cue; the channel's level meter;
+// inner column the 3-band EQ above the channel fader. `mirrored` for the
+// right-hand channel, so both EQ/fader columns sit in the middle of the
+// mixer.
 Item {
     id: strip
     required property DeckController dc
@@ -58,6 +59,7 @@ Item {
             }
             UiText { Layout.alignment: Qt.AlignHCenter; text: "FX"; color: Theme.textDim; font.pixelSize: Theme.fontTiny; font.bold: true; font.family: Theme.fontCondensed }
             Knob {
+                visible: AppController.mixerKey
                 Layout.alignment: Qt.AlignHCenter
                 label: "KEY"
                 tip: "Key shift: transpose in semitones, the tempo stays"

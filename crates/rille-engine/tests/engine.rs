@@ -687,3 +687,112 @@ fn external_mixer_routes_decks_to_their_pairs() {
     let last = &out[(BLOCK - 1) * CH..];
     assert!(last[0] > 0.1 && last[4..].iter().all(|v| *v == 0.0), "{last:?}");
 }
+
+#[test]
+fn recorder_copies_the_main_mix_without_allocating() {
+    use std::sync::atomic::Ordering;
+    let (h, mut e) = create(SR, BLOCK);
+    load(&h, 0, 1, click_track(120.0, 0.0, 4.0, SR), 0.0);
+    press(&h, 0, Control::Play);
+    // Room for two blocks only: the third is dropped and counted.
+    let (recorder, mut frames, dropped) = rille_engine::Recorder::new(2 * BLOCK);
+    assert!(h.send(Command::Record(Some(recorder))).is_ok());
+    let out = run(&mut e, 3.0 * BLOCK as f64 / f64::from(SR));
+    assert_eq!(frames.slots(), 2 * BLOCK);
+    let chunk = frames.read_chunk(2 * BLOCK).unwrap();
+    let (a, b) = chunk.as_slices();
+    let recorded: Vec<[f32; 2]> = a.iter().chain(b).copied().collect();
+    chunk.commit_all();
+    assert_eq!(recorded, out[..2 * BLOCK]);
+    assert!(recorded.iter().any(|f| f[0] != 0.0), "the click is in the recording");
+    assert_eq!(dropped.load(Ordering::Relaxed), BLOCK as u64);
+    // Stopping hands the recorder back to be freed off the audio thread.
+    assert!(h.send(Command::Record(None)).is_ok());
+    run(&mut e, BLOCK as f64 / f64::from(SR));
+    assert!(!frames.is_abandoned(), "waiting in the garbage queue");
+    h.poll(|_| {});
+    assert!(frames.is_abandoned());
+}
+
+#[test]
+fn a_streaming_track_waits_for_the_rest() {
+    let (h, mut e) = create(SR, BLOCK);
+    let (full, grid) = click_track(120.0, 0.0, 4.0, SR);
+    let first = Arc::new(TrackAudio { sample_rate: SR, frames: full.frames[..2 * SR as usize].to_vec() });
+    load(&h, 0, 7, (first.clone(), grid), 0.0);
+    let streaming = Command::ExtendTrack { deck: 0, track_id: 7, audio: first, length_secs: Some(4.0) };
+    assert!(h.send(streaming).is_ok());
+    press(&h, 0, Control::Play);
+    run(&mut e, 3.0);
+    let mut events = Vec::new();
+    h.poll(|ev| events.push(ev));
+    let d = h.snapshot().decks[0];
+    assert!(d.playing && d.buffering, "waits at the end of what arrived");
+    assert!(events.is_empty(), "{events:?}");
+    assert_eq!((d.duration_secs, d.arrived_secs), (4.0, 2.0));
+    assert!(d.position_secs < 1.6 && d.position_secs > 1.4, "{}", d.position_secs);
+
+    // The rest arrives: playback goes on from where it waited, to the end.
+    let rest = Command::ExtendTrack { deck: 0, track_id: 7, audio: full, length_secs: None };
+    assert!(h.send(rest).is_ok());
+    let out = run(&mut e, 0.5);
+    assert!(out.iter().any(|f| f[0] != 0.0), "clicks again");
+    let d = h.snapshot().decks[0];
+    assert!(!d.buffering && d.position_secs > 1.9, "{}", d.position_secs);
+    run(&mut e, 2.5);
+    h.poll(|ev| events.push(ev));
+    assert!(matches!(events[..], [rille_engine::Event::TrackEnded { deck: 0, track_id: 7 }]), "{events:?}");
+    // An extension for a track no longer on the deck is dropped.
+    let stale = Arc::new(TrackAudio { sample_rate: SR, frames: vec![[0.0; 2]; 10] });
+    assert!(h.send(Command::ExtendTrack { deck: 0, track_id: 6, audio: stale, length_secs: None }).is_ok());
+    run(&mut e, 0.01);
+    assert_eq!(h.snapshot().decks[0].arrived_secs, 4.0);
+}
+
+#[test]
+fn stems_mute_and_level_parts_of_the_track() {
+    use rille_engine::StemAudio;
+    // The track: clicks (the drums) over a quiet 50 Hz hum (the bass).
+    let (clicks, grid) = click_track(120.0, 0.0, 4.0, SR);
+    let hum = |i: usize| 0.1 * (2.0 * std::f32::consts::PI * 50.0 * i as f32 / SR as f32).sin();
+    let frames: Vec<[f32; 2]> = clicks.frames.iter().enumerate().map(|(i, f)| [f[0] + hum(i), f[1] + hum(i)]).collect();
+    let track = Arc::new(TrackAudio { sample_rate: SR, frames });
+    let q = |v: f32| (v * 32768.0).round() as i16;
+    let stems = Arc::new(StemAudio {
+        sample_rate: SR,
+        frames: clicks.frames.iter().enumerate().map(|(i, f)| [q(f[0]), q(f[1]), q(hum(i)), q(hum(i)), 0, 0]).collect(),
+    });
+    let play = |set: &dyn Fn(&EngineHandle)| {
+        let (h, mut e) = create(SR, BLOCK);
+        load(&h, 0, 3, (track.clone(), grid.clone()), 0.0);
+        assert!(h.send(Command::SetStems { deck: 0, track_id: 3, stems: Some(stems.clone()) }).is_ok());
+        set(&h);
+        press(&h, 0, Control::Play);
+        run(&mut e, 0.2); // let the gains glide
+        let out = run(&mut e, 1.0);
+        (out, h.snapshot().decks[0])
+    };
+    let peak = |out: &[[f32; 2]]| out.iter().map(|f| f[0].abs()).fold(0.0f32, f32::max);
+    let (full, state) = play(&|_| {});
+    assert!(state.stems && state.stem_volume == [1.0; 4]);
+    let (plain, _) = {
+        let (h, mut e) = create(SR, BLOCK);
+        load(&h, 0, 3, (track.clone(), grid.clone()), 0.0);
+        press(&h, 0, Control::Play);
+        run(&mut e, 0.2);
+        (run(&mut e, 1.0), ())
+    };
+    // The time-stretcher differs between engines by ~1e-5 on its own.
+    let diff = full.iter().zip(&plain).map(|(x, y)| (x[0] - y[0]).abs()).fold(0.0f32, f32::max);
+    assert!(diff < 1e-4, "stems at full level play the track itself: {diff}");
+    // Drums muted: only the hum is left.
+    let (no_drums, state) = play(&|h| press(h, 0, Control::StemMute(1)));
+    assert_eq!(state.stem_mute, [true, false, false, false]);
+    assert!(peak(&no_drums) < 0.12, "{}", peak(&no_drums));
+    assert!(peak(&no_drums) > 0.05, "the hum stays");
+    // Bass down instead: the clicks stay, the hum goes.
+    let (no_bass, _) = play(&|h| ctl(h, 0, Control::StemVolume(2), ControlValue::Absolute(0.0)));
+    assert!(peak(&no_bass) > 0.5);
+    let quiet: f32 = no_bass.iter().take(4000).skip(2000).map(|f| f[0].abs()).fold(0.0, f32::max);
+    assert!(quiet < 0.01, "between clicks: {quiet}");
+}

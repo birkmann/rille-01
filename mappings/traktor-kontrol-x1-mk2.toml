@@ -1,8 +1,8 @@
 # Native Instruments Traktor Kontrol X1 MK2
 #
-# The X1 MK2 is a HID device, not MIDI: rille reads its reports directly (see
-# crates/rille-midi/src/hid.rs) and presents them as MIDI on channel 1, which is
-# what this file maps. The report layout comes from the Mixxx HID mapping by
+# The X1 MK2 is a HID device, not MIDI: rille reads its reports as described
+# in the [hid] table below (see crates/rille-midi/src/hid.rs) and presents
+# them as MIDI on channel 1, which is what the rest of this file maps. The report layout comes from the Mixxx HID mapping by
 # infiniteloop (Traktor-Kontrol-X1-MK2-hid-scripts.js, 2021, based on the
 # Mixxx S2 MK2 script).
 #
@@ -45,7 +45,8 @@
 #
 # LEDs (output report byte = note number): FX and deck buttons are dimmed
 # when off, as on the hardware; pads light blue when their hotcue is set;
-# SHIFT lights while held. The segment displays are not driven yet.
+# SHIFT lights while held. The segment displays show each deck's loop size
+# (the size the deck encoder changes, also used for beatjumps).
 #
 # DECK ORDER: the left/right columns drive decks A/B by default; choose
 # "Traktor Kontrol X1 MK2 (CD)" for decks C/D (e.g. with a second X1).
@@ -54,6 +55,34 @@ name = "Traktor Kontrol X1 MK2"
 device = '(?i)traktor kontrol x1 mk2 hid'
 description = "Native Instruments Traktor Kontrol X1 MK2 (HID): two decks and two FX units"
 deck_layouts = ["AB", "CD"]
+
+# Report layout. Byte offsets count the report ID as byte 0.
+[hid]
+name = "Traktor Kontrol X1 MK2"
+vendor_id = 0x17cc
+product_id = 0x1220
+# Its only HID interface is 0 (Mixxx's file says 4; checked on a device).
+input_report = 0x01
+# FX 1 dry/wet and knobs 1-3, FX 2 dry/wet and knobs 1-3.
+knobs = [0x01, 0x03, 0x05, 0x07, 0x09, 0x0B, 0x0D, 0x0F]
+knob_mask = 0x0FFF
+knob_max = 4095
+buttons = [0x13, 5]
+encoders = [
+    { offset = 0x11, shift = 4, bits = 4, cc = 64, note = 48 }, # browse
+    { offset = 0x11, shift = 0, bits = 4, cc = 65, note = 50 }, # left deck
+    { offset = 0x12, shift = 0, bits = 4, cc = 66, note = 52 }, # right deck
+]
+strip = { offsets = [0x1B, 0x1D], cc = [70, 71], note = [56, 57] }
+# Button and pad LEDs; the segment displays and touch strip LEDs.
+outputs = [[0x80, 0x34], [0x81, 0x5B]]
+held_leds = [[10, 0x12, 0x03]]
+# Three digits per deck in report 0x81: a decimal point byte, then segments
+# g, c, b, a, f, e, d (from infiniteloop's script; not checked on a device).
+displays = [
+    { report = 1, cc = 0, digits = [0x01, 0x09, 0x11], segments = [4, 3, 2, 7, 6, 5, 1], brightness = 0x7F },
+    { report = 1, cc = 1, digits = [0x19, 0x21, 0x29], segments = [4, 3, 2, 7, 6, 5, 1], brightness = 0x7F },
+]
 
 # SHIFT and browser
 [[input]]
@@ -601,3 +630,17 @@ off = 3
 source = "deck.B.play"
 midi = { type = "note", channel = 1, number = 51 }
 off = 3
+
+# Segment displays (CC 0 = left deck, CC 1 = right deck on channel 3): the
+# loop size, as a display code; blank when disconnected.
+[[output]]
+source = "deck.A.loop_size_up"
+midi = { type = "cc", channel = 3, number = 0 }
+raw = true
+off = 127
+
+[[output]]
+source = "deck.B.loop_size_up"
+midi = { type = "cc", channel = 3, number = 1 }
+raw = true
+off = 127

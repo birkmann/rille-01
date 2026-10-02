@@ -186,6 +186,17 @@ Rectangle {
             horizontalAlignment: Text.AlignRight
         }
         DjButton {
+            icon: "dot"
+            text: AppController.recording ? "REC " + AppController.recordingTime : "REC"
+            target: "global.record"
+            lit: AppController.recording
+            litColor: Theme.danger
+            tip: AppController.recording
+                 ? "Recording the main mix to " + AppController.recordingFile + ". Click to stop."
+                 : "Record the main mix to a WAV file (with a cue sheet of the tracks played) in your music folder's \"rille recordings\""
+            tipBelow: true
+        }
+        DjButton {
             icon: "midi"
             text: "LEARN"
             lit: AppController.learning

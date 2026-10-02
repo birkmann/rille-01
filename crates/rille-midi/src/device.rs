@@ -8,7 +8,7 @@
 
 use crate::engine::{MappingEngine, ValueSource};
 use crate::feedback::FeedbackState;
-use crate::hid::{self, HidLink};
+use crate::hid::{self, HidLayout, HidLink};
 use crate::mapping::Mapping;
 use crate::store::MappingStore;
 use crossbeam_channel::Sender;
@@ -113,6 +113,8 @@ pub struct MidiManager {
     events: Vec<ControlEvent>,
     /// Ports that failed to connect, so hotplug logs each failure once.
     failed: HashSet<String>,
+    /// The HID controllers looked for, from the mappings' `[hid]` tables.
+    hid_layouts: Vec<Arc<HidLayout>>,
 }
 
 impl MidiManager {
@@ -131,7 +133,14 @@ impl MidiManager {
             buf: Vec::new(),
             events: Vec::new(),
             failed: HashSet::new(),
+            hid_layouts: Vec::new(),
         })
+    }
+
+    /// The HID controllers to look for (see
+    /// [`MappingStore::hid_layouts`](crate::MappingStore::hid_layouts)).
+    pub fn set_hid_layouts(&mut self, layouts: Vec<Arc<HidLayout>>) {
+        self.hid_layouts = layouts;
     }
 
     pub fn set_raw_events(&self, on: bool) {
@@ -146,7 +155,7 @@ impl MidiManager {
     pub fn input_ports(&self) -> Vec<String> {
         let ports = self.scan_in.ports();
         let midi = ports.iter().filter_map(|p| self.scan_in.port_name(p).ok()).filter(|n| !self.own(n));
-        midi.chain(hid::scan().into_iter().map(|p| p.name)).collect()
+        midi.chain(hid::scan(&self.hid_layouts).into_iter().map(|p| p.name)).collect()
     }
 
     pub fn output_ports(&self) -> Vec<String> {
@@ -192,7 +201,7 @@ impl MidiManager {
         }
         let mapping_name = mapping.as_ref().map(|m| m.name.clone());
         let engine: SharedEngine = Arc::new(Mutex::new(mapping.map(MappingEngine::new)));
-        let link = match hid::scan().into_iter().find(|p| p.name == port) {
+        let link = match hid::scan(&self.hid_layouts).into_iter().find(|p| p.name == port) {
             Some(hid_port) => {
                 Link::Hid(HidLink::open(&hid_port, self.input_handler(port, &engine)).map_err(MidiError::Connect)?)
             }

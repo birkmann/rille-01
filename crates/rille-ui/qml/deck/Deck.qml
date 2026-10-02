@@ -11,6 +11,19 @@ Rectangle {
     /// row only on tall windows, so the waveform keeps some height.
     property bool compact: false
     property bool gridEditing: false
+    // The stems row in place of the hotcues.
+    property bool stemsShown: false
+    readonly property var stems: JSON.parse(dc.stemsJson || "{}")
+    readonly property var stemNames: ["DRUMS", "BASS", "OTHER", "VOCALS"]
+    function stemStatus() {
+        switch (stems.state) {
+        case "waiting": return "Stems: waiting for the tracks before it…"
+        case "model": return "Stems: loading the separation model…"
+        case "separating": return "Separating stems… " + Math.floor(stems.progress * 100) + " %"
+        case "failed": return "Stems failed: " + stems.error
+        default: return dc.loaded ? "No stems yet: click STEMS to separate the track (needs the model from Settings → Decks & Analysis → Stems)" : "Load a track first"
+        }
+    }
     readonly property string letter: String.fromCharCode(65 + dc.deck)
     readonly property var hotcues: JSON.parse(dc.hotcuesJson || "[]")
     // Muted on purpose: only a grid that needs a check gets a (dimmed) color.
@@ -125,11 +138,22 @@ Rectangle {
                         elide: Text.ElideRight
                     }
                 }
-                UiText {
+                RowLayout {
                     Layout.fillWidth: true
-                    text: deck.dc.error.length ? deck.dc.error : (deck.dc.artist + (deck.dc.info.length ? "  ·  " + deck.dc.info : ""))
-                    color: deck.dc.error.length ? Theme.danger : Theme.textDim
-                    elide: Text.ElideRight
+                    spacing: 8
+                    UiText {
+                        Layout.fillWidth: true
+                        text: deck.dc.error.length ? deck.dc.error : (deck.dc.artist + (deck.dc.info.length ? "  ·  " + deck.dc.info : ""))
+                        color: deck.dc.error.length ? Theme.danger : Theme.textDim
+                        elide: Text.ElideRight
+                    }
+                    // A streamed track already playing while the rest downloads.
+                    UiText {
+                        visible: deck.dc.streamText.length > 0
+                        text: deck.dc.streamText
+                        color: deck.dc.buffering ? Theme.warn : Theme.textFaint
+                        font.pixelSize: Theme.fontSmall
+                    }
                 }
             }
             ColumnLayout {
@@ -279,6 +303,18 @@ Rectangle {
             DjButton { icon: "metronome"; target: deck.t("tick"); lit: deck.dc.tick; litColor: Theme.warn; implicitWidth: 28; implicitHeight: 24; tip: "Metronome: click on the beatgrid's beats, to check the grid by ear" }
             DjButton { visible: deck.roomy; implicitHeight: 24; icon: "zoom-out"; implicitWidth: 30; tip: "Zoom the waveform out (or mouse wheel on it)"; onClicked: wave.seconds = Math.min(32, wave.seconds * 1.25) }
             DjButton { visible: deck.roomy; implicitHeight: 24; icon: "zoom-in"; implicitWidth: 28; tip: "Zoom the waveform in (or mouse wheel on it)"; onClicked: wave.seconds = Math.max(2, wave.seconds * 0.8) }
+            DjButton {
+                implicitHeight: 24
+                text: "STEMS"
+                lit: deck.stemsShown
+                litColor: deck.stems.state === "ready" ? Theme.sync : Theme.textDim
+                tip: "Stems: drums, bass, other and vocals of the track, each with a level and a mute (in place of the hotcues). Separated once per track in the background."
+                onClicked: {
+                    deck.stemsShown = !deck.stemsShown
+                    if (deck.stemsShown && deck.stems.state === "none")
+                        AppController.prepareStems(deck.dc.deck)
+                }
+            }
             DjButton { implicitHeight: 24; icon: "grid"; lit: deck.gridEditing; litColor: Theme.warn; tip: "Grid editor: correct the beatgrid (in place of the hotcues)"; onClicked: deck.gridEditing = !deck.gridEditing }
             DjButton { implicitHeight: 24; icon: "eject"; implicitWidth: 30; tip: "Eject the track"; onClicked: AppController.eject(deck.dc.deck) }
         }
@@ -566,10 +602,69 @@ Rectangle {
             Item { Layout.fillWidth: true }
         }
 
+        // --- Stems (in place of the hotcues while STEMS is on) ---------------
+        RowLayout {
+            Layout.fillWidth: true
+            visible: !deck.gridEditing && deck.stemsShown
+            Layout.preferredHeight: 26
+            spacing: 6
+            UiText {
+                visible: deck.stems.state !== "ready"
+                Layout.fillWidth: true
+                text: deck.stemStatus()
+                color: deck.stems.state === "failed" ? Theme.danger : Theme.textDim
+                font.pixelSize: Theme.fontSmall
+                elide: Text.ElideRight
+            }
+            Repeater {
+                model: deck.stems.state === "ready" ? 4 : 0
+                RowLayout {
+                    id: stemCell
+                    required property int index
+                    readonly property bool muted: deck.stems.mute ? deck.stems.mute[index] : false
+                    readonly property real level: deck.stems.volume ? deck.stems.volume[index] : 1
+                    Layout.fillWidth: true
+                    spacing: 4
+                    DjButton {
+                        Layout.fillWidth: true
+                        implicitHeight: 26
+                        text: deck.stemNames[stemCell.index]
+                        target: deck.t("stem_mute." + (stemCell.index + 1))
+                        lit: !stemCell.muted
+                        litColor: Theme.sync
+                        tip: deck.stemNames[stemCell.index].toLowerCase() + ": on / mute"
+                    }
+                    // Level: drag, wheel; double-click back to full.
+                    Rectangle {
+                        implicitWidth: 46
+                        implicitHeight: 8
+                        radius: 2
+                        color: Theme.bg
+                        border.color: Theme.border
+                        Rectangle {
+                            width: parent.width * stemCell.level
+                            height: parent.height
+                            radius: 2
+                            color: stemCell.muted ? Theme.textFaint : Theme.sync
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            anchors.margins: -6
+                            function set(x) { AppController.setValue(deck.t("stem_volume." + (stemCell.index + 1)), Math.max(0, Math.min(1, (x - 6) / (width - 12)))) }
+                            onPressed: mouse => set(mouse.x)
+                            onPositionChanged: mouse => { if (pressed) set(mouse.x) }
+                            onDoubleClicked: AppController.setValue(deck.t("stem_volume." + (stemCell.index + 1)), 1)
+                            onWheel: wheel => AppController.setValue(deck.t("stem_volume." + (stemCell.index + 1)), Math.max(0, Math.min(1, stemCell.level + (wheel.angleDelta.y > 0 ? 0.05 : -0.05))))
+                        }
+                    }
+                }
+            }
+        }
+
         // --- Hotcues (the grid editor takes their place while GRID is on) ------
         RowLayout {
             Layout.fillWidth: true
-            visible: !deck.gridEditing && deck.showHotcues
+            visible: !deck.gridEditing && !deck.stemsShown && deck.showHotcues
             spacing: 3
             Repeater {
                 model: 8

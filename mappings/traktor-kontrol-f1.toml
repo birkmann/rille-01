@@ -1,8 +1,8 @@
 # Native Instruments Traktor Kontrol F1
 #
-# The F1 is a HID device, not MIDI: rille reads its reports directly (see
-# crates/rille-midi/src/hid.rs) and presents them as MIDI on channel 1, which is
-# what this file maps. The report layout comes from the device's HID report
+# The F1 is a HID device, not MIDI: rille reads its reports as described in
+# the [hid] table below (see crates/rille-midi/src/hid.rs) and presents them
+# as MIDI on channel 1, which is what the rest of this file maps. The report layout comes from the device's HID report
 # descriptor and Mixxx's Traktor-Kontrol-F1-scripts.js (Ilkka Tuohela).
 #
 # On Linux, opening the device needs the udev rule in
@@ -63,6 +63,26 @@ name = "Traktor Kontrol F1"
 device = '(?i)traktor kontrol f1 hid'
 description = "Native Instruments Traktor Kontrol F1 (HID): a remix deck with 4x4 RGB pads"
 deck_layouts = ["C", "D", "A", "B"]
+
+# Report layout. Byte offsets count the report ID as byte 0.
+[hid]
+name = "Traktor Kontrol F1"
+vendor_id = 0x17cc
+product_id = 0x1120
+input_report = 0x01
+# Knobs 1-4, faders 1-4. Mixxx found the range ends at 4092.
+knobs = [0x06, 0x08, 0x0A, 0x0C, 0x0E, 0x10, 0x12, 0x14]
+knob_mask = 0x0FFF
+knob_max = 4092
+buttons = [0x01, 4]
+encoders = [{ offset = 0x05, bits = 8, cc = 64, note = 48 }]
+outputs = [[0x80, 0x51]]
+# BROWSE, SIZE, TYPE, REVERSE, SHIFT, CAPTURE: modifiers, lit while held.
+held_leds = [[19, 0x11, 0x0A], [20, 0x12, 0x0A], [21, 0x13, 0x0A], [22, 0x14, 0x0A], [23, 0x15, 0x0A], [25, 0x16, 0x0A]]
+# Blue, red, green per pad.
+rgb_pads = { offset = 0x19, count = 16, order = [2, 0, 1] }
+# Decimal point, then segments g, c, b, a, f, e, d; Mixxx lights them at 0x40.
+displays = [{ digits = [0x09, 0x01], segments = [4, 3, 2, 7, 6, 5, 1], brightness = 0x40 }]
 
 # Modifiers
 [[input]]

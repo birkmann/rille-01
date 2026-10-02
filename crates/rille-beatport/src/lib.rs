@@ -5,11 +5,13 @@
 //! Blocking HTTP on the caller's thread, like the rest of rille's
 //! background work.
 
+pub mod arrived;
 mod auth;
 mod client;
 pub mod links;
 pub mod model;
 
+pub use arrived::{Arrived, ArrivedReader};
 pub use auth::Token;
 pub use client::{Client, Progress, Quality};
 pub use links::{Link, looks_like_link, parse as parse_link};

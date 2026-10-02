@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
-use rille_beatport::{Client, Named, Playlist, Quality, Track};
+use rille_beatport::{Arrived, Client, Named, Playlist, Quality, Track};
 use rille_library::{Tags, TrackId, TrackRow};
 
 use crate::{App, MAX_DECKS, UiEvent};
@@ -38,7 +38,7 @@ struct View {
 }
 
 pub(crate) struct BeatportState {
-    client: Client,
+    pub(crate) client: Client,
     view: RwLock<View>,
     /// Bumped per request; answers to older ones are dropped.
     seq: AtomicU64,
@@ -285,6 +285,9 @@ impl App {
     /// Loads a Beatport track onto a deck: it joins the collection as a
     /// streamed track, then loads like any other (downloading its file).
     pub fn load_beatport(self: &Arc<Self>, deck: u8, beatport_id: i64) {
+        if self.refuse_load(deck) {
+            return;
+        }
         let app = self.clone();
         std::thread::Builder::new()
             .name(format!("beatport-load-{deck}"))
@@ -378,14 +381,21 @@ impl App {
 
     /// A streamed track's file, downloaded first if it is not in the cache.
     /// `deck` = `(deck, load sequence)` shows the progress there and stops
-    /// when the deck loads something else.
-    pub(crate) fn streamed_file(&self, row: &TrackRow, deck: Option<(u8, u64)>) -> Result<PathBuf, String> {
-        self.streamed_file_to(row, deck.map_or(Sink::None, |(d, seq)| Sink::Deck(d, seq)))
+    /// when the deck loads something else. `arrived` follows the download,
+    /// to read the file while it comes (not when another download of the
+    /// track is already running: this one then waits for it).
+    pub(crate) fn streamed_file(
+        &self,
+        row: &TrackRow,
+        deck: Option<(u8, u64)>,
+        arrived: Option<&Arrived>,
+    ) -> Result<PathBuf, String> {
+        self.streamed_file_to(row, deck.map_or(Sink::None, |(d, seq)| Sink::Deck(d, seq)), arrived)
     }
 
     /// Only one download per track runs at a time: a second caller waits for
     /// it (a deck loading a track the queue is fetching shows that progress).
-    fn streamed_file_to(&self, row: &TrackRow, sink: Sink) -> Result<PathBuf, String> {
+    fn streamed_file_to(&self, row: &TrackRow, sink: Sink, arrived: Option<&Arrived>) -> Result<PathBuf, String> {
         let Some(beatport_id) = row.beatport_id else { return Ok(row.path.clone()) };
         if row.path.exists() {
             // Recently used: last to leave the cache.
@@ -441,7 +451,7 @@ impl App {
                 cancel.store(true, Ordering::Relaxed);
             }
         };
-        let result = self.beatport.client.fetch_file(&d.location, &dest, &cancel, &mut progress);
+        let result = self.beatport.client.fetch_file(&d.location, &dest, &cancel, &mut progress, arrived);
         sink.show(self, None);
         result.map_err(|e| e.to_string())?;
         let _ = self.library.lock().expect("library lock").set_streamed_file(row.id, &dest);
@@ -670,7 +680,7 @@ impl App {
         let _ = self.library.lock().expect("library lock").set_streamed_offline(&[id], true);
         self.refresh_track(id);
         let row = self.library.lock().expect("library lock").track(id).ok().flatten().ok_or("track gone")?;
-        self.streamed_file_to(&row, Sink::Queue(beatport_id)).map(|_| ())
+        self.streamed_file_to(&row, Sink::Queue(beatport_id), None).map(|_| ())
     }
 
     /// Downloads a whole list (a playlist from the tree) for offline use.

@@ -57,11 +57,18 @@ pub mod qobject {
         #[qproperty(bool, header_meter, cxx_name = "headerMeter")]
         /// Settings → Audio: the on-screen mixer and crossfader are hidden.
         #[qproperty(bool, mixer_hidden, cxx_name = "mixerHidden")]
+        /// Settings → Audio: a KEY knob on each mixer channel.
+        #[qproperty(bool, mixer_key, cxx_name = "mixerKey")]
         /// External mixing: the deck on each hardware mixer channel, e.g.
         /// "CABD"; empty with the internal mixer.
         #[qproperty(QString, mixer_channels, cxx_name = "mixerChannels")]
         /// A MIDI controller is connected.
         #[qproperty(bool, midi_connected, cxx_name = "midiConnected")]
+        /// The main mix is being recorded.
+        #[qproperty(bool, recording)]
+        /// Time recorded ("12:34"), and the file it goes to.
+        #[qproperty(QString, recording_time, cxx_name = "recordingTime")]
+        #[qproperty(QString, recording_file, cxx_name = "recordingFile")]
         /// A laptop running from its battery (charger unplugged).
         #[qproperty(bool, on_battery, cxx_name = "onBattery")]
         /// Battery charge 0..100, -1 without a system battery.
@@ -77,6 +84,8 @@ pub mod qobject {
         #[qproperty(i32, beatport_revision, cxx_name = "beatportRevision")]
         /// Bumped when the download queue moved on (row indicators).
         #[qproperty(i32, beatport_download_revision, cxx_name = "beatportDownloadRevision")]
+        /// Bumped when the stem model's download moves on or finishes.
+        #[qproperty(i32, stems_revision, cxx_name = "stemsRevision")]
         /// The signed-in Beatport user, empty when signed out.
         #[qproperty(QString, beatport_account, cxx_name = "beatportAccount")]
         /// Beatport tracks are being downloaded for offline use.
@@ -245,6 +254,27 @@ pub mod qobject {
         #[cxx_name = "setPortMapping"]
         fn set_port_mapping(self: &AppController, port: &QString, mapping: &QString);
 
+        /// The stem model: `{"state": "missing|downloading|ready|failed",
+        /// "progress": 0..1, "error": "", "notice": ""}`.
+        #[qinvokable]
+        #[cxx_name = "stemModelJson"]
+        fn stem_model_json(self: &AppController) -> QString;
+
+        #[qinvokable]
+        #[cxx_name = "downloadStemModel"]
+        fn download_stem_model(self: &AppController);
+
+        /// Separates (or loads the cached) stems of the track on `deck`.
+        #[qinvokable]
+        #[cxx_name = "prepareStems"]
+        fn prepare_stems(self: &AppController, deck: i32);
+
+        /// The controller of mapping `name` (as written in its file) sends
+        /// on MIDI `channel` (1-16).
+        #[qinvokable]
+        #[cxx_name = "setMappingChannel"]
+        fn set_mapping_channel(self: &AppController, name: &QString, channel: i32);
+
         #[qinvokable]
         #[cxx_name = "createPlaylist"]
         fn create_playlist(self: &AppController, name: &QString) -> i64;
@@ -374,8 +404,13 @@ pub struct AppControllerRust {
     deck_count: i32,
     header_meter: bool,
     mixer_hidden: bool,
+    mixer_key: bool,
     mixer_channels: QString,
     midi_connected: bool,
+    stems_revision: i32,
+    recording: bool,
+    recording_time: QString,
+    recording_file: QString,
     on_battery: bool,
     battery_percent: i32,
     battery_minutes: i32,
@@ -596,12 +631,23 @@ impl qobject::AppController {
         self.as_mut().set_deck_count(i32::from(settings.deck_count));
         self.as_mut().set_header_meter(settings.header_meter);
         self.as_mut().set_mixer_hidden(!settings.show_mixer);
+        self.as_mut().set_mixer_key(settings.mixer_key);
         self.as_mut().set_suggestions_enabled(settings.suggestions);
         let channels = if external { settings.mixer_channels.to_uppercase() } else { String::new() };
         if *self.mixer_channels() != QString::from(&channels) {
             self.as_mut().set_mixer_channels(QString::from(channels));
         }
         self.as_mut().set_midi_connected(!app.midi_devices().is_empty());
+        let recording = app.recording();
+        self.as_mut().set_recording(recording.is_some());
+        let (file, time) = recording.map_or_else(Default::default, |(path, secs)| {
+            let secs = secs as u64;
+            (path.display().to_string(), format!("{}:{:02}", secs / 60, secs % 60))
+        });
+        if *self.recording_time() != QString::from(&time) {
+            self.as_mut().set_recording_time(QString::from(time));
+            self.as_mut().set_recording_file(QString::from(file));
+        }
         let battery = crate::power::current();
         self.as_mut().set_on_battery(battery.is_some_and(|b| b.on_battery));
         self.as_mut().set_battery_percent(battery.map_or(-1, |b| b.percent.round() as i32));
@@ -637,6 +683,10 @@ impl qobject::AppController {
                 UiEvent::BeatportDownloads => {
                     let r = *self.beatport_download_revision() + 1;
                     self.as_mut().set_beatport_download_revision(r);
+                }
+                UiEvent::StemsChanged => {
+                    let r = *self.stems_revision() + 1;
+                    self.as_mut().set_stems_revision(r);
                 }
                 UiEvent::LibraryChanged => {
                     let r = *self.library_revision() + 1;
@@ -797,7 +847,7 @@ impl qobject::AppController {
         let s = app.settings();
         let roots: Vec<String> = s.library_roots.iter().map(|r| json_str(&r.display().to_string())).collect();
         QString::from(format!(
-            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{},"beatport_quality":{},"beatport_cache_mb":{}}}"#,
+            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"mixer_key":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{},"beatport_quality":{},"beatport_cache_mb":{},"stems_cache_mb":{},"load_lock":{},"load_lock_level":{},"load_lock_decks":{}}}"#,
             s.audio_device.as_deref().map_or("null".into(), json_str),
             s.buffer_frames.map_or("null".into(), |b| b.to_string()),
             s.tempo_range,
@@ -823,6 +873,7 @@ impl qobject::AppController {
             s.background_analysis,
             s.header_meter,
             s.show_mixer,
+            s.mixer_key,
             json_str(&s.browser_columns),
             json_str(&s.remix_decks),
             s.mixing.name(),
@@ -831,7 +882,11 @@ impl qobject::AppController {
             s.browser_row_size,
             s.browser_sidebar_width,
             json_str(&s.beatport_quality),
-            s.beatport_cache_mb
+            s.beatport_cache_mb,
+            s.stems_cache_mb,
+            s.load_lock,
+            s.load_lock_level,
+            json_str(&s.load_lock_decks)
         ))
     }
 
@@ -884,8 +939,15 @@ impl qobject::AppController {
             "background_analysis" => s.background_analysis = b,
             "header_meter" => s.header_meter = b,
             "show_mixer" => s.show_mixer = b,
+            "mixer_key" => s.mixer_key = b,
+            "load_lock" => s.load_lock = b,
+            "load_lock_level" => s.load_lock_level = f.unwrap_or(0.5).clamp(0.05, 1.0) as f32,
+            "load_lock_decks" => {
+                s.load_lock_decks = v.to_uppercase().chars().filter(|c| ('A'..='D').contains(c)).collect()
+            }
             "suggestions" => s.suggestions = b,
             "beatport_quality" => s.beatport_quality = rille_app::BeatportQuality::from_name(&v).name().to_owned(),
+            "stems_cache_mb" => s.stems_cache_mb = v.parse::<u32>().unwrap_or(s.stems_cache_mb).clamp(1024, 1 << 20),
             "beatport_cache_mb" => {
                 s.beatport_cache_mb = v.parse::<u32>().unwrap_or(s.beatport_cache_mb).clamp(512, 1 << 20)
             }
@@ -906,7 +968,19 @@ impl qobject::AppController {
             .midi_devices()
             .iter()
             .map(|(p, m)| {
-                format!(r#"{{"port":{},"mapping":{}}}"#, json_str(p), m.as_deref().map_or("null".into(), json_str))
+                let channels: Vec<String> = m
+                    .as_deref()
+                    .map(|m| app.mapping_channels(m))
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|(name, c)| format!(r#"{{"name":{},"channel":{c}}}"#, json_str(name)))
+                    .collect();
+                format!(
+                    r#"{{"port":{},"mapping":{},"channels":[{}]}}"#,
+                    json_str(p),
+                    m.as_deref().map_or("null".into(), json_str),
+                    channels.join(",")
+                )
             })
             .collect();
         let maps: Vec<String> = app.mapping_names().iter().map(|m| json_str(m)).collect();
@@ -922,6 +996,40 @@ impl qobject::AppController {
         if let Some(app) = app() {
             let m = mapping.to_string();
             app.set_port_mapping(&port.to_string(), (!m.is_empty()).then_some(m.as_str()));
+        }
+    }
+
+    fn stem_model_json(&self) -> QString {
+        use rille_app::stems::ModelState;
+        let Some(app) = app() else { return QString::from("{}") };
+        let (state, progress, error) = match app.stem_model() {
+            ModelState::Missing => ("missing", 0.0, String::new()),
+            ModelState::Downloading(f) => ("downloading", f, String::new()),
+            ModelState::Ready => ("ready", 1.0, String::new()),
+            ModelState::Failed(e) => ("failed", 0.0, e),
+        };
+        QString::from(format!(
+            r#"{{"state":"{state}","progress":{progress:.3},"error":{},"notice":{}}}"#,
+            json_str(&error),
+            json_str(rille_stems::MODEL_NOTICE)
+        ))
+    }
+
+    fn download_stem_model(&self) {
+        if let Some(app) = app() {
+            app.download_stem_model();
+        }
+    }
+
+    fn prepare_stems(&self, deck: i32) {
+        if let (Some(app), Ok(deck)) = (app(), u8::try_from(deck)) {
+            app.prepare_stems(deck);
+        }
+    }
+
+    fn set_mapping_channel(&self, name: &QString, channel: i32) {
+        if let (Some(app), Ok(channel)) = (app(), u8::try_from(channel)) {
+            app.set_mapping_channel(&name.to_string(), channel);
         }
     }
 

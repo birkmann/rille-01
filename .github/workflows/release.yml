@@ -1,0 +1,78 @@
+name: Release
+
+# Builds the Flatpak bundle and the AppImage. On a version tag (v*) both are
+# attached to a GitHub release; a manual run keeps them as workflow artifacts.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.11
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vendor crates for the offline build
+        run: |
+          pip install --break-system-packages aiohttp tomlkit
+          curl -sSLo flatpak-cargo-generator.py \
+            https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+          python3 flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: packaging/flatpak/io.github.birkmann.rille.yml
+          bundle: rille-x86_64.flatpak
+          cache-key: flatpak-builder-${{ hashFiles('Cargo.lock') }}
+
+  appimage:
+    # The oldest supported Ubuntu LTS keeps the glibc requirement low.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang libclang-dev cmake pkg-config \
+            libasound2-dev libjack-jackd2-dev libpipewire-0.3-dev libudev-dev \
+            libgl1-mesa-dev libxkbcommon-dev libfuse2 file
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          modules: qtshadertools qtwayland
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build AppImage
+        run: |
+          export QMAKE="$QT_ROOT_DIR/bin/qmake"
+          ./packaging/appimage/build-appimage.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rille-x86_64.AppImage
+          path: rille-*.AppImage
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [flatpak, appimage]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "rille ${GITHUB_REF_NAME#v}" --generate-notes \
+            dist/*.flatpak dist/*.AppImage

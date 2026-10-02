@@ -5,6 +5,7 @@
 //! `mappings/generic-2deck.toml` at the repository root for a commented
 //! example.
 
+use crate::hid::HidLayout;
 use regex::Regex;
 use rille_core::ids::MAX_DECKS;
 use rille_core::{Control, ControlKind, ControlTarget, Scope};
@@ -98,6 +99,18 @@ impl MidiSpec {
         | MidiSpec::Cc14 { channel, .. }
         | MidiSpec::PitchBend { channel }) = self;
         channel.wrapping_sub(1)
+    }
+
+    /// The same message on channel `to` (`1..=16`) if it is on channel
+    /// `from`.
+    fn move_channel(&mut self, from: u8, to: u8) {
+        let (MidiSpec::Note { channel, .. }
+        | MidiSpec::Cc { channel, .. }
+        | MidiSpec::Cc14 { channel, .. }
+        | MidiSpec::PitchBend { channel }) = self;
+        if *channel == from {
+            *channel = to;
+        }
     }
 
     fn validate(self) -> Result<(), String> {
@@ -415,6 +428,16 @@ pub struct Mapping {
     /// layouts. The store resolves includes when it loads, one level deep.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub include: Vec<String>,
+    /// The MIDI channel (`1..=16`) the controller sends on out of the box.
+    /// A controller set to another channel gets its own in the settings,
+    /// which moves every binding on this channel there (see
+    /// [`Mapping::with_channel`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<u8>,
+    /// For a HID controller, its reports, which become the MIDI messages the
+    /// bindings use (see [`crate::hid`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hid: Option<HidLayout>,
     #[serde(default, rename = "input", skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<InputBinding>,
     #[serde(default, rename = "output", skip_serializing_if = "Vec::is_empty")]
@@ -454,6 +477,8 @@ impl Mapping {
             description: String::new(),
             deck_layouts: Vec::new(),
             include: Vec::new(),
+            channel: None,
+            hid: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
         }
@@ -472,6 +497,12 @@ impl Mapping {
 
     pub fn validate(&self) -> Result<(), MappingError> {
         self.device_regex()?;
+        if let Some(c) = self.channel.filter(|c| !(1..=16).contains(c)) {
+            return Err(MappingError::Layout(format!("channel {c} out of range 1..=16")));
+        }
+        if let Some(hid) = &self.hid {
+            hid.validate().map_err(MappingError::Layout)?;
+        }
         let mut sections = MAX_DECKS;
         for layout in &self.deck_layouts {
             sections = sections.min(parse_layout(layout).map_err(MappingError::Layout)?.len());
@@ -521,6 +552,21 @@ impl Mapping {
             }
         }
         Ok(m)
+    }
+
+    /// This mapping for a controller sending on channel `to` (`1..=16`)
+    /// instead of [`channel`](Self::channel): bindings on that channel move to
+    /// `to`, others (such as a second device's) stay. Without a channel, a
+    /// copy.
+    pub fn with_channel(&self, to: u8) -> Mapping {
+        let mut m = self.clone();
+        let Some(from) = m.channel.filter(|_| (1..=16).contains(&to)) else { return m };
+        let specs = m.inputs.iter_mut().map(|b| &mut b.midi).chain(m.outputs.iter_mut().map(|b| &mut b.midi));
+        for spec in specs {
+            spec.move_channel(from, to);
+        }
+        m.channel = Some(to);
+        m
     }
 
     pub fn device_regex(&self) -> Result<Regex, MappingError> {
@@ -592,6 +638,24 @@ mod tests {
         midi = { type = "note", channel = 1, number = 11 }
         blink = "beat"
     "#;
+
+    #[test]
+    fn with_channel_moves_only_the_device_channel() {
+        let mut m = Mapping::from_toml(EXAMPLE).unwrap();
+        m.channel = Some(1);
+        let moved = m.with_channel(15);
+        assert_eq!(moved.channel, Some(15));
+        assert_eq!(moved.inputs[0].midi, MidiSpec::Note { channel: 15, number: 11 });
+        assert_eq!(moved.inputs[1].midi, MidiSpec::Cc14 { channel: 15, number: 19 });
+        // Channel 8 is not the controller's channel and stays.
+        assert_eq!(moved.inputs[4].midi, MidiSpec::Note { channel: 8, number: 0 });
+        assert!(moved.validate().is_ok());
+        // Without a channel, nothing moves.
+        m.channel = None;
+        assert_eq!(m.with_channel(15), m);
+        m.channel = Some(17);
+        assert!(m.validate().is_err());
+    }
 
     #[test]
     fn parses_example_with_defaults() {

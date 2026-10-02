@@ -55,7 +55,7 @@ impl TrackCues {
 pub const HOTCUE_COLORS: [u32; 8] = [0x2ec4b6, 0xf5a524, 0xe0565b, 0x7b8cff, 0x5fd068, 0xd96bd6, 0xf2c94c, 0x4fb3e8];
 
 /// Bump when analysis results change so stale ones are recomputed.
-pub const ANALYZER_VERSION: u32 = 3;
+pub const ANALYZER_VERSION: u32 = 4;
 
 /// Output of track analysis, stored in the library.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

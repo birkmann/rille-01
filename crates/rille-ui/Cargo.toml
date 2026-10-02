@@ -17,6 +17,7 @@ rille-core.workspace = true
 rille-app = { path = "../rille-app" }
 rille-engine = { path = "../rille-engine" }
 rille-library = { path = "../rille-library" }
+rille-stems = { path = "../rille-stems" }
 cxx = "1"
 cxx-qt = "0.10"
 cxx-qt-lib = { version = "0.10", features = ["qt_full"] }

@@ -1,12 +1,16 @@
 # Flatpak manifest. The app id follows the GitHub repository; change it
 # together with packaging/rille.metainfo.xml.
 #
-# Build (needs network for the runtimes and for vendoring crates):
+# Build (needs network for the runtimes and for vendoring crates; the release
+# workflow in .github/workflows/release.yml does the same):
 #   python3 flatpak-cargo-generator.py ../../Cargo.lock -o cargo-sources.json
-#   flatpak-builder --user --install --force-clean build io.github.birkmann.rille.yml
+#   flatpak-builder --user --install-deps-from=flathub --install --force-clean build io.github.birkmann.rille.yml
+#
+# The KDE 6.11 runtime is based on freedesktop 25.08; the SDK extensions
+# below resolve to that branch.
 app-id: io.github.birkmann.rille
 runtime: org.kde.Platform
-runtime-version: '6.9'
+runtime-version: '6.11'
 sdk: org.kde.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable

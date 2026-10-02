@@ -34,6 +34,9 @@ pub struct GridReport {
     pub downbeat_source: &'static str,
     /// Clear section changes that voted on the downbeat.
     pub downbeat_events: usize,
+    /// With `RILLE_DOWNBEAT_DUMP` set: the bar phase evidence and per-beat
+    /// cues as JSON, for fitting the bar position model.
+    pub downbeat_dump: String,
 }
 
 /// Low-rate signals shared with key detection and downbeat features.
@@ -339,6 +342,26 @@ pub fn detect(mono: &[f32], sr: f64, dec: &Decimated, bpm_range: (f64, f64)) -> 
     }
     if std::env::var_os("RILLE_DEBUG_OBS").is_some() {
         eprintln!("downbeat: {db:?}");
+    }
+    if std::env::var_os("RILLE_DOWNBEAT_DUMP").is_some() {
+        let list = |v: &[f64]| v.iter().map(|x| format!("{x:.4}")).collect::<Vec<_>>().join(",");
+        let cues: Vec<String> = feats.cues.iter().map(|c| format!("[{}]", list(c))).collect();
+        let (nv, ev) = db.dump.clone().unwrap_or_default();
+        let ev: Vec<String> = ev.iter().map(i64::to_string).collect();
+        report.downbeat_dump = format!(
+            r#"{{"first":{first},"phase":{},"trust":{:.4},"agreement":{:.4},"events":{},"phrase":[{}],"novelty":[{}],"model":[{}],"strong":{},"nv":[{}],"ev":[{}],"cues":[{}]}}"#,
+            db.phase,
+            db.trust,
+            db.agreement,
+            db.events,
+            list(&db.phrase_share),
+            list(&db.novelty_share),
+            list(&db.model),
+            first_strong.rem_euclid(4),
+            list(&nv),
+            ev.join(","),
+            cues.join(",")
+        );
     }
     let (phase, db_margin) = (db.phase, db.margin);
     report.downbeat_margin = db_margin;

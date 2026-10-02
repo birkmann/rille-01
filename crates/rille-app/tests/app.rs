@@ -441,3 +441,177 @@ fn pause_and_cancel_stick() {
     assert!(!app.settings().background_analysis && !app.analysis_progress().paused);
     app.shutdown();
 }
+
+#[test]
+fn records_the_main_mix() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir_all(&music).unwrap();
+    let r = synth::render(&Spec { sections: vec![(16, 126.0)], seed: 5, ..Spec::default() });
+    write_wav(&music.join("a.wav"), &r.audio);
+    let app = start(dir.path());
+    app.add_music_folder(music);
+    wait_for("scan", 20.0, || app.tracks(Source::Collection, "", SortKey::Title, false).len() == 1);
+    let row = app.tracks(Source::Collection, "", SortKey::Title, false).remove(0);
+    app.load_track(0, row.id);
+    wait_for("load", 30.0, || app.deck(0).audio.is_some());
+
+    let rec = ControlEvent { target: ControlTarget::global(Control::Record), value: ControlValue::Press(true) };
+    app.control(rec);
+    let (path, _) = app.recording().expect("recording");
+    assert!(path.starts_with(dir.path().join("recordings")), "{}", path.display());
+    press(&app, 0, Control::Play);
+    wait_for("a second of audio", 10.0, || app.recording().is_some_and(|(_, secs)| secs > 1.0));
+    let done = app.stop_recording().expect("a recording");
+    assert!(app.recording().is_none());
+    assert_eq!(done.dropped, 0);
+    let mut wav = hound::WavReader::open(&done.path).unwrap();
+    let frames = wav.duration() as f64 / f64::from(wav.spec().sample_rate);
+    assert!((frames - done.secs).abs() < 0.01 && frames > 1.0, "{frames} vs {}", done.secs);
+    assert!(wav.samples::<i32>().map(Result::unwrap).any(|s| s.abs() > 1 << 16), "the track is in it");
+
+    // External mixing has no main mix to record.
+    let mut s = app.settings();
+    s.mixing = rille_app::settings::MixingMode::External;
+    app.set_settings(s);
+    assert!(app.start_recording().is_err());
+    app.shutdown();
+}
+
+#[test]
+fn cached_stems_come_with_the_track() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir_all(&music).unwrap();
+    let r = synth::render(&Spec { sections: vec![(16, 126.0)], seed: 7, ..Spec::default() });
+    write_wav(&music.join("a.wav"), &r.audio);
+    let app = start(dir.path());
+    app.add_music_folder(music);
+    wait_for("scan", 20.0, || app.tracks(Source::Collection, "", SortKey::Title, false).len() == 1);
+    let row = app.tracks(Source::Collection, "", SortKey::Title, false).remove(0);
+    app.load_track(0, row.id);
+    wait_for("load", 30.0, || app.deck(0).audio.is_some() && !app.deck(0).loading);
+    let audio = app.deck(0).audio.unwrap();
+
+    // No model and nothing cached: nothing to load.
+    app.prepare_stems(0);
+    assert_eq!(app.deck(0).stems, rille_app::stems::DeckStems::None);
+
+    // Stems separated earlier (here: silence) are in the cache.
+    let spec = hound::WavSpec {
+        channels: 6,
+        sample_rate: audio.sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let path = Paths::under(dir.path()).cache.join("stems").join(format!("{}.wav", row.id));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut w = hound::WavWriter::create(&path, spec).unwrap();
+    for _ in 0..audio.frames.len() * 6 {
+        w.write_sample(0i16).unwrap();
+    }
+    w.finalize().unwrap();
+    app.prepare_stems(0);
+    assert_eq!(app.deck(0).stems, rille_app::stems::DeckStems::Ready);
+    wait_for("stems in the engine", 5.0, || app.snapshot().decks[0].stems);
+    let mute = ControlEvent { target: ControlTarget::deck(0, Control::StemMute(4)), value: ControlValue::Press(true) };
+    app.control(mute);
+    wait_for("vocals muted", 5.0, || app.snapshot().decks[0].stem_mute == [false, false, false, true]);
+
+    // Loading the track again brings them along.
+    app.load_track(0, row.id);
+    wait_for("reload with stems", 30.0, || app.snapshot().decks[0].stems && !app.deck(0).loading);
+    assert_eq!(app.snapshot().decks[0].stem_mute, [false; 4], "a new load starts with every stem on");
+    app.shutdown();
+}
+
+/// With `RILLE_STEM_MODEL=<htdemucs.onnx>`: a track is separated in the
+/// background and its stems reach the deck and the cache.
+#[test]
+#[ignore]
+fn separates_stems_with_the_model() {
+    let Some(model) = std::env::var_os("RILLE_STEM_MODEL") else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::under(dir.path());
+    std::fs::create_dir_all(paths.data.join("models")).unwrap();
+    std::os::unix::fs::symlink(&model, paths.data.join("models").join("htdemucs.onnx")).unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir_all(&music).unwrap();
+    let r = synth::render(&Spec { sections: vec![(16, 126.0)], seed: 9, ..Spec::default() });
+    write_wav(&music.join("a.wav"), &r.audio);
+    let app = start(dir.path());
+    assert_eq!(app.stem_model(), rille_app::stems::ModelState::Ready);
+    app.add_music_folder(music);
+    wait_for("scan", 20.0, || app.tracks(Source::Collection, "", SortKey::Title, false).len() == 1);
+    let row = app.tracks(Source::Collection, "", SortKey::Title, false).remove(0);
+    app.load_track(0, row.id);
+    wait_for("load", 30.0, || app.deck(0).audio.is_some() && !app.deck(0).loading);
+    let t = Instant::now();
+    app.prepare_stems(0);
+    let mut seen = Vec::new();
+    wait_for("separation", 600.0, || {
+        let s = app.deck(0).stems;
+        if seen.last() != Some(&std::mem::discriminant(&s)) {
+            seen.push(std::mem::discriminant(&s));
+            eprintln!("{:?} after {:?}", s, t.elapsed());
+        }
+        matches!(s, rille_app::stems::DeckStems::Ready | rille_app::stems::DeckStems::Failed(_))
+    });
+    assert_eq!(app.deck(0).stems, rille_app::stems::DeckStems::Ready);
+    wait_for("stems in the engine", 5.0, || app.snapshot().decks[0].stems);
+    assert!(paths.cache.join("stems").join(format!("{}.wav", row.id)).exists());
+    app.shutdown();
+}
+
+#[test]
+fn load_lock_keeps_tracks_off_decks_on_air() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir_all(&music).unwrap();
+    for (name, seed) in [("a.wav", 1), ("b.wav", 2)] {
+        let r = synth::render(&Spec { sections: vec![(16, 126.0)], seed, ..Spec::default() });
+        write_wav(&music.join(name), &r.audio);
+    }
+    let app = start(dir.path());
+    app.add_music_folder(music);
+    wait_for("scan", 20.0, || app.tracks(Source::Collection, "", SortKey::Title, false).len() == 2);
+    let rows = app.tracks(Source::Collection, "", SortKey::Title, false);
+    let (a, b) = (rows[0].id, rows[1].id);
+    app.load_track(0, a);
+    wait_for("load", 30.0, || app.snapshot().decks[0].loaded);
+    press(&app, 0, Control::Play);
+    wait_for("play", 5.0, || app.snapshot().decks[0].playing);
+    let set = |c: Control, deck: Option<u8>, v: f32| {
+        let target = deck.map_or(ControlTarget::global(c), |d| ControlTarget::deck(d, c));
+        app.control(ControlEvent { target, value: ControlValue::Absolute(v) });
+    };
+
+    // Off by default: a playing deck with its fader up still loads.
+    assert!(!app.load_locked(0));
+    let mut s = app.settings();
+    s.load_lock = true;
+    s.load_lock_level = 0.5;
+    app.set_settings(s);
+    assert!(app.load_locked(0), "playing, fader up");
+    app.load_track(0, b);
+    assert_eq!(app.deck(0).track_id, Some(a), "the load is refused");
+
+    // Below the threshold, or cut by the crossfader, the deck is off air.
+    set(Control::Volume, Some(0), 0.3);
+    wait_for("fader down", 5.0, || !app.load_locked(0));
+    set(Control::Volume, Some(0), 1.0);
+    wait_for("fader up", 5.0, || app.load_locked(0));
+    set(Control::Crossfader, None, 1.0);
+    wait_for("crossfader to B", 5.0, || !app.load_locked(0));
+    set(Control::Crossfader, None, 0.5);
+    wait_for("crossfader centre", 5.0, || app.load_locked(0));
+
+    // Decks left out of the list always load.
+    let mut s = app.settings();
+    s.load_lock_decks = "B".into();
+    app.set_settings(s);
+    assert!(!app.load_locked(0));
+    app.load_track(0, b);
+    assert_eq!(app.deck(0).track_id, Some(b));
+    app.shutdown();
+}

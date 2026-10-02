@@ -79,6 +79,12 @@ ApplicationWindow {
         anchors.fill: parent
         focus: true
         Keys.onPressed: event => {
+            // Page keys scroll the tracklist wherever the focus is.
+            if (event.key === Qt.Key_PageUp || event.key === Qt.Key_PageDown) {
+                browserView.pageRows(event.key === Qt.Key_PageUp ? -1 : 1, event.modifiers & Qt.ShiftModifier)
+                event.accepted = true
+                return
+            }
             var t = window.keyTarget(event)
             if (t.length && !event.isAutoRepeat) {
                 AppController.press(t, true)
@@ -175,6 +181,7 @@ ApplicationWindow {
             }
 
             Browser {
+                id: browserView
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 onSettingsRequested: page => {

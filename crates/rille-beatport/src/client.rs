@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use ureq::Agent;
 
+use crate::arrived::{Arrived, Outcome};
 use crate::auth::{self, Token};
 use crate::links::Link;
 use crate::model::{Download, Named, Paginated, Playlist, PlaylistItem, SearchResults, Track};
@@ -35,6 +36,24 @@ impl Progress {
     pub fn fraction(self) -> Option<f32> {
         (self.total > 0).then(|| (self.done as f64 / self.total as f64).min(1.0) as f32)
     }
+}
+
+/// The ranges a file of `total` bytes downloads in, in order: small at the
+/// start, so a track can play before it is all there, larger further on
+/// (fewer requests), and small again at the end, so no connection idles
+/// while the last one finishes.
+fn chunks(total: u64) -> Vec<std::ops::Range<u64>> {
+    const SMALLEST: u64 = 256 << 10;
+    const LARGEST: u64 = 4 << 20;
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < total {
+        let size = (at / 4).clamp(SMALLEST, LARGEST).min((total - at) / PARTS).max(SMALLEST);
+        let end = (at + size).min(total);
+        out.push(at..end);
+        at = end;
+    }
+    out
 }
 
 /// The full size from a `Content-Range: bytes 0-0/12345` header.
@@ -258,21 +277,38 @@ impl Client {
 
     /// Downloads `url` to `dest` (through `dest.part`, so `dest` only ever
     /// holds a whole file). Beatport's file server limits the speed of each
-    /// connection, so the file comes in [`PARTS`] ranges at once (measured:
-    /// 8 parts take a third of the time of one). `progress` is called about
-    /// ten times a second.
+    /// connection, so [`PARTS`] connections fetch the file's [`chunks`] at
+    /// once (measured: 8 parts take a third of the time of one). `progress` is called about
+    /// ten times a second. `arrived` follows the ranges, to read the file
+    /// while it comes (see [`Arrived`]).
     pub fn fetch_file(
         &self,
         url: &str,
         dest: &Path,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(Progress),
+        arrived: Option<&Arrived>,
+    ) -> Result<u64> {
+        let result = self.fetch_file_to(url, dest, cancel, progress, arrived);
+        if let Some(a) = arrived {
+            a.finish(if result.is_ok() { Outcome::Complete } else { Outcome::Failed });
+        }
+        result
+    }
+
+    fn fetch_file_to(
+        &self,
+        url: &str,
+        dest: &Path,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(Progress),
+        arrived: Option<&Arrived>,
     ) -> Result<u64> {
         if let Some(dir) = dest.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let part = dest.with_extension("part");
-        match self.fetch_to(url, &part, cancel, progress) {
+        match self.fetch_to(url, &part, cancel, progress, arrived) {
             Ok(n) => {
                 std::fs::rename(&part, dest)?;
                 Ok(n)
@@ -284,7 +320,14 @@ impl Client {
         }
     }
 
-    fn fetch_to(&self, url: &str, path: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)) -> Result<u64> {
+    fn fetch_to(
+        &self,
+        url: &str,
+        path: &Path,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(Progress),
+        arrived: Option<&Arrived>,
+    ) -> Result<u64> {
         // The first byte tells the size, and whether ranges work at all.
         let probe = crate::with_headers(self.files.get(url)).header("range", "bytes=0-0").call().map_err(net)?;
         let total = (probe.status().as_u16() == 206).then(|| content_range_total(&probe)).flatten();
@@ -293,25 +336,37 @@ impl Client {
         }
         drop(probe);
         let Some(total) = total.filter(|t| *t >= 2 * MIN_PART) else {
-            return self.fetch_whole(url, path, cancel, progress);
+            return self.fetch_whole(url, path, cancel, progress, arrived);
         };
         let file = std::fs::File::create(path)?;
         file.set_len(total)?;
-        let parts = (total / MIN_PART).clamp(1, PARTS);
-        let size = total.div_ceil(parts);
+        let chunks = chunks(total);
+        if let Some(a) = arrived {
+            a.begin(path.to_owned(), total, &chunks);
+        }
+        let parts = PARTS.min(chunks.len() as u64);
+        let next = std::sync::atomic::AtomicUsize::new(0);
         let done = AtomicU64::new(0);
         let running = AtomicU64::new(parts);
         // The first failure stops the other parts.
         let failed: Mutex<Option<Error>> = Mutex::new(None);
         let stop = AtomicBool::new(false);
         std::thread::scope(|s| {
-            for i in 0..parts {
-                let (start, end) = (i * size, ((i + 1) * size).min(total));
+            // Each connection takes the next chunk in file order, so the
+            // start of the file is there first.
+            for _ in 0..parts {
                 let (file, done, running, failed, stop) = (&file, &done, &running, &failed, &stop);
+                let (chunks, next) = (&chunks, &next);
                 s.spawn(move || {
-                    if let Err(e) = self.fetch_range(url, file, start..end, done, cancel, stop) {
-                        stop.store(true, Ordering::Relaxed);
-                        failed.lock().expect("failed lock").get_or_insert(e);
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(range) = chunks.get(i) else { break };
+                        let part = arrived.map(|a| (a, i));
+                        if let Err(e) = self.fetch_range(url, file, range.clone(), done, cancel, stop, part) {
+                            stop.store(true, Ordering::Relaxed);
+                            failed.lock().expect("failed lock").get_or_insert(e);
+                            break;
+                        }
                     }
                     running.fetch_sub(1, Ordering::Relaxed);
                 });
@@ -339,7 +394,8 @@ impl Client {
     }
 
     /// One range of the file, written in place. A dropped connection resumes
-    /// where it stopped (a few times).
+    /// where it stopped (a few times). `part` reports each write.
+    #[allow(clippy::too_many_arguments)]
     fn fetch_range(
         &self,
         url: &str,
@@ -348,6 +404,7 @@ impl Client {
         done: &AtomicU64,
         cancel: &AtomicBool,
         stop: &AtomicBool,
+        part: Option<(&Arrived, usize)>,
     ) -> Result<()> {
         use std::os::unix::fs::FileExt;
         let mut pos = range.start;
@@ -371,6 +428,9 @@ impl Client {
                                 file.write_all_at(&buf[..n], pos)?;
                                 pos += n as u64;
                                 done.fetch_add(n as u64, Ordering::Relaxed);
+                                if let Some((a, i)) = part {
+                                    a.advance(i, pos);
+                                }
                                 if pos >= range.end {
                                     break None;
                                 }
@@ -399,6 +459,7 @@ impl Client {
         path: &Path,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(Progress),
+        arrived: Option<&Arrived>,
     ) -> Result<u64> {
         let res = crate::with_headers(self.files.get(url)).call().map_err(net)?;
         if !res.status().is_success() {
@@ -406,6 +467,11 @@ impl Client {
         }
         let total = res.body().content_length().unwrap_or(0);
         let mut file = std::fs::File::create(path)?;
+        // Readable while it comes only with a known size.
+        let arrived = arrived.filter(|_| total > 0);
+        if let Some(a) = arrived {
+            a.begin(path.to_owned(), total, std::slice::from_ref(&(0..total)));
+        }
         let mut reader = res.into_body().into_reader();
         let mut buf = vec![0u8; 256 * 1024];
         let mut done = 0u64;
@@ -420,6 +486,9 @@ impl Client {
             }
             file.write_all(&buf[..n])?;
             done += n as u64;
+            if let Some(a) = arrived {
+                a.advance(0, done);
+            }
             if shown.elapsed().as_millis() >= 100 {
                 shown = std::time::Instant::now();
                 progress(Progress { done, total });
@@ -450,11 +519,99 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chunks_cover_the_file_small_at_both_ends() {
+        let total = 52_482_667;
+        let c = chunks(total);
+        assert_eq!(c.first().map(|r| r.start), Some(0));
+        assert_eq!(c.last().map(|r| r.end), Some(total));
+        assert!(c.windows(2).all(|w| w[0].end == w[1].start));
+        assert!(c.iter().take(4).all(|r| r.end - r.start == 256 << 10), "{:?}", &c[..4]);
+        assert!(c.iter().any(|r| r.end - r.start > 3 << 20), "{c:?}");
+        assert!(c.last().is_some_and(|r| r.end - r.start <= 256 << 10));
+        assert!(c.len() < 50, "{} requests", c.len());
+        assert_eq!(chunks(10).first(), Some(&(0..10)));
+        assert_eq!(chunks(10).len(), 1);
+    }
+
+    #[test]
     fn signed_out() {
         let c = Client::new(std::env::temp_dir().join("rille-bp-no-such-token.json"));
         assert_eq!(c.account(), None);
         assert!(matches!(c.search("x"), Err(Error::NotSignedIn)));
         assert_eq!(Quality::from_name("high"), Quality::High);
         assert_eq!(Quality::from_name("bogus"), Quality::Lossless);
+    }
+
+    /// A file server for one file that answers byte ranges, slowly (`delay`
+    /// per 64 KiB written), like Beatport's.
+    fn serve(body: Vec<u8>, delay: Duration) -> String {
+        use std::io::BufRead;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/track.flac", listener.local_addr().unwrap());
+        let body = std::sync::Arc::new(body);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let (Ok(mut stream), body) = (stream, body.clone()) else { continue };
+                std::thread::spawn(move || {
+                    let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                    let mut range = None;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        if let Some(r) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                            let (a, b) = r.trim().split_once('-').unwrap();
+                            range = Some((a.parse::<usize>().unwrap(), b.parse::<usize>().unwrap()));
+                        }
+                    }
+                    let (a, b) = range.unwrap_or((0, body.len() - 1));
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {a}-{b}/{}\r\nConnection: close\r\n\r\n",
+                        b + 1 - a,
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    for chunk in body[a..=b].chunks(64 * 1024) {
+                        if stream.write_all(chunk).is_err() {
+                            return;
+                        }
+                        std::thread::sleep(delay);
+                    }
+                });
+            }
+        });
+        url
+    }
+
+    #[test]
+    fn a_file_reads_while_it_downloads() {
+        use crate::arrived::Arrived;
+        let dir = tempfile::tempdir().unwrap();
+        let body: Vec<u8> = (0..6 * MIN_PART as usize).map(|i| (i * 7 % 251) as u8).collect();
+        // 8 MiB per second and range: the whole file in about 1.5 s.
+        let url = serve(body.clone(), Duration::from_millis(8));
+        let client = Client::new(dir.path().join("token.json"));
+        let arrived = Arrived::new();
+        let dest = dir.path().join("t.flac");
+        let reader = std::thread::scope(|s| {
+            let download =
+                s.spawn(|| client.fetch_file(&url, &dest, &AtomicBool::new(false), &mut |_| {}, Some(&arrived)));
+            let (part, total) = arrived.started(Duration::from_secs(10)).expect("started");
+            assert_eq!((part, total), (dir.path().join("t.part"), body.len() as u64));
+            let mut reader = arrived.reader(std::sync::Arc::new(AtomicBool::new(false))).unwrap();
+            let mut first = vec![0u8; 256 * 1024];
+            reader.read_exact(&mut first).unwrap();
+            assert_eq!(first, body[..first.len()]);
+            assert_eq!(arrived.outcome(), None, "read before the download ended");
+            assert_eq!(download.join().unwrap().unwrap(), body.len() as u64);
+            reader
+        });
+        let mut reader = reader;
+        let mut rest = Vec::new();
+        reader.read_to_end(&mut rest).unwrap();
+        assert_eq!(rest, body[256 * 1024..], "the reader keeps the renamed file");
+        assert_eq!(std::fs::read(&dest).unwrap(), body);
+        assert_eq!(arrived.outcome(), Some(crate::arrived::Outcome::Complete));
     }
 }

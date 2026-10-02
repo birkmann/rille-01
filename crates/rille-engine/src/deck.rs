@@ -8,9 +8,12 @@ use rille_core::quantize::phase_preserving_target;
 use rille_core::{BeatClock, BeatGrid, Control, ControlValue, CueKind};
 use rille_dsp::SincTable;
 
+use crate::mixer::fader_gain;
 use crate::remix::RemixDeck;
-use crate::types::{DEFAULT_LOOP_SIZE, Event, Garbage, HOTCUES, Hotcue, LOOP_SIZES, LoadedTrack, TrackAudio};
-use crate::voice::Voice;
+use crate::types::{
+    DEFAULT_LOOP_SIZE, Event, Garbage, HOTCUES, Hotcue, LOOP_SIZES, LoadedTrack, STEMS, StemAudio, TrackAudio,
+};
+use crate::voice::{READ_REACH, StemMix, Voice};
 
 pub(crate) struct RenderCtx<'a> {
     pub sr_out: f64,
@@ -59,6 +62,11 @@ pub fn filter_roll_beats(knob: f32) -> Option<f64> {
 const SECS_PER_REV: f64 = 1.8;
 /// Pitch bend while a bend button is held.
 const BEND: f64 = 0.03;
+/// Audio a streaming deck keeps ahead of the play position.
+const STREAM_READ_AHEAD_SECS: f64 = 0.5;
+/// Fastest playback (source frames per output frame) that still plays the
+/// stems mix; faster scratching reads the track.
+const STEM_MAX_SPEED: usize = 8;
 
 pub(crate) struct Deck {
     pub index: u8,
@@ -127,6 +135,19 @@ pub(crate) struct Deck {
     pub since_realign: f64,
     /// Jumps into phase since the track was loaded (diagnostics).
     pub realigns: u32,
+    /// The whole track's length while it still arrives (see
+    /// [`Command::ExtendTrack`](crate::Command::ExtendTrack)).
+    streaming: Option<f64>,
+    /// Playing, but at the end of what has arrived.
+    pub buffering: bool,
+    /// The track's stems, see [`StemAudio`].
+    pub stems: Option<Arc<StemAudio>>,
+    pub stem_volume: [f32; STEMS],
+    pub stem_mute: [bool; STEMS],
+    /// Stem gains now, gliding to their targets block by block.
+    stem_gain: [f32; STEMS],
+    /// Stems mixed for the frames a block reads.
+    stem_scratch: Vec<[f32; 2]>,
 }
 
 impl Deck {
@@ -178,6 +199,13 @@ impl Deck {
             just_started: false,
             since_realign: 0.0,
             realigns: 0,
+            streaming: None,
+            buffering: false,
+            stems: None,
+            stem_volume: [1.0; STEMS],
+            stem_mute: [false; STEMS],
+            stem_gain: [1.0; STEMS],
+            stem_scratch: vec![[0.0; 2]; STEM_MAX_SPEED * max_block + 2 * READ_REACH + 4],
         }
     }
 
@@ -224,6 +252,82 @@ impl Deck {
         self.main_cue = 0.0;
         self.ended_sent = false;
         self.fade_len = 0;
+        self.streaming = None;
+        self.buffering = false;
+        if let Some(s) = self.stems.take() {
+            garbage(Garbage::Stems(s));
+        }
+        self.stem_volume = [1.0; STEMS];
+        self.stem_mute = [false; STEMS];
+        self.stem_gain = [1.0; STEMS];
+    }
+
+    /// Stems for the track (see [`Command::SetStems`](crate::Command::SetStems)).
+    pub fn set_stems(&mut self, track_id: u64, stems: Option<Arc<StemAudio>>, garbage: &mut dyn FnMut(Garbage)) {
+        let fits = |s: &StemAudio| {
+            self.remix.is_none()
+                && self.track_id == track_id
+                && self.streaming.is_none()
+                && self
+                    .track
+                    .as_ref()
+                    .is_some_and(|t| t.sample_rate == s.sample_rate && t.frames.len() == s.frames.len())
+        };
+        match stems {
+            Some(s) if !fits(&s) => garbage(Garbage::Stems(s)),
+            stems => {
+                if self.track_id == track_id
+                    && let Some(old) = std::mem::replace(&mut self.stems, stems)
+                {
+                    garbage(Garbage::Stems(old));
+                }
+            }
+        }
+    }
+
+    /// Stem gains the controls ask for.
+    fn stem_targets(&self) -> [f32; STEMS] {
+        std::array::from_fn(|i| if self.stem_mute[i] { 0.0 } else { fader_gain(self.stem_volume[i]) })
+    }
+
+    /// Moves the stem gains towards their targets over `n` frames (a time
+    /// constant of 15 ms, so faders and mutes don't click).
+    fn glide_stems(&mut self, n: usize, sr_out: f64) {
+        let k = 1.0 - (-(n as f64) / (0.015 * sr_out)).exp() as f32;
+        let targets = self.stem_targets();
+        for (g, t) in self.stem_gain.iter_mut().zip(targets) {
+            *g += (t - *g) * k;
+            if (t - *g).abs() < 1e-4 {
+                *g = t;
+            }
+        }
+    }
+
+    /// Swaps in a longer copy of the track while it streams, see
+    /// [`Command::ExtendTrack`](crate::Command::ExtendTrack).
+    pub fn extend(
+        &mut self,
+        track_id: u64,
+        audio: Arc<TrackAudio>,
+        length_secs: Option<f64>,
+        garbage: &mut dyn FnMut(Garbage),
+    ) {
+        let fits = self.remix.is_none()
+            && self.track_id == track_id
+            && self.track.as_ref().is_some_and(|t| t.sample_rate == audio.sample_rate);
+        if !fits {
+            garbage(Garbage::Audio(audio));
+            return;
+        }
+        if let Some(old) = self.track.replace(audio) {
+            garbage(Garbage::Audio(old));
+        }
+        self.streaming = length_secs;
+    }
+
+    /// Seconds of the track that have arrived.
+    pub fn arrived_secs(&self) -> f64 {
+        self.track.as_ref().map_or(0.0, |t| t.duration_secs())
     }
 
     /// Makes this a remix deck (`Some`) or an empty track deck (`None`).
@@ -253,8 +357,9 @@ impl Deck {
         self.track.as_ref().map_or(44_100.0, |t| f64::from(t.sample_rate))
     }
 
+    /// The whole track's length, also while it still arrives.
     pub fn duration(&self) -> f64 {
-        self.track.as_ref().map_or(0.0, |t| t.duration_secs())
+        self.arrived_secs().max(self.streaming.unwrap_or(0.0))
     }
 
     /// Position being heard now, seconds.
@@ -301,9 +406,23 @@ impl Deck {
         let Some(track) = self.track.clone() else { return };
         let sr = self.sr();
         let stretch = self.uses_stretch();
-        self.voices[self.active].jump(&track, secs * sr, self.speed.max(0.01) * 1.0, stretch);
+        let (voice, speed) = (self.active, self.speed.max(0.01));
+        self.voice_jump(voice, &track, secs * sr, speed, stretch);
         self.fade_len = 0;
         self.ended_sent = false;
+    }
+
+    /// Voice `v` jumps to source frame `target`, reading the track with its
+    /// stems at their current gains.
+    fn voice_jump(&mut self, v: usize, track: &TrackAudio, target: f64, speed: f64, stretch: bool) {
+        let gains = self.stem_gain;
+        match self.stems.as_deref().filter(|_| gains != [1.0; STEMS]) {
+            Some(stems) => {
+                let mut mix = StemMix { track, stems, gains, scratch: &mut self.stem_scratch };
+                self.voices[v].jump(&mut mix, target, speed, stretch);
+            }
+            None => self.voices[v].jump(&mut &*track, target, speed, stretch),
+        }
     }
 
     /// Jump to `secs`, crossfading from the current sound if playing.
@@ -322,7 +441,7 @@ impl Deck {
         let speed_frames = (self.speed * sr / ctx.sr_out).max(0.01);
         let other = 1 - self.active;
         let stretch = self.uses_stretch();
-        self.voices[other].jump(&track, secs * sr, speed_frames, stretch);
+        self.voice_jump(other, &track, secs * sr, speed_frames, stretch);
         self.active = other;
         self.fade_pos = 0;
         self.fade_len = ctx.declick;
@@ -463,6 +582,15 @@ impl Deck {
             return None;
         }
         match c {
+            Control::StemVolume(n @ 1..=4) => {
+                if let ControlValue::Absolute(x) = v {
+                    self.stem_volume[usize::from(n - 1)] = x.clamp(0.0, 1.0);
+                }
+            }
+            Control::StemMute(n @ 1..=4) if press => {
+                let m = &mut self.stem_mute[usize::from(n - 1)];
+                *m = !*m;
+            }
             Control::Play if press => {
                 if matches!(self.held, Held::Cue | Held::Hotcue(_)) {
                     self.latched = true;
@@ -770,6 +898,19 @@ impl Deck {
         let pitch = 2f64.powf(f64::from(self.key_shift) / 12.0) * if self.keylock { 1.0 } else { speed.abs() };
         let transpose = (sr / ctx.sr_out * pitch) as f32;
 
+        self.glide_stems(n, ctx.sr_out);
+        // Streaming: wait at the end of what has arrived (with room for the
+        // interpolator and the time-stretcher to read ahead).
+        self.buffering = false;
+        if self.streaming.is_some() && self.playing {
+            let needed = self.position() + speed.abs() * n as f64 / ctx.sr_out + STREAM_READ_AHEAD_SECS;
+            if needed >= track.duration_secs() {
+                self.buffering = true;
+                self.buf[..n].fill([0.0; 2]);
+                return (0.0, None);
+            }
+        }
+
         let mut beats = 0.0;
         let mut done = 0;
         // Grid beats crossed in this block: (frame offset, downbeat).
@@ -891,19 +1032,27 @@ impl Deck {
             out.fill([0.0; 2]);
             return;
         }
-        self.voices[self.active].render(track, out, speed, stretch, transpose, ctx.sinc, cubic);
-        if self.fade_pos < self.fade_len {
-            let old = 1 - self.active;
-            let fade = &mut self.fade_buf[..n];
-            self.voices[old].render(
-                track,
-                fade,
-                speed,
-                stretch && self.voices[old].is_stretching(),
-                transpose,
-                ctx.sinc,
-                cubic,
-            );
+        // With stems away from their full level, the voices read the mix of
+        // the stems; a block too fast for the scratch buffer reads the track.
+        let gains = self.stem_gain;
+        let window = (speed.abs() * n as f64) as usize + 2 * READ_REACH + 2;
+        let stems = self.stems.as_deref().filter(|_| gains != [1.0; STEMS] && window <= self.stem_scratch.len());
+        let mut mix = stems.map(|stems| StemMix { track, stems, gains, scratch: &mut self.stem_scratch });
+        let (active, old) = (self.active, 1 - self.active);
+        let old_stretch = stretch && self.voices[old].is_stretching();
+        let fading = self.fade_pos < self.fade_len;
+        let fade = &mut self.fade_buf[..n];
+        let [v0, v1] = &mut self.voices;
+        let (voice, old_voice) = if active == 0 { (v0, v1) } else { (v1, v0) };
+        match mix.as_mut() {
+            Some(m) => voice.render(m, out, speed, stretch, transpose, ctx.sinc, cubic),
+            None => voice.render(&mut &*track, out, speed, stretch, transpose, ctx.sinc, cubic),
+        }
+        if fading {
+            match mix.as_mut() {
+                Some(m) => old_voice.render(m, fade, speed, old_stretch, transpose, ctx.sinc, cubic),
+                None => old_voice.render(&mut &*track, fade, speed, old_stretch, transpose, ctx.sinc, cubic),
+            }
             for (i, (o, f)) in out.iter_mut().zip(fade.iter()).enumerate() {
                 let g = ((self.fade_pos + i) as f32 / self.fade_len as f32).min(1.0);
                 let (gi, go) = ((g * std::f32::consts::FRAC_PI_2).sin(), (g * std::f32::consts::FRAC_PI_2).cos());

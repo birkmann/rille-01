@@ -212,6 +212,10 @@ impl Tracks {
 
 /// Seconds of a streamed track decoded before it starts to play.
 const STREAM_START_SECS: usize = 5;
+/// A deck this close (seconds) to the end of the streamed audio it has gets
+/// what is decoded so far, if that is at least `STREAM_EARLY_SECS` more.
+const STREAM_NEAR_END_SECS: f64 = 15.0;
+const STREAM_EARLY_SECS: usize = 10;
 
 /// A streamed track for a deck: the whole audio and the downloaded file.
 enum Streamed {
@@ -243,6 +247,8 @@ pub struct App {
     mapping_dirs: Vec<PathBuf>,
     learn: Arc<Mutex<Option<LearnSession>>>,
     last_tick: Mutex<Instant>,
+    /// Dropouts already logged, and when.
+    xruns_logged: Mutex<(Instant, u64)>,
     shutdown: Arc<AtomicBool>,
     beatport: beatport::BeatportState,
     recording: Mutex<Option<record::Recording>>,
@@ -295,6 +301,7 @@ impl App {
             mapping_dirs,
             learn: Arc::new(Mutex::new(None)),
             last_tick: Mutex::new(Instant::now()),
+            xruns_logged: Mutex::new((Instant::now(), 0)),
             shutdown: Arc::new(AtomicBool::new(false)),
             beatport: beatport::BeatportState::new(paths.beatport_token()),
             recording: Mutex::new(None),
@@ -367,6 +374,11 @@ impl App {
 
     pub fn snapshot(&self) -> Snapshot {
         self.engine.get().map(|e| e.snapshot()).unwrap_or_default()
+    }
+
+    /// Audio dropouts (buffer underruns) since the output started.
+    pub fn xruns(&self) -> u64 {
+        self.engine.get().map_or(0, |e| e.xruns())
     }
 
     pub fn deck(&self, deck: u8) -> DeckInfo {
@@ -500,6 +512,14 @@ impl App {
         };
         if let Some(engine) = self.engine.get() {
             engine.poll(|e| self.on_engine_event(e));
+            // Dropouts, at most one line a second.
+            let mut logged = self.xruns_logged.lock().expect("xrun log lock");
+            let xruns = engine.xruns();
+            if xruns > logged.1 && now.duration_since(logged.0) >= Duration::from_secs(1) {
+                eprintln!("audio: {} dropouts (buffer underruns), {xruns} in all", xruns - logged.1);
+                *logged = (now, xruns);
+            }
+            drop(logged);
             let snap = engine.snapshot();
             self.log_history(&snap, dt);
             if self.settings.read().expect("settings lock").suggestions {
@@ -973,7 +993,9 @@ impl App {
             if let Some(s) = arrived.started(Duration::from_millis(100)) {
                 break Some(s);
             }
-            if download.is_finished() {
+            // Ended without starting: `started` no longer waits, so stop
+            // polling while the download thread winds up (it is joined).
+            if download.is_finished() || arrived.outcome().is_some() {
                 break None;
             }
         };
@@ -991,19 +1013,32 @@ impl App {
         };
         // A hint only: the file type is probed from its first bytes.
         let ext = row.path.extension().and_then(|e| e.to_str());
-        let mut next_push = 0usize;
+        let (mut next_push, mut pushed, mut next_check) = (0usize, 0usize, 0usize);
         let mut on_frames = |so_far: &rille_decode::DecodedAudio| {
             let sr = so_far.sample_rate as usize;
             if self.deck(deck).engine_id != seq {
                 cancel.store(true, Ordering::Relaxed);
                 return;
             }
-            if sr == 0 || so_far.frames.len() < next_push.max(STREAM_START_SECS * sr) {
+            let have = so_far.frames.len();
+            if sr == 0 {
                 return;
             }
             // Longer copies at doubling lengths: about twice the track copied
-            // in all.
-            next_push = 2 * so_far.frames.len();
+            // in all. When the download is slow, playback can reach the end
+            // of the copy the deck has while much more is decoded: then the
+            // decoded audio goes out at once (checked once per second of it).
+            let due = have >= next_push.max(STREAM_START_SECS * sr)
+                || pushed > 0 && have >= pushed + STREAM_EARLY_SECS * sr && have >= next_check && {
+                    next_check = have + sr;
+                    let d = self.snapshot().decks[deck as usize];
+                    d.buffering || (d.position_secs + STREAM_NEAR_END_SECS) * sr as f64 >= pushed as f64
+                };
+            if !due {
+                return;
+            }
+            next_push = 2 * have;
+            pushed = have;
             let audio = Arc::new(TrackAudio { sample_rate: so_far.sample_rate, frames: so_far.frames.clone() });
             let secs = audio.duration_secs();
             // The whole length from the catalog, else estimated from the bytes.
@@ -1111,17 +1146,17 @@ impl App {
 
     /// Rows for the browser.
     pub fn tracks(&self, source: Source, search: &str, sort: SortKey, descending: bool) -> Vec<TrackRow> {
-        // Before taking the tracks lock, which this reads too.
-        let suggested = (source == Source::Suggestions).then(|| self.suggestions().into_iter().map(|s| s.id).collect());
-        let t = self.tracks.read().expect("tracks lock");
+        // Before taking the tracks lock: suggestions read it too, and the
+        // library is never locked while the tracks lock is held.
         let ids: Option<Vec<TrackId>> = match source {
             Source::Collection => None,
             Source::Playlist(p) => self.library.lock().expect("library lock").playlist_tracks(p).ok(),
             Source::History(h) => self.library.lock().expect("library lock").history_tracks(h).ok(),
-            Source::Suggestions => suggested,
+            Source::Suggestions => Some(self.suggestions().into_iter().map(|s| s.id).collect()),
             Source::BeatportRecent => self.library.lock().expect("library lock").streamed_tracks(false).ok(),
             Source::BeatportOffline => self.library.lock().expect("library lock").streamed_tracks(true).ok(),
         };
+        let t = self.tracks.read().expect("tracks lock");
         let matching: Option<HashSet<usize>> =
             (!search.trim().is_empty()).then(|| t.index.search(search).into_iter().collect());
         let by_id = |id: TrackId| t.by_id.get(&id).copied();
@@ -1555,7 +1590,11 @@ impl App {
     }
 
     fn refresh_tracks(&self) {
-        if let Ok(rows) = self.library.lock().expect("library lock").tracks() {
+        // A separate statement, so the library lock is released before the
+        // tracks lock is taken: holding both invites a deadlock with any
+        // reader that takes them the other way round.
+        let rows = self.library.lock().expect("library lock").tracks();
+        if let Ok(rows) = rows {
             *self.tracks.write().expect("tracks lock") = Tracks::new(rows);
         }
         self.notify(UiEvent::LibraryChanged);

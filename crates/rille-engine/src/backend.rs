@@ -2,7 +2,7 @@
 //! (when a server is running), then plain ALSA.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -151,7 +151,8 @@ fn open(host: &cpal::Host, device: cpal::Device, config: &AudioConfig) -> Result
     // The callback reports its thread once; a helper thread then asks for
     // real-time priority for it.
     let audio_tid = Arc::new(AtomicI64::new(0));
-    let stream = build(&device, &stream_config, supported.sample_format(), engine, audio_tid.clone())?;
+    let xruns = handle.xruns.clone();
+    let stream = build(&device, &stream_config, supported.sample_format(), engine, audio_tid.clone(), xruns)?;
     stream.play().map_err(|e| e.to_string())?;
     let realtime_priority = Arc::new(AtomicI64::new(0));
     let granted = realtime_priority.clone();
@@ -194,6 +195,7 @@ fn build(
     format: cpal::SampleFormat,
     mut engine: Engine,
     audio_tid: Arc<AtomicI64>,
+    xruns: Arc<AtomicU64>,
 ) -> Result<cpal::Stream, String> {
     let channels = usize::from(config.channels);
     // Once, from inside the callback: which thread runs the audio.
@@ -204,7 +206,15 @@ fn build(
             audio_tid.store(crate::realtime::current_tid(), Ordering::Release);
         }
     };
-    let err = |e: cpal::Error| eprintln!("audio stream: {e}");
+    // Dropouts are only counted (the app shows them): this may run on the
+    // audio thread, and printing each one would add to the problem.
+    let err = move |e: cpal::Error| {
+        if e.kind() == cpal::ErrorKind::Xrun {
+            xruns.fetch_add(1, Ordering::Relaxed);
+        } else {
+            eprintln!("audio stream: {e}");
+        }
+    };
     match format {
         cpal::SampleFormat::F32 => device
             .build_output_stream(

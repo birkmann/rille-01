@@ -116,7 +116,9 @@ const MAX_STRETCH_SPEED: f64 = 4.0;
 impl Voice {
     pub fn new(sample_rate: u32, max_block: usize) -> Self {
         let mut stretch = Stretch::preset_default(2, sample_rate);
-        let preroll = 16_384;
+        // A seek keeps one block plus one interval of the preset (0.12 s +
+        // 0.03 s); reading more is wasted work in the jump's callback.
+        let preroll = (0.15 * f64::from(sample_rate)).ceil() as usize + 64;
         // The first seek/process allocate inside the C++ library; do it here.
         let warm = vec![0.0f32; 2 * preroll];
         stretch.seek(&warm, 1.0);
@@ -133,7 +135,15 @@ impl Voice {
             carry: 0.0,
             lat_in,
             lat_out,
-            input: vec![0.0; 2 * ((max_block as f64 * MAX_STRETCH_SPEED) as usize + 64).max(preroll)],
+            // Room for a block at the top speed, the preroll, and the input
+            // that primes the stretcher after a jump at that speed (cut
+            // short, the voice would place itself past the jump target).
+            input: vec![
+                0.0;
+                2 * ((max_block as f64 * MAX_STRETCH_SPEED) as usize + 64)
+                    .max(preroll)
+                    .max((prime as f64 * MAX_STRETCH_SPEED).ceil() as usize + 64)
+            ],
             output: vec![0.0; 2 * max_block],
             preroll,
             last_speed: 1.0,
@@ -203,7 +213,9 @@ impl Voice {
             return;
         }
         self.stretching = true;
-        let speed = speed.max(0.01);
+        // Faster than this does not play through the stretcher anyway, and
+        // `input` holds the priming input up to this speed.
+        let speed = speed.clamp(0.01, MAX_STRETCH_SPEED);
         let end = (target + self.lat_in + self.lat_out * speed).round();
         let prime = self.prime_out.len() / 2;
         let primed_in = ((prime as f64 * speed).round() as usize).min(self.input.len() / 2);

@@ -79,6 +79,9 @@ pub(crate) struct Deck {
     active: usize,
     fade_pos: usize,
     fade_len: usize,
+    /// Gain the fading-out voice starts from (below 1 when a jump came
+    /// during a crossfade).
+    fade_from: f32,
     pub buf: Vec<[f32; 2]>,
     fade_buf: Vec<[f32; 2]>,
     pub playing: bool,
@@ -162,6 +165,7 @@ impl Deck {
             active: 0,
             fade_pos: 0,
             fade_len: 0,
+            fade_from: 1.0,
             buf: vec![[0.0; 2]; max_block],
             fade_buf: vec![[0.0; 2]; max_block],
             playing: false,
@@ -439,13 +443,35 @@ impl Deck {
         }
         let sr = self.sr();
         let speed_frames = (self.speed * sr / ctx.sr_out).max(0.01);
-        let other = 1 - self.active;
+        // During a crossfade (a loop wrap right after a jump into phase) the
+        // louder voice fades out from where it is and the quieter one is
+        // reused, instead of cutting off the voice that is still fading out.
+        let (keep, gain) = match self.fade_gains() {
+            Some((gi, go)) if go > gi => (1 - self.active, go),
+            Some((gi, _)) => (self.active, gi),
+            None => (self.active, 1.0),
+        };
+        let other = 1 - keep;
         let stretch = self.uses_stretch();
         self.voice_jump(other, &track, secs * sr, speed_frames, stretch);
         self.active = other;
         self.fade_pos = 0;
         self.fade_len = ctx.declick;
+        self.fade_from = gain;
         self.ended_sent = false;
+    }
+
+    /// Whether a jump's crossfade is still running.
+    pub fn fading(&self) -> bool {
+        self.fade_pos < self.fade_len
+    }
+
+    /// Gains of the incoming and outgoing voice at the current fade position.
+    fn fade_gains(&self) -> Option<(f32, f32)> {
+        self.fading().then(|| {
+            let g = self.fade_pos as f32 / self.fade_len as f32 * std::f32::consts::FRAC_PI_2;
+            (g.sin(), g.cos() * self.fade_from)
+        })
     }
 
     /// Target of a jump: with quantize, the position near `secs` that keeps
@@ -900,14 +926,18 @@ impl Deck {
 
         self.glide_stems(n, ctx.sr_out);
         // Streaming: wait at the end of what has arrived (with room for the
-        // interpolator and the time-stretcher to read ahead).
-        self.buffering = false;
+        // interpolator and the time-stretcher to read ahead). The block that
+        // starts the wait still plays, fading out, and the one that ends it
+        // fades in: no click either way.
+        let was_buffering = std::mem::take(&mut self.buffering);
         if self.streaming.is_some() && self.playing {
             let needed = self.position() + speed.abs() * n as f64 / ctx.sr_out + STREAM_READ_AHEAD_SECS;
             if needed >= track.duration_secs() {
                 self.buffering = true;
-                self.buf[..n].fill([0.0; 2]);
-                return (0.0, None);
+                if was_buffering {
+                    self.buf[..n].fill([0.0; 2]);
+                    return (0.0, None);
+                }
             }
         }
 
@@ -949,6 +979,14 @@ impl Deck {
         }
         for p in self.flux_pos.iter_mut().chain(self.roll.as_mut().map(|r| &mut r.slip)) {
             *p += speed.abs() * n as f64 / ctx.sr_out;
+        }
+        if self.buffering != was_buffering {
+            for (i, f) in self.buf[..n].iter_mut().enumerate() {
+                let g = (i as f32 + 0.5) / n as f32;
+                let g = if self.buffering { 1.0 - g } else { g };
+                f[0] *= g;
+                f[1] *= g;
+            }
         }
 
         let mut event = None;
@@ -1041,6 +1079,7 @@ impl Deck {
         let (active, old) = (self.active, 1 - self.active);
         let old_stretch = stretch && self.voices[old].is_stretching();
         let fading = self.fade_pos < self.fade_len;
+        let fade_from = self.fade_from;
         let fade = &mut self.fade_buf[..n];
         let [v0, v1] = &mut self.voices;
         let (voice, old_voice) = if active == 0 { (v0, v1) } else { (v1, v0) };
@@ -1055,11 +1094,53 @@ impl Deck {
             }
             for (i, (o, f)) in out.iter_mut().zip(fade.iter()).enumerate() {
                 let g = ((self.fade_pos + i) as f32 / self.fade_len as f32).min(1.0);
-                let (gi, go) = ((g * std::f32::consts::FRAC_PI_2).sin(), (g * std::f32::consts::FRAC_PI_2).cos());
+                let (gi, go) = ((g * std::f32::consts::FRAC_PI_2).sin(), (g * std::f32::consts::FRAC_PI_2).cos() * fade_from);
                 o[0] = o[0] * gi + f[0] * go;
                 o[1] = o[1] * gi + f[1] * go;
             }
             self.fade_pos += n;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::HOTCUES;
+
+    #[test]
+    fn a_jump_during_a_crossfade_does_not_cut_the_fading_voice() {
+        // Three flat sections: a cut-off voice shows up as a step.
+        const SR: u32 = 48_000;
+        let level = |i: usize| match i / SR as usize {
+            0 => 0.8,
+            1 => 0.0,
+            _ => -0.8,
+        };
+        let frames = (0..3 * SR as usize).map(|i| [level(i); 2]).collect();
+        let audio = Arc::new(TrackAudio { sample_rate: SR, frames });
+        let track =
+            LoadedTrack { id: 1, audio, grid: None, main_cue_secs: 0.0, hotcues: [None; HOTCUES], auto_gain_db: 0.0 };
+        let sinc = SincTable::new(32, 256);
+        let ctx = RenderCtx { sr_out: f64::from(SR), sinc: &sinc, declick: 144 };
+        let mut deck = Deck::new(0, SR, 256);
+        deck.load(track, &mut drop);
+        deck.set_position(0.5);
+        deck.playing = true;
+        let mut out = Vec::new();
+        let mut render = |deck: &mut Deck, n: usize| {
+            deck.render(n, 1.0, true, &ctx);
+            out.extend(deck.buf[..n].iter().map(|f| f[0]));
+        };
+        render(&mut deck, 256);
+        // Into the silent section, then (20 frames into that fade) into the
+        // negative one, like a jump into phase followed by a loop wrap.
+        deck.jump(1.5, &ctx);
+        render(&mut deck, 20);
+        deck.jump(2.5, &ctx);
+        render(&mut deck, 256);
+        let step = out.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+        assert!(step < 0.05, "largest step between frames {step}");
+        assert!((out.last().unwrap() + 0.8).abs() < 1e-3, "lands on the last target");
     }
 }

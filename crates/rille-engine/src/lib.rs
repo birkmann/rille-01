@@ -17,7 +17,8 @@ mod voice;
 pub mod backend;
 pub mod realtime;
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 pub use engine::Engine;
 pub use mixer::{band_gains, crossfader_gain, fader_gain, fader_level, gain_knob_db};
@@ -36,6 +37,8 @@ pub struct EngineHandle {
     events: Mutex<rtrb::Consumer<Event>>,
     garbage: Mutex<rtrb::Consumer<Garbage>>,
     snapshot: Mutex<triple_buffer::Output<Snapshot>>,
+    /// Buffer underruns/overruns reported by the audio output.
+    xruns: Arc<AtomicU64>,
     sample_rate: u32,
     max_block: usize,
 }
@@ -45,6 +48,11 @@ impl EngineHandle {
     /// [`Command::SetRemix`]). `id` names it in [`Command::SetGrid`].
     pub fn new_remix_deck(&self, deck: u8, id: u64, bpm: f64) -> Box<RemixDeck> {
         RemixDeck::new(self.sample_rate, self.max_block, deck, id, bpm)
+    }
+
+    /// Buffer underruns/overruns (dropouts) since the output started.
+    pub fn xruns(&self) -> u64 {
+        self.xruns.load(Ordering::Relaxed)
     }
 
     /// Queues a command; gives it back if the queue is full.
@@ -88,6 +96,7 @@ pub fn create(sample_rate: u32, max_block: usize) -> (EngineHandle, Engine) {
         events: Mutex::new(ev_rx),
         garbage: Mutex::new(gb_rx),
         snapshot: Mutex::new(snap_out),
+        xruns: Arc::new(AtomicU64::new(0)),
         sample_rate,
         max_block,
     };

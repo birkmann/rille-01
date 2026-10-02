@@ -33,7 +33,6 @@ pub fn undenormal(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::hint::black_box;
 
     #[test]
     fn undenormal_flushes_tiny() {
@@ -45,6 +44,7 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn ftz_daz_set() {
+        use std::hint::black_box;
         // Runs on its own test thread, so the flag does not leak into other tests.
         let sub = black_box(f32::MIN_POSITIVE) * black_box(0.25);
         assert!(sub > 0.0);

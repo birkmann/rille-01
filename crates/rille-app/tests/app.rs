@@ -201,6 +201,47 @@ fn streamed_tracks_live_apart_from_the_collection() {
     app.shutdown();
 }
 
+/// The browser re-reads a streamed list while workers refresh the rows
+/// (every Beatport load and download does): the two must not deadlock on the
+/// library and tracks locks.
+#[test]
+fn browsing_streamed_tracks_during_refreshes_does_not_deadlock() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::under(dir.path());
+    paths.create().unwrap();
+    std::fs::create_dir_all(paths.beatport_cache()).unwrap();
+    {
+        let mut lib = rille_library::Library::open(&paths.library_db(), &paths.cache).unwrap();
+        for bp in 0..20 {
+            let file = paths.beatport_cache().join(format!("{bp}.wav"));
+            let tags = rille_library::Tags { title: format!("Track {bp}"), ..Default::default() };
+            lib.upsert_streamed(bp, &file, &tags, None).unwrap();
+        }
+    }
+    let app = start(dir.path());
+    let mut s = app.settings();
+    s.background_analysis = false;
+    app.set_settings(s);
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    for reader in [true, false] {
+        let (app, done_tx) = (app.clone(), done_tx.clone());
+        std::thread::spawn(move || {
+            for _ in 0..2_000 {
+                if reader {
+                    app.tracks(Source::BeatportRecent, "", SortKey::Artist, false);
+                } else {
+                    app.remove_tracks(&[]);
+                }
+            }
+            done_tx.send(()).unwrap();
+        });
+    }
+    for _ in 0..2 {
+        done_rx.recv_timeout(Duration::from_secs(60)).expect("browsing and refreshing deadlocked");
+    }
+    app.shutdown();
+}
+
 #[test]
 fn import_folder_as_playlists() {
     let dir = tempfile::tempdir().unwrap();

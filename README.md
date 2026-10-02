@@ -2,13 +2,13 @@
   <img src="packaging/icons/rille-128.png" width="96" height="96" alt="">
 </p>
 <h1 align="center">rille</h1>
-<p align="center"><b>dj software for linux</b> · four decks, remix decks, beat-locked sync<br>
+<p align="center"><b>dj software for linux and macos</b> · four decks, remix decks, beat-locked sync<br>
 <a href="#installing">Install</a> · <a href="#using-it">Manual</a></p>
 
 ![rille with four decks in sync: three track decks and a remix deck](website/assets/img/rille-4-decks.png)
 
-rille (German for the groove in a record) is a native Linux DJ application:
-four decks, remix decks, a mixer with FX, a music library and MIDI/HID
+rille (German for the groove in a record) is a native DJ application for Linux and
+macOS: four decks, remix decks, a mixer with FX, a music library and MIDI/HID
 controller support, built around one priority — **beatgrids that are detected
 automatically and precisely enough that sync never drifts.**
 
@@ -71,7 +71,8 @@ automatically and precisely enough that sync never drifts.**
   (remix decks, RGB pads, segment displays) over HID, MIDI learn, soft
   takeover, jog wheels, LED feedback, hotplug. A HID controller is described
   in its mapping file, so others can be added without changing the code.
-- **Audio:** PipeWire natively, JACK, or ALSA. Headphone cue on outputs 3/4 of
+- **Audio:** PipeWire natively, JACK, or ALSA on Linux; Core Audio on macOS.
+  Headphone cue on outputs 3/4 of
   a 4-channel interface, or split mono on 2 channels. External mixer mode for
   hardware mixers such as the Allen & Heath Xone:96: every deck on its own
   mixer channel.
@@ -108,9 +109,26 @@ rille
 Other options: `packaging/arch/PKGBUILD` (`makepkg -si` in that folder),
 `packaging/flatpak/io.github.birkmann.rille.yml` (KDE 6.11 runtime),
 `packaging/appimage/build-appimage.sh`. The release workflow
-(`.github/workflows/release.yml`) builds the Flatpak bundle and the AppImage
-and attaches them to the GitHub release of every `v*` tag; it can also be
-started by hand from the Actions tab.
+(`.github/workflows/release.yml`) builds the Flatpak bundle, the AppImage and
+the macOS disk image and attaches them to the GitHub release of every `v*`
+tag; it can also be started by hand from the Actions tab.
+
+### macOS
+
+Download `rille-macos-arm64.dmg` from the latest GitHub release (Apple
+silicon, macOS 12 or later) and drag rille to Applications. The app is not
+notarized: allow the first launch under System Settings → Privacy & Security
+→ Open Anyway.
+
+To build it yourself (Rust, the Xcode command line tools and Qt 6.5+, e.g.
+`brew install qt`):
+
+```sh
+./packaging/macos/build-app.sh  # → target/macos/rille.app and rille-macos-arm64.dmg
+```
+
+With Qt's own installer instead of Homebrew, point `QT_ROOT_DIR` at it
+(`QT_ROOT_DIR=~/Qt/6.8.3/macos`).
 
 ## Using it
 
@@ -286,9 +304,10 @@ RILLE_STEM_MODEL=htdemucs.onnx cargo test --release -p rille-stems -p rille-app 
   checked on a device. Xone:96 support follows its user guide and has not
   been tested on the hardware either. Other HID controllers need a mapping
   file with their report layout.
-- The Flatpak and AppImage are built by the release workflow on GitHub,
-  which has not run yet; until the first `v*` tag there are no prebuilt
-  packages. A local Flatpak build needs network access for its runtime and
+- The Flatpak, AppImage and macOS disk image are built by the release
+  workflow on GitHub, which has not run yet; until the first `v*` tag there
+  are no prebuilt packages. The macOS app is signed ad hoc, not notarized,
+  and built for Apple silicon only. A local Flatpak build needs network access for its runtime and
   crates.
 - Recording takes the internal main mix; with external mixing, record on the
   hardware mixer. A recording stops when the audio output changes.

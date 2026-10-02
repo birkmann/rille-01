@@ -17,11 +17,15 @@ use rille_app::{App, Paths, StartOptions};
 const MAIN_QML: &str = "qrc:/qt/qml/rille/ui/qml/Main.qml";
 
 /// Bundled controller mappings: next to an installed binary
-/// (`../share/rille/mappings`) or in the source tree during development.
+/// (`../share/rille/mappings`), in a macOS app bundle
+/// (`Contents/Resources/mappings`) or in the source tree during development.
 fn bundled_mappings() -> Option<PathBuf> {
-    let installed = std::env::current_exe().ok()?.parent()?.join("../share/rille/mappings");
-    if installed.is_dir() {
-        return Some(installed);
+    let bin = std::env::current_exe().ok()?;
+    let bin_dir = bin.parent()?;
+    for installed in [bin_dir.join("../share/rille/mappings"), bin_dir.join("../Resources/mappings")] {
+        if installed.is_dir() {
+            return Some(installed);
+        }
     }
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../mappings");
     dev.is_dir().then_some(dev)

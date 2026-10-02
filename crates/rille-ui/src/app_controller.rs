@@ -15,6 +15,7 @@ pub mod qobject {
         #[qml_element]
         #[qml_singleton]
         #[qproperty(f64, cpu_load, cxx_name = "cpuLoad")]
+        #[qproperty(i32, xruns)]
         #[qproperty(f64, master_peak_l, cxx_name = "masterPeakL")]
         #[qproperty(f64, master_peak_r, cxx_name = "masterPeakR")]
         #[qproperty(f64, limiter_reduction, cxx_name = "limiterReduction")]
@@ -366,6 +367,7 @@ use crate::global::{app, token_path};
 #[derive(Default)]
 pub struct AppControllerRust {
     cpu_load: f64,
+    xruns: i32,
     master_peak_l: f64,
     master_peak_r: f64,
     limiter_reduction: f64,
@@ -577,6 +579,7 @@ impl qobject::AppController {
         app.tick();
         let s = app.snapshot();
         self.as_mut().set_cpu_load(f64::from(s.cpu_load));
+        self.as_mut().set_xruns(i32::try_from(app.xruns()).unwrap_or(i32::MAX));
         self.as_mut().set_master_peak_l(f64::from(s.master_meter[0]));
         self.as_mut().set_master_peak_r(f64::from(s.master_meter[1]));
         self.as_mut().set_limiter_reduction(f64::from(s.limiter_reduction_db));

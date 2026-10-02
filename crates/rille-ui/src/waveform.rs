@@ -396,7 +396,7 @@ fn draw_scrolling(
     let spp = seconds / w;
     let x_of = |t: f64| w / 2.0 + (t - pos) / spp;
     if let Some((a, b, active)) = loop_ {
-        c.rect(x_of(a), x_of(b), 0, h, LOOP, if active { 0.22 } else { 0.08 });
+        c.rect(x_of(a), x_of(b), 0, h, LOOP, if active { 0.4 } else { 0.1 });
     }
     if let Some(wf) = wf {
         let bps = wf.bins_per_sec;
@@ -407,6 +407,9 @@ fn draw_scrolling(
             }
             draw_column(c, x, bins_max(wf, t0 * bps, (t0 + spp) * bps), &look);
         }
+    }
+    if let Some((a, b, true)) = loop_ {
+        draw_loop_band(c, x_of(a), x_of(b));
     }
     if let Some(g) = grid {
         let (b0, b1) = (g.beat_at(pos - seconds / 2.0).floor() as i64, g.beat_at(pos + seconds / 2.0).ceil() as i64);
@@ -423,6 +426,12 @@ fn draw_scrolling(
             }
         }
     }
+    if let Some((a, b, active)) = loop_ {
+        // Over the grid lines, which often fall on the loop's ends.
+        let (alpha, width) = if active { (1.0, 2) } else { (0.5, 1) };
+        c.vline(x_of(a), LOOP, alpha, width);
+        c.vline(x_of(b) - width as f64, LOOP, alpha, width);
+    }
     if loaded {
         let x = x_of(main_cue);
         c.vline(x, CUE, 1.0, 2);
@@ -434,6 +443,15 @@ fn draw_scrolling(
         c.rect(x, x + 10.0, 0, 10, color, 1.0);
     }
     c.vline(w / 2.0 - 1.0, PLAYHEAD, 1.0, 2);
+}
+
+/// Active loop over the waveform: a light tint, so it reads where the
+/// waveform is dense, and solid bands along the top and bottom edges.
+fn draw_loop_band(c: &mut Canvas, xa: f64, xb: f64) {
+    c.rect(xa, xb, 0, c.h, LOOP, 0.16);
+    let band = (c.h / 24).max(3);
+    c.rect(xa, xb, 0, band, LOOP, 0.95);
+    c.rect(xa, xb, c.h.saturating_sub(band), c.h, LOOP, 0.95);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -462,7 +480,12 @@ fn draw_overview(
         }
     }
     if let Some((a, b, active)) = loop_ {
-        c.rect(x_of(a), x_of(b).max(x_of(a) + 2.0), 0, c.h, LOOP, if active { 0.35 } else { 0.15 });
+        let (xa, xb) = (x_of(a), x_of(b).max(x_of(a) + 2.0));
+        c.rect(xa, xb, 0, c.h, LOOP, if active { 0.45 } else { 0.15 });
+        if active {
+            c.rect(xa, xb, 0, 2, LOOP, 1.0);
+            c.rect(xa, xb, c.h.saturating_sub(2), c.h, LOOP, 1.0);
+        }
     }
     c.vline(x_of(main_cue), CUE, 1.0, 1);
     for &(t, color) in cues {

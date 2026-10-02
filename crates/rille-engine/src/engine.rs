@@ -649,8 +649,17 @@ impl Engine {
                             (beats - beats.round()).abs() > 0.01
                         });
                     let audible = deck.speed.abs() > 0.0;
+                    // A jump would land on a running crossfade (a loop wrap
+                    // in this block, or the last jump still fading): wait
+                    // for the next block instead.
+                    let jump_pending = deck.fading()
+                        || deck.loop_active
+                            && deck
+                                .loop_range
+                                .is_some_and(|(_, e)| grid.secs_at(b0 + err.max(0.0) + k * advance) >= e);
                     // A nudge moves the deck on purpose: no jump into phase.
                     let realign = !fractional_loop
+                        && !(audible && jump_pending)
                         && !deck.nudging
                         && err.abs() >= REALIGN_BEATS
                         && (deck.just_started || deck.since_realign >= REALIGN_INTERVAL_SECS);

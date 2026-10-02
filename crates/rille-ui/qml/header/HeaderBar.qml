@@ -84,7 +84,7 @@ Rectangle {
         Row {
             spacing: 4
             HoverHandler { id: cpuHover }
-            Tip { text: "Audio CPU load: red means dropouts are close; a larger buffer (Settings) helps"; below: true; visible: cpuHover.hovered }
+            Tip { text: "Audio CPU load: red means dropouts are close; a larger buffer (Settings) helps. Dropouts so far are counted next to it."; below: true; visible: cpuHover.hovered }
             Layout.alignment: Qt.AlignVCenter
             UiText { text: "CPU"; color: Theme.textDim; font.pixelSize: Theme.fontTiny; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
             Rectangle {
@@ -95,6 +95,12 @@ Rectangle {
                     height: parent.height; radius: 2
                     color: AppController.cpuLoad > 0.8 ? Theme.danger : Theme.sync
                 }
+            }
+            UiText {
+                visible: AppController.xruns > 0
+                text: AppController.xruns + (AppController.xruns === 1 ? " DROPOUT" : " DROPOUTS")
+                color: Theme.danger; font.pixelSize: Theme.fontTiny; font.bold: true
+                anchors.verticalCenter: parent.verticalCenter
             }
         }
         // Laptop battery, only while unplugged: charge and runtime left.

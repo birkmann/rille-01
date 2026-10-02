@@ -81,7 +81,9 @@ jobs:
           path: target/macos/rille-macos-*.dmg
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Publishes whatever was built, so one failing package does not hold back
+    # the others; re-running a failed job afterwards adds its file.
+    if: startsWith(github.ref, 'refs/tags/v') && !cancelled()
     needs: [flatpak, appimage, macos]
     runs-on: ubuntu-latest
     permissions:
@@ -95,6 +97,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --title "rille ${GITHUB_REF_NAME#v}" --generate-notes \
-            dist/*.flatpak dist/*.AppImage dist/*.dmg
+          shopt -s nullglob
+          files=(dist/*.flatpak dist/*.AppImage dist/*.dmg)
+          if (( ${#files[@]} == 0 )); then echo "Nothing was built."; exit 1; fi
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "rille ${GITHUB_REF_NAME#v}" --generate-notes "${files[@]}"
+          fi

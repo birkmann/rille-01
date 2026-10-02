@@ -241,6 +241,11 @@ pub struct InputBinding {
     /// holding it (a mode button such as TOUCH).
     #[serde(default, skip_serializing_if = "is_false")]
     pub latch: bool,
+    /// Button inputs only: the press is sent when the button is let go, and
+    /// not at all if a binding on a modifier the same button holds was used
+    /// meanwhile (SYNC held + encoder changes the tempo, a tap syncs).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tap: bool,
 }
 
 impl InputBinding {
@@ -258,6 +263,7 @@ impl InputBinding {
             max: 1.0,
             condition: None,
             latch: false,
+            tap: false,
         }
     }
 
@@ -332,6 +338,9 @@ impl InputBinding {
         }
         if self.latch && !matches!(self.target, InputTarget::Modifier(_)) {
             return Err("latch is for modifier inputs only".into());
+        }
+        if self.tap && (mode != InputMode::Button || self.target.control().is_none()) {
+            return Err("tap is for button inputs on a control only".into());
         }
         Ok(())
     }

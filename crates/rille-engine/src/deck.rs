@@ -402,6 +402,18 @@ impl Deck {
 
     /// Jump without a crossfade (nothing is playing, or during load).
     pub fn set_position(&mut self, secs: f64) {
+        self.place(secs, self.uses_stretch());
+    }
+
+    /// Moves a paused deck while it is scrubbed (jog wheel, touch strip):
+    /// without priming the time-stretcher, which costs about a millisecond
+    /// per move with keylock on. Nothing plays through it while paused, and
+    /// a voice primes itself when it starts playing (see `Voice::render`).
+    fn scrub_to(&mut self, secs: f64) {
+        self.place(secs, false);
+    }
+
+    fn place(&mut self, secs: f64, stretch: bool) {
         if let Some(r) = &mut self.remix {
             // The slots follow on the next block.
             r.pos = secs;
@@ -409,7 +421,6 @@ impl Deck {
         }
         let Some(track) = self.track.clone() else { return };
         let sr = self.sr();
-        let stretch = self.uses_stretch();
         let (voice, speed) = (self.active, self.speed.max(0.01));
         self.voice_jump(voice, &track, secs * sr, speed, stretch);
         self.fade_len = 0;
@@ -816,7 +827,7 @@ impl Deck {
                         // Paused: move the track (cueing on a touch strip or
                         // a jog wheel's rim).
                         let to = (self.position() + f64::from(d) * SECS_PER_REV).clamp(0.0, self.duration());
-                        self.set_position(to);
+                        self.scrub_to(to);
                     } else if self.sync {
                         // Synced: shift against the master, and keep it.
                         self.jog_offset += f64::from(d) * 0.25;

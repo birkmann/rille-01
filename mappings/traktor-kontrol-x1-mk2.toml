@@ -27,11 +27,13 @@
 #   control             plain                 SHIFT held
 #   PLAY                play / pause          reverse
 #   CUE                 cue                   cue-play (CUP)
-#   SYNC                sync                  master (tempo leader)
+#   SYNC (tap)          sync                  master (tempo leader)
 #   FLUX                flux                  keylock
 #   pads 1-4            hotcue 1-4            delete hotcue 1-4
 #   LOAD                load selected track   eject
 #   deck encoder        loop x2 / loop /2     beatjump forward / back
+#   SYNC held + deck encoder   tempo, about 0.1 BPM per click at 128 BPM
+#                       (a synced deck moves the tempo of all synced decks)
 #   deck encoder press  loop on/off           tempo reset
 #   touch strip half    nudge (jog)           tempo (fine)
 #   FX dry/wet knob     FX unit dry/wet
@@ -42,6 +44,9 @@
 #   FX assign           deck to FX unit 1/2
 #   browse encoder      browse list           browse tree
 #   browse press        expand/collapse node  switch decks (A/B <-> C/D)
+#
+# SYNC acts when let go, and not after the encoder was turned while it was
+# held (tap = true), so changing the tempo leaves sync as it was.
 #
 # LEDs (output report byte = note number): FX and deck buttons are dimmed
 # when off, as on the hardware; pads light blue when their hotcue is set;
@@ -264,8 +269,13 @@ midi = { type = "note", channel = 1, number = 25 }
 condition = { modifier = "shift" }
 
 [[input]]
+target = "modifier:sync_left"
+midi = { type = "note", channel = 1, number = 26 }
+
+[[input]]
 target = "deck.A.sync"
 midi = { type = "note", channel = 1, number = 26 }
+tap = true
 
 [[input]]
 target = "deck.A.master"
@@ -336,6 +346,13 @@ midi = { type = "note", channel = 1, number = 50 }
 condition = { modifier = "shift" }
 
 [[input]]
+target = "deck.A.tempo"
+midi = { type = "note", channel = 1, number = 50 }
+mode = "relative"
+step = 0.005
+condition = { modifier = "sync_left" }
+
+[[input]]
 target = "deck.A.loop_halve"
 midi = { type = "note", channel = 1, number = 51 }
 
@@ -343,6 +360,13 @@ midi = { type = "note", channel = 1, number = 51 }
 target = "deck.A.beatjump_back"
 midi = { type = "note", channel = 1, number = 51 }
 condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.A.tempo"
+midi = { type = "note", channel = 1, number = 51 }
+mode = "relative"
+step = -0.005
+condition = { modifier = "sync_left" }
 
 [[input]]
 target = "deck.A.loop_toggle"
@@ -395,8 +419,13 @@ midi = { type = "note", channel = 1, number = 17 }
 condition = { modifier = "shift" }
 
 [[input]]
+target = "modifier:sync_right"
+midi = { type = "note", channel = 1, number = 18 }
+
+[[input]]
 target = "deck.B.sync"
 midi = { type = "note", channel = 1, number = 18 }
+tap = true
 
 [[input]]
 target = "deck.B.master"
@@ -467,6 +496,13 @@ midi = { type = "note", channel = 1, number = 52 }
 condition = { modifier = "shift" }
 
 [[input]]
+target = "deck.B.tempo"
+midi = { type = "note", channel = 1, number = 52 }
+mode = "relative"
+step = 0.005
+condition = { modifier = "sync_right" }
+
+[[input]]
 target = "deck.B.loop_halve"
 midi = { type = "note", channel = 1, number = 53 }
 
@@ -474,6 +510,13 @@ midi = { type = "note", channel = 1, number = 53 }
 target = "deck.B.beatjump_back"
 midi = { type = "note", channel = 1, number = 53 }
 condition = { modifier = "shift" }
+
+[[input]]
+target = "deck.B.tempo"
+midi = { type = "note", channel = 1, number = 53 }
+mode = "relative"
+step = -0.005
+condition = { modifier = "sync_right" }
 
 [[input]]
 target = "deck.B.loop_toggle"

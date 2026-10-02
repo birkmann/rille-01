@@ -54,6 +54,8 @@ pub mod qobject {
         #[qproperty(f64, tempo_range, cxx_name = "tempoRange")]
         /// Decks on screen: 2 or 4.
         #[qproperty(i32, deck_count, cxx_name = "deckCount")]
+        /// Settings → Decks: deck height, 0 normal, 1 tall, 2 taller.
+        #[qproperty(i32, deck_height, cxx_name = "deckHeight")]
         /// Main output meter in the title bar.
         #[qproperty(bool, header_meter, cxx_name = "headerMeter")]
         /// Settings → Audio: the on-screen mixer and crossfader are hidden.
@@ -405,6 +407,7 @@ pub struct AppControllerRust {
     import: Option<ImportReport>,
     tempo_range: f64,
     deck_count: i32,
+    deck_height: i32,
     header_meter: bool,
     mixer_hidden: bool,
     mixer_key: bool,
@@ -634,6 +637,7 @@ impl qobject::AppController {
         let settings = app.settings();
         self.as_mut().set_tempo_range(settings.tempo_range);
         self.as_mut().set_deck_count(i32::from(settings.deck_count));
+        self.as_mut().set_deck_height(i32::from(settings.deck_height));
         self.as_mut().set_header_meter(settings.header_meter);
         self.as_mut().set_mixer_hidden(!settings.show_mixer);
         self.as_mut().set_mixer_key(settings.mixer_key);
@@ -852,11 +856,12 @@ impl qobject::AppController {
         let s = app.settings();
         let roots: Vec<String> = s.library_roots.iter().map(|r| json_str(&r.display().to_string())).collect();
         QString::from(format!(
-            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"mixer_key":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{},"beatport_quality":{},"beatport_cache_mb":{},"stems_cache_mb":{},"load_lock":{},"load_lock_level":{},"load_lock_decks":{}}}"#,
+            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"deck_height":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"mixer_key":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{},"beatport_quality":{},"beatport_cache_mb":{},"stems_cache_mb":{},"load_lock":{},"load_lock_level":{},"load_lock_decks":{}}}"#,
             s.audio_device.as_deref().map_or("null".into(), json_str),
             s.buffer_frames.map_or("null".into(), |b| b.to_string()),
             s.tempo_range,
             s.deck_count,
+            s.deck_height,
             s.split_cue,
             s.bpm_min,
             s.bpm_max,
@@ -906,6 +911,7 @@ impl qobject::AppController {
             "buffer_frames" => s.buffer_frames = v.parse().ok(),
             "tempo_range" => s.tempo_range = f.unwrap_or(s.tempo_range).clamp(0.02, 1.0),
             "deck_count" => s.deck_count = if v == "4" { 4 } else { 2 },
+            "deck_height" => s.deck_height = v.parse::<u8>().unwrap_or(0).min(2),
             "split_cue" => s.split_cue = b,
             "mixing" => s.mixing = MixingMode::from_name(&v),
             "mixer_channels" => {

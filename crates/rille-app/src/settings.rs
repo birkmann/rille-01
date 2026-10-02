@@ -195,6 +195,9 @@ pub struct Settings {
     pub tempo_range: f64,
     /// Decks on screen: 2 (A, B) or 4 (A/C left, B/D right, mixer C A B D).
     pub deck_count: u8,
+    /// Height of all decks, the extra room going to the waveforms: 0 normal,
+    /// 1 tall, 2 taller.
+    pub deck_height: u8,
     /// Letters of the decks that are remix decks, e.g. "CD".
     pub remix_decks: String,
     /// Headphones on the left channel, master on the right (2-channel cards).
@@ -283,6 +286,7 @@ impl Default for Settings {
             buffer_frames: Some(256),
             tempo_range: 0.08,
             deck_count: 2,
+            deck_height: 0,
             remix_decks: String::new(),
             split_cue: false,
             mixing: MixingMode::Auto,
@@ -398,6 +402,7 @@ mod tests {
             waveform_mixer: false,
             show_mixer: false,
             deck_count: 4,
+            deck_height: 2,
             ..Settings::default()
         };
         s.save(&p).unwrap();

@@ -51,6 +51,11 @@ QtObject {
     // 4 decks: two compact decks stacked per side; the row grows with the
     // window up to this height.
     readonly property int deckRowHeight4: 520
+    // Settings → Decks → Deck height: extra height of each deck (normal,
+    // tall, taller), all of it for the waveform.
+    readonly property var deckHeightExtra: [0, 90, 180]
+    // The browser keeps at least this much when the decks grow.
+    readonly property int browserMinHeight: 200
     readonly property int stripHeight: 34
     readonly property int mixerWidth: 272
     readonly property int mixerWidth4: 296

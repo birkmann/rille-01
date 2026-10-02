@@ -411,6 +411,11 @@ impl Engine {
                         strip.fx_assign[i] = !strip.fx_assign[i];
                     }
                     Control::Sync if press => self.toggle_sync(unit),
+                    Control::Tempo if self.decks[unit].sync && self.clock.master != Some(unit as u8) => {
+                        if let ControlValue::Absolute(v) = value {
+                            self.synced_tempo(unit, v.clamp(0.0, 1.0));
+                        }
+                    }
                     Control::Master if press => {
                         let m = if self.clock.master == Some(unit as u8) { None } else { Some(unit as u8) };
                         if m.is_none() {
@@ -495,6 +500,25 @@ impl Engine {
                 .unwrap_or(1.0);
         }
         deck.just_started = deck.playing;
+    }
+
+    /// A synced deck that does not lead follows the clock, so its tempo
+    /// fader moves the tempo everyone syncs to: the leader's, or the clock's
+    /// while no deck leads.
+    fn synced_tempo(&mut self, unit: usize, fader: f32) {
+        let range = self.settings.tempo_range.max(1e-6);
+        let deck = &mut self.decks[unit];
+        deck.tempo_fader = fader;
+        let Some(own) = deck.track_bpm() else { return };
+        let rate = 1.0 + (f64::from(fader) - 0.5) * 2.0 * range;
+        let bpm = (own * rate / deck.sync_mult).clamp(40.0, 250.0);
+        let leader = self.clock.master.map(usize::from).filter(|&m| self.decks[m].playing);
+        match leader.and_then(|m| Some((m, self.decks[m].track_bpm()?))) {
+            Some((m, lead)) => {
+                self.decks[m].tempo_fader = (0.5 + (bpm / lead - 1.0) / (2.0 * range)).clamp(0.0, 1.0) as f32;
+            }
+            None => self.clock.bpm = bpm,
+        }
     }
 
     /// The deck that leads, choosing one automatically when needed.

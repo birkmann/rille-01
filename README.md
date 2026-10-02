@@ -189,7 +189,9 @@ deck order no other connected controller uses, so with two X1 MK2s (or Z1s) the
 second drives decks C and D. The Z1 and X1 MK2 drive decks A and B, or C and D
 with their "(CD)" mapping. On the X1 MK2, SHIFT + browse press switches between
 A B and C D; the choice is remembered per unit, like one made in the settings.
-A mapping binds this with `target = "deck_layout:next"`. The X1 MK2's displays
+A mapping binds this with `target = "deck_layout:next"`. On the X1 MK2, hold
+SYNC and turn the deck encoder to change that deck's tempo (a tap on SYNC
+still syncs); on a synced deck this moves the tempo of every synced deck. The X1 MK2's displays
 show the decks for a moment after connecting or switching, then each deck's
 loop size. The X1 MK1 switches with SHIFT + HOTCUE; HOTCUE alone turns its
 deck buttons into hotcues 1-8, as in Traktor.

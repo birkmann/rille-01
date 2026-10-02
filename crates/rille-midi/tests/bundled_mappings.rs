@@ -21,7 +21,16 @@ fn all_bundled_mappings_load() {
         let m = load_file(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert!(!m.inputs.is_empty(), "{}", path.display());
         let mut seen = HashSet::new();
-        for b in &m.inputs {
+        // A tap button shares its message with the modifier it holds.
+        for b in m.inputs.iter().filter(|b| b.tap) {
+            let holds = |h: &&rille_midi::InputBinding| {
+                matches!(h.target, rille_midi::InputTarget::Modifier(_))
+                    && h.midi == b.midi
+                    && h.condition == b.condition
+            };
+            assert!(m.inputs.iter().any(|h| holds(&h)), "{}: tap {} holds no modifier", path.display(), b.target);
+        }
+        for b in m.inputs.iter().filter(|b| !b.tap) {
             let keys = match b.midi {
                 MidiSpec::Cc14 { channel, number } => {
                     vec![MidiSpec::Cc { channel, number }, MidiSpec::Cc { channel, number: number + 32 }]
@@ -101,6 +110,11 @@ fn traktor_hid_controllers() {
     // The left deck encoder turning clockwise doubles the loop.
     let enc = hid_targets(ab, &[x1(&[(0x11, 0x05)]), x1(&[(0x11, 0x06)])]);
     assert!(enc.ends_with(&["deck.A.loop_double".to_string()]), "{enc:?}");
+    // SYNC held (note 26: 0x16 bit 2) + the left encoder one tick on changes
+    // the tempo, without syncing or doubling the loop; a tap syncs.
+    let sync = [x1(&[]), x1(&[(0x16, 0x04)]), x1(&[(0x16, 0x04), (0x11, 0x01)]), x1(&[(0x11, 0x01)])];
+    assert_eq!(moved(&hid_targets(ab, &sync)), ["deck.A.tempo"]);
+    assert_eq!(moved(&hid_targets(ab, &[x1(&[]), x1(&[(0x16, 0x04)]), x1(&[])])), ["deck.A.sync"]);
     // SHIFT + browse press (note 33: 0x17 bit 1) switches between AB and CD;
     // browse press alone does not.
     let switches = |reports: &[Vec<u8>]| {

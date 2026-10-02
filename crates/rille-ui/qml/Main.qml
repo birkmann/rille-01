@@ -37,6 +37,8 @@ ApplicationWindow {
     // Settings → Decks: A/C stacked on the left, B/D on the right.
     readonly property bool fourDecks: AppController.deckCount === 4
     readonly property int mixerWidth: fourDecks ? Theme.mixerWidth4 : Theme.mixerWidth
+    // Settings → Decks → Deck height, for each deck (twice per side with 4).
+    readonly property int deckRowExtra: (Theme.deckHeightExtra[AppController.deckHeight] || 0) * (fourDecks ? 2 : 1)
 
     // One state refresh per frame.
     FrameAnimation {
@@ -132,9 +134,13 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true
                 // 4 decks take about half the window, never less than 2 decks.
-                Layout.preferredHeight: window.fourDecks
+                // Taller decks grow as far as the browser keeps its minimum.
+                readonly property int baseHeight: window.fourDecks
                     ? Math.max(Theme.deckRowHeight, Math.min(Theme.deckRowHeight4, Math.round(window.height * 0.49)))
                     : Theme.deckRowHeight
+                readonly property int room: rootLayout.height - Theme.headerHeight - Theme.topRowHeight - Theme.stripHeight
+                    - 4 * Theme.gap - Theme.browserMinHeight
+                Layout.preferredHeight: Math.max(baseHeight, Math.min(baseHeight + window.deckRowExtra, room))
                 Layout.fillHeight: false
                 spacing: Theme.gap
                 ColumnLayout {

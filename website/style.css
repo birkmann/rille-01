@@ -143,8 +143,17 @@ p { margin: 0; }
 
 /* --- Hero ------------------------------------------------------------ */
 .label { font-family: var(--mono); font-size: 14px; color: var(--muted); }
-.hero { padding-top: 96px; padding-bottom: 56px; display: flex; flex-direction: column; gap: 28px; }
-.hero h1 { font-size: clamp(52px, 9vw, 128px); letter-spacing: -0.05em; line-height: 0.95; }
+/* Heading left, copy and actions right on its baseline: the hero stays short enough that the
+   app screenshot starts above the fold. Stacks below 1000px. */
+.hero { padding-top: 72px; padding-bottom: 48px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); column-gap: 64px; row-gap: 24px; align-items: end; }
+.hero .label { grid-column: 1 / -1; }
+.hero h1 { font-size: clamp(52px, 8vw, 112px); letter-spacing: -0.05em; line-height: 0.95; }
+.hero-copy { display: flex; flex-direction: column; gap: 28px; }
+.pill-dl { gap: 10px; }
+.pill-dl svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.dl-meta { margin: -16px 0 0; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.dl-meta a { color: inherit; }
+.dl-meta a:hover { color: var(--fg); }
 .lead { max-width: 560px; font-size: 20px; line-height: 1.5; color: var(--text); }
 .lead.narrow { max-width: 640px; }
 
@@ -155,14 +164,12 @@ p { margin: 0; }
 .shot img { background: var(--ink); box-shadow: var(--shot-shadow); border: 1px solid var(--shot-edge); }
 .shot-hero { padding-bottom: 8px; }
 
-/* --- Proof numbers --------------------------------------------------- */
-.proof {
-  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin-top: 64px; border-top: 1px solid var(--fg);
-}
-.proof > div { padding: 24px 24px 0 0; display: flex; flex-direction: column; gap: 8px; }
-.num { font-family: var(--mono); font-size: clamp(28px, 3.4vw, 40px); letter-spacing: -0.03em; line-height: 1.1; }
-.what { font-size: 15px; color: var(--text); max-width: 240px; }
+/* --- Specs ---------------------------------------------------------- */
+.specs { margin-top: 64px; }
+.specs dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--fg); }
+.specs dl > div { padding: 20px 24px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.specs dt { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.specs dd { margin: 0; font-size: 18px; }
 
 /* --- Sections -------------------------------------------------------- */
 .section { padding-top: 120px; padding-bottom: 120px; display: flex; flex-direction: column; gap: 40px; }
@@ -305,7 +312,8 @@ p { margin: 0; }
 /* --- Responsive ------------------------------------------------------ */
 @media (max-width: 1000px) {
   .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .proof { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 8px; }
+  .specs dl { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 8px; }
+  .hero { grid-template-columns: minmax(0, 1fr); row-gap: 28px; }
   .split, .split-reverse, .platforms { grid-template-columns: minmax(0, 1fr); gap: 40px; }
   .split-reverse .shot { order: 2; }
 }
@@ -319,9 +327,6 @@ p { margin: 0; }
   .shot img, .shot picture { border-radius: 8px; }
   .hardware li { flex-direction: column; gap: 4px; }
   .code pre { padding-right: 24px; padding-top: 52px; font-size: 13px; }
-}
-@media (max-width: 420px) {
-  .proof { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }

@@ -52,11 +52,12 @@ fn all_bundled_mappings_load() {
     assert_eq!(z1.name, "Traktor Kontrol Z1 (AB)");
     assert_eq!(store.find("Traktor Kontrol X1 MK2 HID").unwrap().name, "Traktor Kontrol X1 MK2 (AB)");
     assert!(store.find("Traktor Kontrol X1 MK2 MIDI 1 24:0").is_none(), "MIDI mode is a different device");
+    assert_eq!(store.find("Traktor Kontrol X1 MK1 HID (ABC123)").unwrap().name, "Traktor Kontrol X1 MK1 (AB)");
     assert_eq!(store.find("Traktor Kontrol F1 HID (1A2B3C4D)").unwrap().name, "Traktor Kontrol F1 (C)");
     // One HID layout per device, from the mapping files; each mapping's
     // device pattern matches the port name its layout gives.
     let hid: Vec<String> = store.hid_layouts().iter().map(|l| l.name.clone()).collect();
-    assert_eq!(hid, ["Traktor Kontrol F1", "Traktor Kontrol X1 MK2", "Traktor Kontrol Z1"]);
+    assert_eq!(hid, ["Traktor Kontrol F1", "Traktor Kontrol X1 MK1", "Traktor Kontrol X1 MK2", "Traktor Kontrol Z1"]);
     for l in store.hid_layouts() {
         let m = store.find(&format!("{} HID (SERIAL)", l.name)).unwrap();
         assert_eq!(m.hid.as_ref().map(|h| &h.name), Some(&l.name));
@@ -144,6 +145,84 @@ fn traktor_hid_controllers() {
     let lit: Vec<bool> = report[1..=14].iter().map(|&b| b == 127).collect();
     let want = [true, true, true, true, true, false, false, true, true, true, true, true, true, true];
     assert_eq!(lit, want, "{:?}", &report[..15]);
+}
+
+#[test]
+fn traktor_kontrol_x1_mk1() {
+    use rille_core::{Control, ControlTarget};
+    use rille_midi::caiaq::Report;
+    let store = MappingStore::load(&[bundled_dir()]);
+    let ab = store.by_name("Traktor Kontrol X1 MK1 (AB)").unwrap();
+    let cd = store.by_name("Traktor Kontrol X1 MK1 (CD)").unwrap();
+    // Input events (type, code, value) to a report per frame, as the caiaq
+    // reader does: key BTN_MISC + n is note n.
+    let (key, abs) = (|n: u16, v: i32| (1, 0x100 + n, v), |code: u16, v: i32| (3, code, v));
+    let frames = |frames: &[&[(u16, u16, i32)]]| {
+        let mut r = Report::new(0x01);
+        let mut out = vec![r.bytes().to_vec()];
+        for f in frames {
+            f.iter().for_each(|&(kind, code, v)| r.apply(kind, code, v));
+            out.push(r.bytes().to_vec());
+        }
+        out
+    };
+    let not_fx = |t: Vec<String>| t.into_iter().filter(|t| !t.starts_with("fx.")).collect::<Vec<_>>();
+
+    // Left PLAY; HOTCUE on, then left IN sets hotcue 1 and SHIFT + IN deletes
+    // it; HOTCUE off, IN is loop in again.
+    let reports = frames(&[
+        &[key(0, 1)],
+        &[key(0, 0)],
+        &[key(39, 1)],
+        &[key(39, 0)],
+        &[key(20, 1)],
+        &[key(20, 0)],
+        &[key(36, 1)],
+        &[key(20, 1)],
+        &[key(20, 0), key(36, 0)],
+        &[key(39, 1)],
+        &[key(39, 0)],
+        &[key(20, 1)],
+    ]);
+    let want = ["deck.A.play", "deck.A.hotcue.1", "deck.A.hotcue_delete.1", "deck.A.loop_in"];
+    assert_eq!(not_fx(hid_targets(ab, &reports)), want);
+    assert_eq!(not_fx(hid_targets(cd, &reports[..2])), ["deck.C.play"]);
+    // The left loop encoder (ABS_Z) one tick on doubles the loop; the right
+    // browse encoder (ABS_Y) scrolls; FX 2 knob 3 (ABS_HAT3Y) is CC 7.
+    let moved = hid_targets(ab, &frames(&[&[abs(0x02, 1)], &[abs(0x01, 15)], &[abs(0x17, 4095)]]));
+    for t in ["deck.A.loop_double", "global.scroll", "fx.2.knob.3"] {
+        assert!(moved.contains(&t.to_string()), "{t} not in {moved:?}");
+    }
+    // SHIFT + HOTCUE switches between AB and CD; HOTCUE alone does not.
+    let switches = |reports: &[Vec<u8>]| {
+        let mut hid = rille_midi::hid::HidTranslator::new(std::sync::Arc::new(ab.hid.clone().unwrap()));
+        let mut engine = MappingEngine::new(ab.clone());
+        let (mut msgs, mut out) = (Vec::new(), Vec::new());
+        reports.iter().for_each(|r| hid.input(r, &mut msgs));
+        let t = std::time::Instant::now();
+        msgs.iter().for_each(|m| engine.handle(m, t, &ValueMap::default(), &mut out));
+        (engine.take_next_deck_layout(), engine.modifier("hotcue"))
+    };
+    assert_eq!(switches(&frames(&[&[key(39, 1)]])), (false, true));
+    assert_eq!(switches(&frames(&[&[key(36, 1)], &[key(39, 1)]])), (true, false));
+
+    // LEDs: deck A playing lights PLAY (byte 24); FX 1 ON (byte 8) dimmed.
+    // In hotcue mode PLAY shows hotcue 4 instead.
+    let mut values = ValueMap::default();
+    values.set(ControlTarget::deck(0, Control::Play), 1.0);
+    let leds = |hotcue: bool| {
+        let (mut fb, mut msgs) = (rille_midi::FeedbackState::new(), Vec::new());
+        fb.collect_with_modifiers(ab, &values, &|m| hotcue && m == "hotcue", &mut msgs);
+        let mut hid = rille_midi::hid::HidTranslator::new(std::sync::Arc::new(ab.hid.clone().unwrap()));
+        msgs.iter().for_each(|m| hid.output(*m));
+        let mut report = Vec::new();
+        hid.flush(|r| report = r.to_vec());
+        report
+    };
+    let plain = leds(false);
+    assert_eq!((plain[0], plain.len(), plain[24], plain[8], plain[29]), (0x0C, 32, 127, 5, 5));
+    let hot = leds(true);
+    assert_eq!((hot[24], hot[29]), (5, 127), "hotcue 4 not set; HOTCUE lit");
 }
 
 /// Presses (note on + off, channel 15) and returns the targets pressed.

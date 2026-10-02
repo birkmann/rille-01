@@ -25,7 +25,8 @@ finish-args:
   # older flatpak versions, including the one that builds the bundle, reject it.
   - --filesystem=xdg-run/pipewire-0
   # MIDI controllers (ALSA sequencer, raw MIDI) and HID controllers
-  # (/dev/hidraw*; the host still needs packaging/udev/70-rille-controllers.rules).
+  # (/dev/hidraw*, or /dev/input/event* and ALSA controls for the X1 MK1; the
+  # host still needs packaging/udev/70-rille-controllers.rules).
   - --device=all
   # Music folders.
   - --filesystem=xdg-music

@@ -152,6 +152,9 @@ pub struct MappingEngine {
     modifiers: Vec<(String, bool)>,
     /// Modifiers toggled per press (`latch`) rather than held.
     latched: Vec<String>,
+    /// Modifiers a conditional binding was used with since a `tap` button
+    /// holding them went down.
+    used: Vec<String>,
     /// A `deck_layout:next` input was pressed, see
     /// [`take_next_deck_layout`](Self::take_next_deck_layout).
     next_layout: bool,
@@ -184,7 +187,7 @@ impl MappingEngine {
                 _ => None,
             })
             .collect();
-        Self { mapping, index, slots, modifiers: Vec::new(), latched, next_layout: false }
+        Self { mapping, index, slots, modifiers: Vec::new(), latched, used: Vec::new(), next_layout: false }
     }
 
     pub fn mapping(&self) -> &Mapping {
@@ -238,10 +241,26 @@ impl MappingEngine {
         let matches = |b: &InputBinding| b.condition.is_some() && condition_holds(&self.modifiers, b);
         let conditioned_match = list.iter().any(|&(i, _)| matches(&inputs[i]));
         let held_match = list.iter().any(|&(i, _)| matches(&inputs[i]) && !on_latch(&inputs[i]));
+        // The modifiers this message holds, for its `tap` buttons.
+        let here: Vec<String> = if list.iter().any(|&(i, _)| inputs[i].tap) {
+            list.iter()
+                .filter_map(|&(i, _)| match &inputs[i].target {
+                    InputTarget::Modifier(m) => Some(m.clone()),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         for &(i, half) in list {
             let b = &inputs[i];
             let outranked = if b.condition.is_some() { held_match && on_latch(b) } else { conditioned_match };
             let active = condition_holds(&self.modifiers, b) && !outranked;
+            if let Some(c) = b.condition.as_ref().filter(|c| c.value && active && !matches!(input, Input::Note(false)))
+                && !self.used.contains(&c.modifier)
+            {
+                self.used.push(c.modifier.clone());
+            }
             let input = match (half, input) {
                 (Some(h), Input::Cc(v)) => Input::Half(h, v),
                 _ => input,
@@ -249,6 +268,8 @@ impl MappingEngine {
             let mut st = State {
                 modifiers: &mut self.modifiers,
                 next_layout: &mut self.next_layout,
+                used: &mut self.used,
+                here: &here,
                 slot: &mut self.slots[i],
                 values,
                 out,
@@ -268,7 +289,9 @@ impl MappingEngine {
                 let active = condition_holds(&self.modifiers, b);
                 let v = slot.value14();
                 let next_layout = &mut self.next_layout;
-                State { modifiers: &mut self.modifiers, next_layout, slot, values, out }.absolute(b, v, active);
+                let used = &mut self.used;
+                State { modifiers: &mut self.modifiers, next_layout, used, here: &[], slot, values, out }
+                    .absolute(b, v, active);
             }
         }
     }
@@ -281,6 +304,9 @@ fn condition_holds(modifiers: &[(String, bool)], b: &InputBinding) -> bool {
 struct State<'a> {
     modifiers: &'a mut Vec<(String, bool)>,
     next_layout: &'a mut bool,
+    used: &'a mut Vec<String>,
+    /// Modifiers held by the message being handled.
+    here: &'a [String],
     slot: &'a mut Slot,
     values: &'a dyn ValueSource,
     out: &'a mut Vec<ControlEvent>,
@@ -297,10 +323,19 @@ impl State<'_> {
                 };
                 if down && active && !self.slot.pressed {
                     self.slot.pressed = true;
-                    self.press(b, true);
+                    if b.tap {
+                        self.used.retain(|m| !self.here.contains(m));
+                    } else {
+                        self.press(b, true);
+                    }
                 } else if !down && self.slot.pressed {
                     self.slot.pressed = false;
-                    self.press(b, false);
+                    if !b.tap {
+                        self.press(b, false);
+                    } else if !self.used.iter().any(|m| self.here.contains(m)) {
+                        self.press(b, true);
+                        self.press(b, false);
+                    }
                 }
             }
             InputMode::Absolute => match input {
@@ -506,6 +541,33 @@ mod tests {
         press(&mut r, 25);
         assert!(!r.engine.modifier("touch"));
         assert_eq!(press(&mut r, 17), []);
+    }
+
+    #[test]
+    fn tap_button_fires_on_release_unless_its_modifier_was_used() {
+        let hold = InputBinding::new(InputTarget::Modifier("sync_l".into()), note(1, 26));
+        let mut sync = InputBinding::new(deck_a(Control::Sync), note(1, 26));
+        sync.tap = true;
+        let mut tempo = InputBinding::new(deck_a(Control::Tempo), note(1, 50)).with_mode(InputMode::Relative);
+        tempo.step = Some(0.005);
+        tempo.condition = Some(Condition { modifier: "sync_l".into(), value: true });
+        let loop_double = InputBinding::new(deck_a(Control::LoopDouble), note(1, 50));
+        let mut r = Rig::new(vec![hold, sync, tempo, loop_double]);
+        let targets = |r: &mut Rig, msgs: &[[u8; 3]]| {
+            let out: Vec<_> = msgs.iter().flat_map(|m| r.send(m)).collect();
+            out.iter().map(|e| (e.target, e.value)).collect::<Vec<_>>()
+        };
+        // A tap syncs, on release.
+        assert_eq!(targets(&mut r, &[[0x90, 26, 127]]), []);
+        let release = targets(&mut r, &[[0x80, 26, 0]]);
+        let tapped =
+            [(deck_a(Control::Sync), ControlValue::Press(true)), (deck_a(Control::Sync), ControlValue::Press(false))];
+        assert_eq!(release, tapped);
+        // Held while the encoder turns: tempo, no sync, no loop change.
+        let held = targets(&mut r, &[[0x90, 26, 127], [0x90, 50, 127], [0x80, 50, 0], [0x80, 26, 0]]);
+        assert_eq!(held, [(deck_a(Control::Tempo), ControlValue::Absolute(0.505))]);
+        // The next tap syncs again.
+        assert_eq!(targets(&mut r, &[[0x90, 26, 127], [0x80, 26, 0]]), tapped);
     }
 
     #[test]

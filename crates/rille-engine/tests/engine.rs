@@ -126,6 +126,30 @@ fn plays_at_the_right_speed() {
     }
 }
 
+/// Scrubbing a paused deck with keylock on (a touch strip) does not prime
+/// the time-stretcher at every move; playing afterwards still starts where
+/// the deck was moved to, on time.
+#[test]
+fn scrubbed_keylock_deck_plays_from_where_it_was_moved() {
+    let (h, mut e) = create(SR, 1024);
+    load(&h, 0, 1, click_track(120.0, 0.25, 60.0, 44_100), 0.0);
+    run(&mut e, 0.1);
+    for _ in 0..200 {
+        ctl(&h, 0, Control::Jog, ControlValue::Delta(1.0 / 448.0));
+        run(&mut e, 0.002);
+    }
+    let from = h.snapshot().decks[0].position_secs;
+    assert!(from > 0.5, "moved to {from}");
+    press(&h, 0, Control::Play);
+    let out = run(&mut e, 3.0);
+    for &f in onsets(&out).iter().take(4) {
+        let t = from + (f as f64 - LIMITER_FRAMES) / f64::from(SR);
+        let phase = ((t - 0.25) / 0.5).rem_euclid(1.0);
+        let off = if phase > 0.5 { phase - 1.0 } else { phase } * 500.0;
+        assert!(off.abs() < 0.5, "click at {t:.4} s is {off:.3} ms off the grid");
+    }
+}
+
 /// Deck B (128 bpm, synced) follows deck A (124 bpm). Checked on the audio:
 /// B's clicks must land on A's beats.
 fn sync_test(keylock: bool, start_b: f64) -> f64 {
@@ -403,6 +427,29 @@ fn sync_off_keeps_tempo() {
     let s = h.snapshot();
     assert!(!s.decks[1].sync);
     assert!((s.decks[1].bpm - 125.0).abs() < 0.05, "B keeps 125: {}", s.decks[1].bpm);
+}
+
+/// A synced deck's tempo fader moves the tempo of the whole sync group: the
+/// leader's fader follows, and so does the deck itself.
+#[test]
+fn synced_deck_tempo_moves_the_leader() {
+    let (h, mut e) = create(SR, 1024);
+    load(&h, 0, 1, click_track(125.0, 0.2, 120.0, 44_100), 0.0);
+    load(&h, 1, 2, click_track(122.0, 0.3, 120.0, 44_100), 0.0);
+    press(&h, 0, Control::Play);
+    run(&mut e, 0.5);
+    press(&h, 1, Control::Sync);
+    press(&h, 1, Control::Play);
+    run(&mut e, 1.0);
+    // B at 126 BPM: rate 126/122 with the default ±8 % range.
+    let fader = 0.5 + (126.0 / 122.0 - 1.0) / (2.0 * 0.08);
+    ctl(&h, 1, Control::Tempo, ControlValue::Absolute(fader as f32));
+    run(&mut e, 3.0);
+    let s = h.snapshot();
+    assert_eq!(s.master_deck, Some(0));
+    assert!((s.decks[0].bpm - 126.0).abs() < 0.01, "A leads at 126: {}", s.decks[0].bpm);
+    assert!((s.decks[1].bpm - 126.0).abs() < 0.05, "B follows: {}", s.decks[1].bpm);
+    assert!(s.decks[1].sync);
 }
 
 /// Setting the master tempo moves the leading deck's tempo fader; a synced

@@ -253,6 +253,16 @@ Popup {
                                 }
                             }
                             SettingRow {
+                                label: "Deck height"
+                                hint: "Height of all decks; the extra room goes to the waveforms and is taken from the browser. On small windows the decks grow only as far as the browser keeps some room."
+                                StyledCombo {
+                                    width: 180
+                                    model: ["Normal", "Tall", "Taller"]
+                                    currentIndex: Math.max(0, Math.min(2, dialog.s.deck_height || 0))
+                                    onActivated: idx => dialog.set("deck_height", idx)
+                                }
+                            }
+                            SettingRow {
                                 label: "Remix decks"
                                 hint: "Remix decks play loops and one-shots from four slots of sample cells, in time with the other decks (for a pad controller such as the Traktor Kontrol F1, which drives deck C by default). Their cells are kept when switched back."
                                 Row {

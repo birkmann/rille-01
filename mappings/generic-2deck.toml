@@ -42,6 +42,9 @@
 #   encoding: twos_complement | binary_offset | sign_magnitude
 #   step, ticks_per_rev, invert, soft_takeover, min, max
 #   condition = { modifier = "shift", value = true }  (value defaults to true)
+#   latch = true    (modifier inputs) each press toggles the modifier
+#   tap = true      (button inputs) acts when let go, unless a binding on a
+#                   modifier the same button holds was used meanwhile
 
 name = "Generic 2-deck"
 device = "(?i)generic"

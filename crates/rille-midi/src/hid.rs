@@ -30,7 +30,9 @@
 //! Byte offsets count the report ID as byte 0, as in Mixxx's HID scripts,
 //! where the bundled layouts come from. Opening a device on Linux needs read
 //! and write access to its `/dev/hidraw*` node, see
-//! `packaging/udev/70-rille-controllers.rules`.
+//! `packaging/udev/70-rille-controllers.rules`. Devices the kernel's
+//! snd-usb-caiaq driver owns (`transport = "caiaq"`) are read through that
+//! driver instead, see [`crate::caiaq`].
 
 #[cfg(target_os = "linux")]
 use hidapi::{HidApi, HidDevice};
@@ -52,6 +54,9 @@ pub struct HidLayout {
     pub name: String,
     pub vendor_id: u16,
     pub product_id: u16,
+    /// How rille reaches the device; hidraw unless the file says otherwise.
+    #[serde(default, skip_serializing_if = "Transport::is_hidraw")]
+    pub transport: Transport,
     /// USB interface with the controls, for devices with several.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface: Option<i32>,
@@ -83,6 +88,29 @@ pub struct HidLayout {
     pub rgb_pads: Option<RgbPads>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub displays: Vec<Display>,
+    /// Caiaq devices: the ALSA mixer control that sets each LED, as (byte of
+    /// the first output report, control name).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alsa_leds: Vec<(usize, String)>,
+}
+
+/// How rille reads a controller's reports and sets its LEDs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Transport {
+    /// Its `/dev/hidraw*` node.
+    #[default]
+    Hidraw,
+    /// The kernel's snd-usb-caiaq driver, which owns the device: its input
+    /// events are rebuilt into reports (see [`crate::caiaq`]), and its LEDs
+    /// are the sound card's mixer controls named in `alsa_leds`.
+    Caiaq,
+}
+
+impl Transport {
+    fn is_hidraw(&self) -> bool {
+        *self == Transport::Hidraw
+    }
 }
 
 fn default_knob_mask() -> u16 {
@@ -236,9 +264,13 @@ impl HidLayout {
         if count > 16 {
             return Err("hid: at most 16 button bytes (notes 0-127)".into());
         }
-        let past = |o: usize, len: usize| o == 0 || o + len > MAX_REPORT;
+        let report_len = match self.transport {
+            Transport::Hidraw => MAX_REPORT,
+            Transport::Caiaq => crate::caiaq::REPORT_LEN,
+        };
+        let past = |o: usize, len: usize| o == 0 || o + len > report_len;
         if self.knobs.iter().any(|&k| past(k, 2)) || (count > 0 && past(first, count)) {
-            return Err(format!("hid: input offsets must be within bytes 1..{MAX_REPORT}"));
+            return Err(format!("hid: input offsets must be within bytes 1..{report_len}"));
         }
         for e in &self.encoders {
             if !matches!((e.bits, e.shift), (4, 0 | 4) | (8, 0)) || past(e.offset, 1) {
@@ -259,6 +291,12 @@ impl HidLayout {
         let in_report = |r: usize, o: usize| self.outputs.get(r).is_some_and(|&(_, len)| o >= 1 && o < len);
         if self.held_leds.iter().any(|&(note, led, _)| note > 127 || !in_report(0, led)) {
             return Err("hid: held LEDs must be bytes of the first output report".into());
+        }
+        if self.alsa_leds.iter().any(|(led, name)| !in_report(0, *led) || name.is_empty()) {
+            return Err("hid: ALSA LEDs must be named bytes of the first output report".into());
+        }
+        if !self.alsa_leds.is_empty() && self.transport != Transport::Caiaq {
+            return Err("hid: alsa_leds is for transport = \"caiaq\"".into());
         }
         if let Some(c) = &self.calibration
             && c.knob >= self.knobs.len()
@@ -515,7 +553,21 @@ pub struct HidPort {
     pub name: String,
     pub layout: Arc<HidLayout>,
     #[cfg(target_os = "linux")]
-    path: CString,
+    node: Node,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug)]
+enum Node {
+    Hidraw(CString),
+    Caiaq(crate::caiaq::Node),
+}
+
+/// The port name of a device with `layout` and USB serial number `serial`.
+#[cfg(target_os = "linux")]
+fn port_name(layout: &HidLayout, serial: &str) -> String {
+    let serial = serial.trim();
+    if serial.is_empty() { format!("{} HID", layout.name) } else { format!("{} HID ({serial})", layout.name) }
 }
 
 /// The HID controllers plugged in now that one of `layouts` describes (the
@@ -523,42 +575,76 @@ pub struct HidPort {
 /// no devices.
 #[cfg(target_os = "linux")]
 pub fn scan(layouts: &[Arc<HidLayout>]) -> Vec<HidPort> {
-    if layouts.is_empty() {
-        return Vec::new();
-    }
-    let Ok(api) = HidApi::new() else { return Vec::new() };
     let mut ports: Vec<HidPort> = Vec::new();
+    let mut add = |port: HidPort| {
+        if !ports.iter().any(|p| p.name == port.name) {
+            ports.push(port);
+        }
+    };
+    let (caiaq, hidraw): (Vec<_>, Vec<_>) = layouts.iter().partition(|l| l.transport == Transport::Caiaq);
+    for (node, layout) in crate::caiaq::scan(&caiaq) {
+        add(HidPort { name: port_name(&layout, &node.serial), layout, node: Node::Caiaq(node) });
+    }
+    if hidraw.is_empty() {
+        return ports;
+    }
+    let Ok(api) = HidApi::new() else { return ports };
     for d in api.device_list() {
-        let fits = |l: &&Arc<HidLayout>| {
+        let fits = |l: &&&Arc<HidLayout>| {
             l.vendor_id == d.vendor_id()
                 && l.product_id == d.product_id()
                 && l.interface.is_none_or(|i| d.interface_number() < 0 || d.interface_number() == i)
         };
-        let Some(layout) = layouts.iter().find(fits) else { continue };
-        let serial = d.serial_number().unwrap_or("").trim();
-        let name =
-            if serial.is_empty() { format!("{} HID", layout.name) } else { format!("{} HID ({serial})", layout.name) };
-        if !ports.iter().any(|p| p.name == name) {
-            ports.push(HidPort { name, layout: layout.clone(), path: d.path().to_owned() });
-        }
+        let Some(&layout) = hidraw.iter().find(fits) else { continue };
+        let name = port_name(layout, d.serial_number().unwrap_or(""));
+        add(HidPort { name, layout: layout.clone(), node: Node::Hidraw(d.path().to_owned()) });
     }
     ports
 }
 
 #[cfg(target_os = "linux")]
+enum Reader {
+    Hidraw(HidDevice),
+    Caiaq(crate::caiaq::Reader),
+}
+
+#[cfg(target_os = "linux")]
+impl Reader {
+    /// One report into `buf`; 0 bytes when none came within `timeout_ms`.
+    fn read_timeout(&mut self, buf: &mut [u8], timeout_ms: i32) -> Result<usize, ()> {
+        match self {
+            Reader::Hidraw(d) => d.read_timeout(buf, timeout_ms).map_err(drop),
+            Reader::Caiaq(r) => r.read_timeout(buf, timeout_ms).map_err(drop),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+enum Writer {
+    Hidraw(HidDevice),
+    Caiaq(crate::caiaq::Leds),
+    /// A caiaq device without its sound card: no LEDs.
+    None,
+}
+
+#[cfg(target_os = "linux")]
 struct Shared {
     translator: HidTranslator,
-    writer: HidDevice,
+    writer: Writer,
 }
 
 #[cfg(target_os = "linux")]
 impl Shared {
     fn flush(&mut self) {
-        let writer = &self.writer;
+        let Shared { translator, writer } = self;
         // A failed LED update is not worth reporting; the device is probably
         // being unplugged and the reader thread ends.
-        self.translator.flush(|r| {
-            let _ = writer.write(r);
+        translator.flush(|r| match writer {
+            Writer::Hidraw(d) => {
+                let _ = d.write(r);
+            }
+            Writer::Caiaq(leds) => leds.write(r),
+            Writer::None => {}
         });
     }
 }
@@ -583,17 +669,29 @@ pub struct HidLink {
 impl HidLink {
     pub fn open(port: &HidPort, mut on_input: impl FnMut(&[u8]) + Send + 'static) -> Result<Self, String> {
         let hint = "on Linux the device may need the udev rule in packaging/udev/70-rille-controllers.rules";
-        let api = HidApi::new().map_err(|e| e.to_string())?;
-        let reader = api.open_path(&port.path).map_err(|e| format!("{e}; {hint}"))?;
-        let writer = api.open_path(&port.path).map_err(|e| format!("{e}; {hint}"))?;
         let mut translator = HidTranslator::new(port.layout.clone());
-        if let Some(c) = &port.layout.calibration {
-            let mut buf = [0u8; MAX_REPORT];
-            buf[0] = c.report;
-            if let Ok(n) = writer.get_feature_report(&mut buf) {
-                translator.calibrate(&buf[..n.min(buf.len())]);
+        let (mut reader, writer) = match &port.node {
+            Node::Hidraw(path) => {
+                let api = HidApi::new().map_err(|e| e.to_string())?;
+                let reader = api.open_path(path).map_err(|e| format!("{e}; {hint}"))?;
+                let writer = api.open_path(path).map_err(|e| format!("{e}; {hint}"))?;
+                if let Some(c) = &port.layout.calibration {
+                    let mut buf = [0u8; MAX_REPORT];
+                    buf[0] = c.report;
+                    if let Ok(n) = writer.get_feature_report(&mut buf) {
+                        translator.calibrate(&buf[..n.min(buf.len())]);
+                    }
+                }
+                (Reader::Hidraw(reader), Writer::Hidraw(writer))
             }
-        }
+            Node::Caiaq(node) => {
+                let reader = crate::caiaq::Reader::open(node, port.layout.input_report)
+                    .map_err(|e| format!("{}: {e}; {hint}", node.event.display()))?;
+                // Without the sound card the controls still work, unlit.
+                let writer = crate::caiaq::Leds::open(node, &port.layout.alsa_leds).map_or(Writer::None, Writer::Caiaq);
+                (Reader::Caiaq(reader), writer)
+            }
+        };
         let shared = Arc::new(Mutex::new(Shared { translator, writer }));
         lock(&shared).flush();
         let stop = Arc::new(AtomicBool::new(false));
@@ -607,7 +705,7 @@ impl HidLink {
                     let n = match reader.read_timeout(&mut buf, 100) {
                         Ok(0) => continue,
                         Ok(n) => n,
-                        Err(_) => {
+                        Err(()) => {
                             thread_alive.store(false, Ordering::Relaxed);
                             break;
                         }
@@ -713,6 +811,16 @@ mod tests {
         let mut l = (*z1()).clone();
         l.knobs.push(0);
         assert!(l.validate().is_err(), "byte 0 is the report ID");
+        let mut l = (*bundled("traktor-kontrol-x1-mk1.toml")).clone();
+        assert_eq!(l.validate(), Ok(()));
+        l.knobs.push(0x18);
+        assert!(l.validate().is_err(), "past the rebuilt report");
+        let mut l = (*bundled("traktor-kontrol-x1-mk1.toml")).clone();
+        l.alsa_leds.push((32, "LED".into()));
+        assert!(l.validate().is_err(), "past the output report");
+        l.alsa_leds.pop();
+        l.transport = Transport::Hidraw;
+        assert!(l.validate().is_err(), "ALSA LEDs need the caiaq transport");
     }
 
     fn z1_report(knobs: [u16; 14], buttons: u8) -> Vec<u8> {

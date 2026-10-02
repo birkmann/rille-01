@@ -6,6 +6,7 @@
 //! feeds raw bytes into a [`MappingEngine`] and gets [`rille_core::ControlEvent`]s
 //! back.
 
+pub mod caiaq;
 pub mod device;
 pub mod engine;
 pub mod feedback;

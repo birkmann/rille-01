@@ -43,7 +43,7 @@ fi
 echo "Installed to $root. Run: rille"
 if [[ "$PREFIX" != /usr && ! -e /etc/udev/rules.d/70-rille-controllers.rules \
       && ! -e /usr/lib/udev/rules.d/70-rille-controllers.rules ]]; then
-    echo "For Traktor Kontrol Z1 / X1 MK2 / F1 (HID) controllers, install the udev rule once:"
+    echo "For Traktor Kontrol Z1 / X1 MK2 / X1 MK1 / F1 controllers, install the udev rule once:"
     echo "  sudo install -m644 $PWD/$rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger"
 fi
 if [[ -z "$DESTDIR" && ":$PATH:" != *":$PREFIX/bin:"* ]]; then

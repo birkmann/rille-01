@@ -2657,6 +2657,7 @@ dependencies = [
  "alsa",
  "crossbeam-channel",
  "hidapi",
+ "libc",
  "midir",
  "regex",
  "rille-core",

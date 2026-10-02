@@ -68,7 +68,8 @@ automatically and precisely enough that sync never drifts.**
 - **Controllers:** MIDI mappings (bundled: Pioneer DDJ-400, Hercules DJControl
   Inpulse 200, Allen & Heath Xone:K2 as a 4-deck controller, and a documented
   generic template), the Native Instruments Traktor Kontrol Z1, X1 MK2 and F1
-  (remix decks, RGB pads, segment displays) over HID, MIDI learn, soft
+  (remix decks, RGB pads, segment displays) over HID, the Traktor Kontrol X1
+  MK1 through the kernel's snd-usb-caiaq driver, MIDI learn, soft
   takeover, jog wheels, LED feedback, hotplug. A HID controller is described
   in its mapping file, so others can be added without changing the code.
 - **Audio:** PipeWire natively, JACK, or ALSA on Linux; Core Audio on macOS.
@@ -190,7 +191,8 @@ with their "(CD)" mapping. On the X1 MK2, SHIFT + browse press switches between
 A B and C D; the choice is remembered per unit, like one made in the settings.
 A mapping binds this with `target = "deck_layout:next"`. The X1 MK2's displays
 show the decks for a moment after connecting or switching, then each deck's
-loop size.
+loop size. The X1 MK1 switches with SHIFT + HOTCUE; HOTCUE alone turns its
+deck buttons into hotcues 1-8, as in Traktor.
 The F1 drives remix deck C (or D, A, B with its other mappings): the pads play
 the cells of the visible page (the encoder turns pages), faders and knobs are
 the slot volumes and filters, the buttons below them stop the slots. Hold
@@ -231,6 +233,11 @@ The report layout of a HID controller is the `[hid]` table of its mapping file
 segment displays); a mapping with such a table makes rille look for that
 device, so a new HID controller needs a mapping file, not a new build. See the
 three Traktor files in `mappings/` and the field list in `hid.rs`.
+The Traktor Kontrol X1 MK1 is not HID: the kernel's snd-usb-caiaq driver
+claims it. rille reads the driver's input device, rebuilds its events into
+reports for the same kind of `[hid]` table (`transport = "caiaq"`, see
+`crates/rille-midi/src/caiaq.rs`) and sets the LEDs through the mixer
+controls of the driver's sound card.
 Opening them needs a udev rule, which the Arch package installs; otherwise
 install it once (a new HID controller needs its own line in the rule):
 
@@ -304,11 +311,13 @@ RILLE_STEM_MODEL=htdemucs.onnx cargo test --release -p rille-stems -p rille-app 
   changes agree). On loop-based music without section changes it can still
   be off by a beat. Such tracks are marked "check bar start"; fix them with
   BAR START in the grid editor.
-- The bundled DDJ-400, Inpulse 200, Xone:K2, Z1, X1 MK2, F1 and AMX mappings
+- The bundled DDJ-400, Inpulse 200, Xone:K2, Z1, X1 MK2, X1 MK1, F1 and AMX mappings
   were converted from Mixxx or community mappings and have not all been
   tested on the hardware; the tempo fader direction may need `invert = true`.
   The X1 MK2's display layout comes from a community script and has not been
-  checked on a device. Xone:96 support follows its user guide and has not
+  checked on a device. The X1 MK1's encoder direction and SHIFT/HOTCUE LEDs
+  come from the kernel driver and a community tool and have not been checked
+  on a device either. Xone:96 support follows its user guide and has not
   been tested on the hardware either. Other HID controllers need a mapping
   file with their report layout.
 - The Flatpak, AppImage and macOS disk image are built by the release

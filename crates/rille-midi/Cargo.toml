@@ -17,8 +17,11 @@ crossbeam-channel = "0.5"
 [target.'cfg(target_os = "linux")'.dependencies]
 # HID controllers (Traktor Kontrol Z1, X1 MK2, F1) via hidraw; needs libudev.
 hidapi = { version = "2.6", default-features = false, features = ["linux-native"] }
+# Controllers run by the kernel's snd-usb-caiaq driver (Traktor Kontrol X1
+# MK1): their input device's events and ioctls.
+libc = "0.2"
 # To notice a MIDI device that was unplugged and plugged in again between two
-# hotplug scans (same as midir's).
+# hotplug scans (same as midir's), and the Traktor Kontrol X1 MK1's LEDs.
 alsa = "0.11"
 
 [lints]

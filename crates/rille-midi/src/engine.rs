@@ -150,6 +150,8 @@ pub struct MappingEngine {
     index: HashMap<u32, Vec<(usize, Option<Half>)>>,
     slots: Vec<Slot>,
     modifiers: Vec<(String, bool)>,
+    /// Modifiers toggled per press (`latch`) rather than held.
+    latched: Vec<String>,
     /// A `deck_layout:next` input was pressed, see
     /// [`take_next_deck_layout`](Self::take_next_deck_layout).
     next_layout: bool,
@@ -173,7 +175,16 @@ impl MappingEngine {
             }
         }
         let slots = vec![Slot::default(); mapping.inputs.len()];
-        Self { mapping, index, slots, modifiers: Vec::new(), next_layout: false }
+        let latched = mapping
+            .inputs
+            .iter()
+            .filter(|b| b.latch)
+            .filter_map(|b| match &b.target {
+                InputTarget::Modifier(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect();
+        Self { mapping, index, slots, modifiers: Vec::new(), latched, next_layout: false }
     }
 
     pub fn mapping(&self) -> &Mapping {
@@ -208,8 +219,10 @@ impl MappingEngine {
     ///
     /// When several bindings listen to the same message, those with a
     /// matching `condition` take precedence over unconditional ones, so
-    /// "shift + play" can be mapped next to "play". Releases always go to the
-    /// binding that received the press.
+    /// "shift + play" can be mapped next to "play", and among those, the ones
+    /// on a held modifier over the ones on a latched mode (`latch`), so a
+    /// held SHIFT still works in a mode. Releases always go to the binding
+    /// that received the press.
     pub fn handle(&mut self, raw: &[u8], t: Instant, values: &dyn ValueSource, out: &mut Vec<ControlEvent>) {
         self.flush(t, values, out);
         let (k, input) = match MidiMsg::parse(raw) {
@@ -221,11 +234,14 @@ impl MappingEngine {
         };
         let Some(list) = self.index.get(&k) else { return };
         let inputs = &self.mapping.inputs;
-        let conditioned_match =
-            list.iter().any(|&(i, _)| inputs[i].condition.is_some() && condition_holds(&self.modifiers, &inputs[i]));
+        let on_latch = |b: &InputBinding| b.condition.as_ref().is_some_and(|c| self.latched.contains(&c.modifier));
+        let matches = |b: &InputBinding| b.condition.is_some() && condition_holds(&self.modifiers, b);
+        let conditioned_match = list.iter().any(|&(i, _)| matches(&inputs[i]));
+        let held_match = list.iter().any(|&(i, _)| matches(&inputs[i]) && !on_latch(&inputs[i]));
         for &(i, half) in list {
             let b = &inputs[i];
-            let active = condition_holds(&self.modifiers, b) && (b.condition.is_some() || !conditioned_match);
+            let outranked = if b.condition.is_some() { held_match && on_latch(b) } else { conditioned_match };
+            let active = condition_holds(&self.modifiers, b) && !outranked;
             let input = match (half, input) {
                 (Some(h), Input::Cc(v)) => Input::Half(h, v),
                 _ => input,
@@ -490,6 +506,29 @@ mod tests {
         press(&mut r, 25);
         assert!(!r.engine.modifier("touch"));
         assert_eq!(press(&mut r, 17), []);
+    }
+
+    #[test]
+    fn held_modifier_outranks_latched_mode() {
+        let mut hotcue = InputBinding::new(InputTarget::Modifier("hotcue".into()), note(1, 39));
+        hotcue.latch = true;
+        let shift = InputBinding::new(InputTarget::Modifier("shift".into()), note(1, 36));
+        let play = InputBinding::new(deck_a(Control::Play), note(1, 0));
+        let mut cue = InputBinding::new(deck_a(Control::Hotcue(4)), note(1, 0));
+        cue.condition = Some(Condition { modifier: "hotcue".into(), value: true });
+        let mut delete = InputBinding::new(deck_a(Control::HotcueDelete(4)), note(1, 0));
+        delete.condition = Some(Condition { modifier: "shift".into(), value: true });
+        let mut r = Rig::new(vec![hotcue, shift, play, cue, delete]);
+        let targets = |r: &mut Rig, msgs: &[[u8; 3]]| {
+            let out: Vec<_> = msgs.iter().flat_map(|m| r.send(m)).collect();
+            out.iter().filter(|e| e.value == ControlValue::Press(true)).map(|e| e.target).collect::<Vec<_>>()
+        };
+        let tap = [[0x90, 0, 127], [0x80, 0, 0]];
+        assert_eq!(targets(&mut r, &tap), [deck_a(Control::Play)]);
+        targets(&mut r, &[[0x90, 39, 127], [0x80, 39, 0]]);
+        assert_eq!(targets(&mut r, &tap), [deck_a(Control::Hotcue(4))]);
+        let shifted = [[0x90, 36, 127], [0x90, 0, 127], [0x80, 0, 0], [0x80, 36, 0]];
+        assert_eq!(targets(&mut r, &shifted), [deck_a(Control::HotcueDelete(4))]);
     }
 
     #[test]

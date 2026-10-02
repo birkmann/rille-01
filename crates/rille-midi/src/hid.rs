@@ -152,6 +152,8 @@ const LETTER_SEGMENTS: [u8; 6] = [0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71];
 /// 7-segment display can show them; longer ones are cut to the digits there
 /// are.
 const LOOP_SIZE_TEXT: [&str; 11] = [".03125", ".0625", ".125", ".25", ".5", "1", "2", "4", "8", "16", "32"];
+/// Display code of the letter A; B, C and D follow.
+pub const DISPLAY_DECK: u8 = 100;
 /// Display code of the first loop size.
 pub const DISPLAY_LOOP_SIZE: u8 = 106;
 

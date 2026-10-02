@@ -150,6 +150,9 @@ pub struct MappingEngine {
     index: HashMap<u32, Vec<(usize, Option<Half>)>>,
     slots: Vec<Slot>,
     modifiers: Vec<(String, bool)>,
+    /// A `deck_layout:next` input was pressed, see
+    /// [`take_next_deck_layout`](Self::take_next_deck_layout).
+    next_layout: bool,
 }
 
 impl MappingEngine {
@@ -170,7 +173,7 @@ impl MappingEngine {
             }
         }
         let slots = vec![Slot::default(); mapping.inputs.len()];
-        Self { mapping, index, slots, modifiers: Vec::new() }
+        Self { mapping, index, slots, modifiers: Vec::new(), next_layout: false }
     }
 
     pub fn mapping(&self) -> &Mapping {
@@ -179,6 +182,20 @@ impl MappingEngine {
 
     pub fn modifier(&self, name: &str) -> bool {
         self.modifiers.iter().any(|(n, v)| n == name && *v)
+    }
+
+    /// Whether a `deck_layout:next` input was pressed since the last call:
+    /// the controller asks for its mapping's next deck layout, which only the
+    /// caller can switch to.
+    pub fn take_next_deck_layout(&mut self) -> bool {
+        std::mem::take(&mut self.next_layout)
+    }
+
+    /// Takes over the modifiers of `previous`, the engine this one replaces
+    /// on the same device, so a SHIFT held while the mapping changes stays
+    /// held.
+    pub fn keep_modifiers(&mut self, previous: &MappingEngine) {
+        self.modifiers.clone_from(&previous.modifiers);
     }
 
     /// Forgets pickup, button and 14-bit state.
@@ -213,7 +230,13 @@ impl MappingEngine {
                 (Some(h), Input::Cc(v)) => Input::Half(h, v),
                 _ => input,
             };
-            let mut st = State { modifiers: &mut self.modifiers, slot: &mut self.slots[i], values, out };
+            let mut st = State {
+                modifiers: &mut self.modifiers,
+                next_layout: &mut self.next_layout,
+                slot: &mut self.slots[i],
+                values,
+                out,
+            };
             st.apply(b, input, active, t);
         }
     }
@@ -228,7 +251,8 @@ impl MappingEngine {
                 let b = &self.mapping.inputs[i];
                 let active = condition_holds(&self.modifiers, b);
                 let v = slot.value14();
-                State { modifiers: &mut self.modifiers, slot, values, out }.absolute(b, v, active);
+                let next_layout = &mut self.next_layout;
+                State { modifiers: &mut self.modifiers, next_layout, slot, values, out }.absolute(b, v, active);
             }
         }
     }
@@ -240,6 +264,7 @@ fn condition_holds(modifiers: &[(String, bool)], b: &InputBinding) -> bool {
 
 struct State<'a> {
     modifiers: &'a mut Vec<(String, bool)>,
+    next_layout: &'a mut bool,
     slot: &'a mut Slot,
     values: &'a dyn ValueSource,
     out: &'a mut Vec<ControlEvent>,
@@ -299,6 +324,7 @@ impl State<'_> {
                     *on = !*on;
                 }
             }
+            InputTarget::NextDeckLayout => *self.next_layout |= down,
         }
     }
 
@@ -630,5 +656,29 @@ mod tests {
         assert!(!r.engine.modifier("shift"));
         assert_eq!(targets(r.send(&[0x80, 11, 0])), [Control::Reverse]);
         assert!(r.send(&[0xb0, 7, 3]).is_empty());
+    }
+
+    #[test]
+    fn next_deck_layout_is_requested_once_per_press() {
+        let shift = Condition { modifier: "shift".into(), value: true };
+        let mut next = InputBinding::new("deck_layout:next".parse::<InputTarget>().unwrap(), note(1, 33));
+        next.condition = Some(shift);
+        let mut r = Rig::new(vec![
+            InputBinding::new(InputTarget::Modifier("shift".into()), note(1, 10)),
+            InputBinding::new(deck_a(Control::Play), note(1, 33)),
+            next,
+        ]);
+        assert_eq!(r.send(&[0x90, 33, 127]).len(), 1);
+        r.send(&[0x80, 33, 0]);
+        assert!(!r.engine.take_next_deck_layout());
+        r.send(&[0x90, 10, 127]);
+        assert!(r.send(&[0x90, 33, 127]).is_empty(), "no control event");
+        r.send(&[0x80, 33, 0]);
+        assert!(r.engine.take_next_deck_layout());
+        assert!(!r.engine.take_next_deck_layout(), "taken");
+        // The next layout's engine keeps SHIFT held.
+        let mut next = MappingEngine::new(r.engine.mapping().clone());
+        next.keep_modifiers(&r.engine);
+        assert!(next.modifier("shift"));
     }
 }

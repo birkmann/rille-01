@@ -1719,7 +1719,7 @@ impl App {
             Ok(mut m) => {
                 let store = self.mappings.lock().expect("mappings lock");
                 m.set_hid_layouts(store.hid_layouts());
-                m.refresh_with(|port| self.pick_mapping(&store, port));
+                m.refresh_with(|port, connected| self.pick_mapping(&store, port, connected));
                 drop(store);
                 *self.midi.lock().expect("midi lock") = Some(m);
             }
@@ -1742,6 +1742,7 @@ impl App {
                         MidiEvent::Connected { .. } | MidiEvent::Disconnected { .. } => {
                             app.notify(UiEvent::MidiChanged)
                         }
+                        MidiEvent::NextDeckLayout { port } => app.next_deck_layout(&port),
                     }
                 }
             })
@@ -1759,7 +1760,7 @@ impl App {
                     }
                     let store = app.mappings.lock().expect("mappings lock");
                     if let Some(m) = app.midi.lock().expect("midi lock").as_mut()
-                        && !m.refresh_with(|port| app.pick_mapping(&store, port)).is_empty()
+                        && !m.refresh_with(|port, connected| app.pick_mapping(&store, port, connected)).is_empty()
                     {
                         app.notify(UiEvent::MidiChanged);
                     }
@@ -1769,10 +1770,17 @@ impl App {
     }
 
     /// The mapping for a newly seen MIDI port: the one last chosen for this
-    /// device in the settings, else the first whose device pattern matches.
-    /// A remix controller (such as the F1) without a chosen mapping drives a
-    /// remix deck: the first deck layout whose deck is one.
-    fn pick_mapping(&self, store: &MappingStore, port: &str) -> Option<Mapping> {
+    /// device in the settings, else the first whose device pattern matches,
+    /// in the first of its deck layouts no other `connected` controller
+    /// uses, so a second X1 drives decks C and D. A remix controller (such
+    /// as the F1) without a chosen mapping drives a remix deck: the first
+    /// such deck layout whose deck is one.
+    fn pick_mapping(
+        &self,
+        store: &MappingStore,
+        port: &str,
+        connected: &[(String, Option<String>)],
+    ) -> Option<Mapping> {
         match self.settings().midi_mappings.get(port_base_name(port)) {
             Some(name) if name.is_empty() => None,
             Some(name) => store.by_name(name).or_else(|| store.find(port)).cloned(),
@@ -1781,14 +1789,33 @@ impl App {
                     m.inputs.iter().filter_map(|b| b.target.control()).find(|t| t.control.is_remix()).map(|t| t.unit)
                 };
                 let first = store.find(port)?;
-                let follows = |m: &&Mapping| remix_deck(m).is_some_and(|d| self.is_remix_deck(d));
-                let m = match remix_deck(first) {
-                    Some(d) if !self.is_remix_deck(d) => store.find_all(port).find(follows).unwrap_or(first),
-                    _ => first,
-                };
+                let fits = |m: &&Mapping| remix_deck(m).is_none_or(|d| self.is_remix_deck(d));
+                let free = |m: &&Mapping| !connected.iter().any(|(p, n)| p != port && n.as_ref() == Some(&m.name));
+                let layouts = store.deck_layouts(&first.name);
+                let m = layouts
+                    .iter()
+                    .copied()
+                    .find(|m| fits(m) && free(m))
+                    .or_else(|| layouts.iter().copied().find(fits))
+                    .or_else(|| store.find_all(port).find(fits))
+                    .unwrap_or(first);
                 Some(m.clone())
             }
         }
+    }
+
+    /// The controller on `port` moves on to its mapping's next deck layout,
+    /// remembered as if chosen in the settings.
+    fn next_deck_layout(&self, port: &str) {
+        let current = self.midi_devices().into_iter().find(|(p, _)| p == port).and_then(|(_, m)| m);
+        let next = current.and_then(|name| {
+            let store = self.mappings.lock().expect("mappings lock");
+            store.next_deck_layout(&name).map(|m| (m.name.clone(), m.deck_layout.clone().unwrap_or_default()))
+        });
+        let Some((name, layout)) = next else { return };
+        self.set_port_mapping(port, Some(&name));
+        let decks: Vec<String> = layout.chars().map(String::from).collect();
+        self.notify(UiEvent::Status(format!("{}: decks {}", port_base_name(port), decks.join(", "))));
     }
 
     /// After the remix decks changed: controllers on their automatic mapping
@@ -1798,13 +1825,14 @@ impl App {
         let chosen = self.settings().midi_mappings;
         let mut midi = self.midi.lock().expect("midi lock");
         let Some(m) = midi.as_mut() else { return };
-        for (port, current) in m.connected() {
-            if chosen.contains_key(port_base_name(&port)) {
+        let connected = m.connected();
+        for (port, current) in &connected {
+            if chosen.contains_key(port_base_name(port)) {
                 continue;
             }
-            let pick = self.pick_mapping(&store, &port);
+            let pick = self.pick_mapping(&store, port, &connected);
             if pick.as_ref().map(|p| &p.name) != current.as_ref() {
-                let _ = m.set_mapping(&port, pick);
+                let _ = m.set_mapping(port, pick);
             }
         }
     }
@@ -1820,6 +1848,17 @@ impl App {
 
     pub fn mapping_names(&self) -> Vec<String> {
         self.mappings.lock().expect("mappings lock").entries().iter().map(|e| e.mapping.name.clone()).collect()
+    }
+
+    /// Mapping `name` in each deck layout of its file, as (mapping name,
+    /// layout such as "CD"); empty for a mapping with fewer than two.
+    pub fn mapping_deck_layouts(&self, name: &str) -> Vec<(String, String)> {
+        let store = self.mappings.lock().expect("mappings lock");
+        let layouts = store.deck_layouts(name);
+        if layouts.len() < 2 {
+            return Vec::new();
+        }
+        layouts.iter().map(|m| (m.name.clone(), m.deck_layout.clone().unwrap_or_default())).collect()
     }
 
     /// The MIDI channels of mapping `name` and of the mappings it includes,
@@ -2085,5 +2124,35 @@ mod tests {
         // Nothing starts in silence; the play position is used as it is.
         assert!(attack_near(&audio, 0.5).is_none());
         assert!(attack_near(&audio, 2.9).is_none());
+    }
+
+    #[test]
+    fn a_second_controller_takes_the_free_deck_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = StartOptions {
+            paths: Paths::under(dir.path()),
+            audio: false,
+            midi: false,
+            bundled_mappings: Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mappings")),
+        };
+        let app = App::start(opts).unwrap();
+        let (first, second) = ("Traktor Kontrol X1 MK2 HID (AAAA)", "Traktor Kontrol X1 MK2 HID (BBBB)");
+        let (ab, cd) = ("Traktor Kontrol X1 MK2 (AB)".to_owned(), "Traktor Kontrol X1 MK2 (CD)".to_owned());
+        let pick = |port: &str, connected: &[(String, Option<String>)]| {
+            app.pick_mapping(&app.mappings.lock().unwrap(), port, connected).map(|m| m.name)
+        };
+        assert_eq!(pick(first, &[]), Some(ab.clone()));
+        assert_eq!(pick(second, &[(first.into(), Some(ab.clone()))]), Some(cd.clone()));
+        // Its own mapping does not count as taken; with both taken, the first.
+        assert_eq!(pick(first, &[(first.into(), Some(ab.clone()))]), Some(ab.clone()));
+        let both = [(first.into(), Some(ab.clone())), (second.into(), Some(cd.clone()))];
+        assert_eq!(pick("Traktor Kontrol X1 MK2 HID (CCCC)", &both), Some(ab.clone()));
+        // A remembered choice wins.
+        let mut s = app.settings();
+        s.midi_mappings.insert(second.into(), ab.clone());
+        app.set_settings(s);
+        assert_eq!(pick(second, &[(first.into(), Some(ab.clone()))]), Some(ab.clone()));
+        assert_eq!(app.mapping_deck_layouts(&ab), [(ab.clone(), "AB".to_owned()), (cd, "CD".to_owned())]);
+        app.shutdown();
     }
 }

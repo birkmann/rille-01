@@ -182,8 +182,15 @@ Some mappings come in several deck orders. The Xone:K2 drives decks C A B D
 from left to right by default, so the middle columns are decks A and B;
 choose "Allen & Heath Xone:K2 (ABCD)" for A B C D. A mapping file offers this
 with `deck_layouts = ["CABD", "ABCD"]`, see `mappings/allen-heath-xone-k2.toml`.
-The Z1 and X1 MK2 drive decks A and B, or C and D with their "(CD)" mapping.
-The X1 MK2's displays show each deck's loop size.
+For such a mapping, Settings → Controllers shows a **Decks** choice under the
+controller (A B, C D, …). A controller seen for the first time takes the first
+deck order no other connected controller uses, so with two X1 MK2s (or Z1s) the
+second drives decks C and D. The Z1 and X1 MK2 drive decks A and B, or C and D
+with their "(CD)" mapping. On the X1 MK2, SHIFT + browse press switches between
+A B and C D; the choice is remembered per unit, like one made in the settings.
+A mapping binds this with `target = "deck_layout:next"`. The X1 MK2's displays
+show the decks for a moment after connecting or switching, then each deck's
+loop size.
 The F1 drives remix deck C (or D, A, B with its other mappings): the pads play
 the cells of the visible page (the encoder turns pages), faders and knobs are
 the slot volumes and filters, the buttons below them stop the slots. Hold

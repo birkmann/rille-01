@@ -246,7 +246,8 @@ pub mod qobject {
         #[cxx_name = "audioDevicesJson"]
         fn audio_devices_json(self: &AppController) -> QString;
 
-        /// MIDI inputs, connected devices and mapping names as JSON.
+        /// MIDI inputs, connected devices (with their mapping's channels and
+        /// deck layouts) and mapping names as JSON.
         #[qinvokable]
         #[cxx_name = "midiJson"]
         fn midi_json(self: &AppController) -> QString;
@@ -978,11 +979,19 @@ impl qobject::AppController {
                     .iter()
                     .map(|(name, c)| format!(r#"{{"name":{},"channel":{c}}}"#, json_str(name)))
                     .collect();
+                let layouts: Vec<String> = m
+                    .as_deref()
+                    .map(|m| app.mapping_deck_layouts(m))
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|(name, decks)| format!(r#"{{"name":{},"decks":{}}}"#, json_str(name), json_str(decks)))
+                    .collect();
                 format!(
-                    r#"{{"port":{},"mapping":{},"channels":[{}]}}"#,
+                    r#"{{"port":{},"mapping":{},"channels":[{}],"layouts":[{}]}}"#,
                     json_str(p),
                     m.as_deref().map_or("null".into(), json_str),
-                    channels.join(",")
+                    channels.join(","),
+                    layouts.join(",")
                 )
             })
             .collect();

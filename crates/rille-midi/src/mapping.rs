@@ -13,19 +13,21 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-/// What an input drives: a control, or a named modifier (`modifier:shift`)
-/// that other inputs can use as a [`Condition`].
+/// What an input drives: a control, a named modifier (`modifier:shift`)
+/// that other inputs can use as a [`Condition`], or `deck_layout:next`,
+/// which moves the controller on to its mapping's next deck layout.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum InputTarget {
     Control(ControlTarget),
     Modifier(String),
+    NextDeckLayout,
 }
 
 impl InputTarget {
     pub fn control(&self) -> Option<ControlTarget> {
         match self {
             InputTarget::Control(t) => Some(*t),
-            InputTarget::Modifier(_) => None,
+            InputTarget::Modifier(_) | InputTarget::NextDeckLayout => None,
         }
     }
 }
@@ -41,14 +43,20 @@ impl fmt::Display for InputTarget {
         match self {
             InputTarget::Control(t) => t.fmt(f),
             InputTarget::Modifier(m) => write!(f, "modifier:{m}"),
+            InputTarget::NextDeckLayout => f.write_str(NEXT_DECK_LAYOUT),
         }
     }
 }
+
+const NEXT_DECK_LAYOUT: &str = "deck_layout:next";
 
 impl FromStr for InputTarget {
     type Err = rille_core::control::ParseControlError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == NEXT_DECK_LAYOUT {
+            return Ok(InputTarget::NextDeckLayout);
+        }
         match s.strip_prefix("modifier:") {
             Some(m) if !m.is_empty() => Ok(InputTarget::Modifier(m.to_owned())),
             _ => s.parse().map(InputTarget::Control),
@@ -262,7 +270,7 @@ impl InputBinding {
     /// absolute, `jog` → jog, other relative controls → relative.
     pub fn mode(&self) -> InputMode {
         self.mode.unwrap_or(match &self.target {
-            InputTarget::Modifier(_) => InputMode::Button,
+            InputTarget::Modifier(_) | InputTarget::NextDeckLayout => InputMode::Button,
             InputTarget::Control(t) if t.control == Control::Jog => InputMode::Jog,
             InputTarget::Control(t) => match t.control.kind() {
                 ControlKind::Button => InputMode::Button,
@@ -442,6 +450,10 @@ pub struct Mapping {
     pub inputs: Vec<InputBinding>,
     #[serde(default, rename = "output", skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<OutputBinding>,
+    /// For one of the store's per-layout mappings, the deck layout it runs
+    /// in (see [`Mapping::with_deck_layout`]). Not saved.
+    #[serde(skip)]
+    pub deck_layout: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -481,6 +493,7 @@ impl Mapping {
             hid: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
+            deck_layout: None,
         }
     }
 
@@ -534,6 +547,12 @@ impl Mapping {
         self.deck_layouts.iter().filter_map(|l| self.with_deck_layout(l).ok()).collect()
     }
 
+    /// The app decks the controller's deck sections drive, left to right, in
+    /// [`deck_layout`](Self::deck_layout); empty without one.
+    pub fn deck_order(&self) -> Vec<u8> {
+        self.deck_layout.as_deref().and_then(|l| parse_layout(l).ok()).unwrap_or_default()
+    }
+
     /// This mapping with deck section `i` driving deck `layout[i]`.
     pub fn with_deck_layout(&self, layout: &str) -> Result<Mapping, MappingError> {
         let order = parse_layout(layout).map_err(MappingError::Layout)?;
@@ -545,6 +564,7 @@ impl Mapping {
         let mut m = self.clone();
         m.name = format!("{} ({layout})", self.name);
         m.deck_layouts.clear();
+        m.deck_layout = Some(layout.to_owned());
         let targets = m.inputs.iter_mut().map(|b| &mut b.target).chain(m.outputs.iter_mut().map(|b| &mut b.source));
         for t in targets {
             if let InputTarget::Control(t) = t {
@@ -758,7 +778,9 @@ mod tests {
         assert_eq!(targets(&v[1]), ["deck.A.play", "deck.D.play", "global.scroll"]);
         assert_eq!(v[0].outputs[0].source.to_string(), "deck.A.hotcue.1");
         assert!(v.iter().all(|m| m.deck_layouts.is_empty() && m.validate().is_ok()));
+        assert_eq!((v[0].deck_layout.as_deref(), v[0].deck_order()), (Some("CABD"), vec![2, 0, 1, 3]));
         assert_eq!(Mapping::new("plain", "x").variants()[0].name, "plain");
+        assert!(Mapping::new("plain", "x").deck_order().is_empty());
 
         // A 2-deck controller driving decks C and D.
         let two = src.replace(r#"["CABD", "ABCD"]"#, r#"["CD"]"#);

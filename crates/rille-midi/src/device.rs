@@ -18,7 +18,11 @@ use std::collections::HashSet;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// How long a HID controller's displays show its decks after it connects or
+/// changes deck layout.
+const LAYOUT_FLASH: Duration = Duration::from_millis(1500);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MidiEvent {
@@ -35,6 +39,12 @@ pub enum MidiEvent {
         mapping: Option<String>,
     },
     Disconnected {
+        port: String,
+    },
+    /// A `deck_layout:next` input was pressed: the controller on `port` asks
+    /// for its mapping's next deck layout (see
+    /// [`MappingStore::next_deck_layout`]).
+    NextDeckLayout {
         port: String,
     },
 }
@@ -76,6 +86,9 @@ struct Device {
     engine: SharedEngine,
     link: Link,
     feedback: FeedbackState,
+    /// Display messages that override the feedback until the instant, see
+    /// [`deck_letters`].
+    flash: Option<(Instant, Vec<[u8; 3]>)>,
 }
 
 impl Device {
@@ -90,6 +103,11 @@ impl Device {
             Link::Midi { output: None, .. } => {}
             Link::Hid(h) => h.send(msgs),
         }
+    }
+
+    fn flash_decks(&mut self, mapping: Option<&Mapping>) {
+        let msgs = mapping.map(deck_letters).unwrap_or_default();
+        self.flash = (!msgs.is_empty()).then(|| (Instant::now() + LAYOUT_FLASH, msgs));
     }
 
     fn lights_off(&mut self) {
@@ -182,11 +200,16 @@ impl MidiManager {
             if raw.load(Ordering::Relaxed) {
                 let _ = tx.send(MidiEvent::Raw { port: name.clone(), bytes: bytes.to_vec(), t });
             }
+            let mut next_layout = false;
             if let Some(e) = lock(&engine).as_mut() {
                 e.handle(bytes, t, &*values, &mut events);
+                next_layout = e.take_next_deck_layout();
             }
             for e in events.drain(..) {
                 let _ = tx.send(MidiEvent::Control(e));
+            }
+            if next_layout {
+                let _ = tx.send(MidiEvent::NextDeckLayout { port: name.clone() });
             }
         }
     }
@@ -200,6 +223,7 @@ impl MidiManager {
             return self.set_mapping(port, mapping);
         }
         let mapping_name = mapping.as_ref().map(|m| m.name.clone());
+        let flash = mapping.as_ref().map(deck_letters).filter(|m| !m.is_empty());
         let engine: SharedEngine = Arc::new(Mutex::new(mapping.map(MappingEngine::new)));
         let link = match hid::scan(&self.hid_layouts).into_iter().find(|p| p.name == port) {
             Some(hid_port) => {
@@ -207,7 +231,8 @@ impl MidiManager {
             }
             None => self.connect_midi(port, &engine)?,
         };
-        self.devices.push(Device { port: port.to_owned(), engine, link, feedback: FeedbackState::new() });
+        let flash = flash.map(|msgs| (Instant::now() + LAYOUT_FLASH, msgs));
+        self.devices.push(Device { port: port.to_owned(), engine, link, feedback: FeedbackState::new(), flash });
         let _ = self.tx.send(MidiEvent::Connected { port: port.to_owned(), mapping: mapping_name });
         Ok(())
     }
@@ -245,7 +270,14 @@ impl MidiManager {
         let d = self.devices.iter_mut().find(|d| d.port == port).ok_or_else(|| MidiError::PortNotFound(port.into()))?;
         d.lights_off();
         let name = mapping.as_ref().map(|m| m.name.clone());
-        *lock(&d.engine) = mapping.map(MappingEngine::new);
+        d.flash_decks(mapping.as_ref());
+        let mut engine = lock(&d.engine);
+        let previous = engine.take();
+        *engine = mapping.map(MappingEngine::new);
+        if let (Some(e), Some(previous)) = (engine.as_mut(), &previous) {
+            e.keep_modifiers(previous);
+        }
+        drop(engine);
         d.feedback.reset();
         let _ = self.tx.send(MidiEvent::Connected { port: port.to_owned(), mapping: name });
         Ok(())
@@ -262,12 +294,14 @@ impl MidiManager {
     /// Hotplug: drops devices whose port vanished and connects new ports
     /// that have a mapping in `store`. Returns the newly connected ports.
     pub fn refresh(&mut self, store: &MappingStore) -> Vec<String> {
-        self.refresh_with(|port| store.find(port).cloned())
+        self.refresh_with(|port, _| store.find(port).cloned())
     }
 
     /// Like [`refresh`](Self::refresh), with `pick` choosing the mapping for
-    /// each new port; ports it returns `None` for stay disconnected.
-    pub fn refresh_with(&mut self, pick: impl Fn(&str) -> Option<Mapping>) -> Vec<String> {
+    /// each new port, given the ports connected so far and their mappings
+    /// (see [`connected`](Self::connected)); ports it returns `None` for stay
+    /// disconnected.
+    pub fn refresh_with(&mut self, pick: impl Fn(&str, &[(String, Option<String>)]) -> Option<Mapping>) -> Vec<String> {
         let ports = self.input_ports();
         let gone: Vec<String> =
             self.devices.iter().filter(|d| !ports.contains(&d.port)).map(|d| d.port.clone()).collect();
@@ -282,7 +316,7 @@ impl MidiManager {
             if self.devices.iter().any(|d| d.port == port) {
                 continue;
             }
-            let Some(m) = pick(&port) else { continue };
+            let Some(m) = pick(&port, &self.connected()) else { continue };
             match self.connect(&port, Some(m)) {
                 Ok(()) => added.push(port),
                 Err(e) if self.failed.insert(port.clone()) => eprintln!("{port}: {e}"),
@@ -298,9 +332,17 @@ impl MidiManager {
         let now = Instant::now();
         for d in &mut self.devices {
             self.buf.clear();
+            if d.flash.as_ref().is_some_and(|(until, _)| now >= *until) {
+                // Show what the flash covered again.
+                d.flash = None;
+                d.feedback.reset();
+            }
             if let Some(e) = lock(&d.engine).as_mut() {
                 e.flush(now, values, &mut self.events);
                 d.feedback.collect_with_modifiers(e.mapping(), values, &|m| e.modifier(m), &mut self.buf);
+            }
+            if let Some((_, msgs)) = &d.flash {
+                self.buf.extend_from_slice(msgs);
             }
             for e in self.events.drain(..) {
                 let _ = self.tx.send(MidiEvent::Control(e));
@@ -316,6 +358,15 @@ impl Drop for MidiManager {
     }
 }
 
+/// For a HID controller in a deck layout, display messages showing the deck
+/// each deck section drives: its letter on that section's display. Empty
+/// for other mappings.
+fn deck_letters(mapping: &Mapping) -> Vec<[u8; 3]> {
+    let Some(hid) = &mapping.hid else { return Vec::new() };
+    let status = 0xB0 | (hid::DISPLAY_CHANNEL - 1);
+    hid.displays.iter().zip(mapping.deck_order()).map(|(d, deck)| [status, d.cc, hid::DISPLAY_DECK + deck]).collect()
+}
+
 /// ALSA port names end in ` client:port`, which can change when the device
 /// is plugged in again; strip that.
 pub fn port_base_name(name: &str) -> &str {
@@ -327,6 +378,16 @@ pub fn port_base_name(name: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn deck_letters_label_each_section_display() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mappings/traktor-kontrol-x1-mk2.toml");
+        let x1 = crate::store::load_file(&path).unwrap();
+        let [ab, cd] = &x1.variants()[..] else { panic!("two layouts") };
+        assert_eq!(super::deck_letters(ab), [[0xB2, 0, 100], [0xB2, 1, 101]]);
+        assert_eq!(super::deck_letters(cd), [[0xB2, 0, 102], [0xB2, 1, 103]]);
+        assert!(super::deck_letters(&x1).is_empty(), "no layout chosen");
+    }
+
     #[test]
     fn base_name_strips_alsa_ids() {
         assert_eq!(super::port_base_name("DDJ-400:DDJ-400 MIDI 1 24:0"), "DDJ-400:DDJ-400 MIDI 1");

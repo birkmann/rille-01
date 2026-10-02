@@ -17,6 +17,8 @@ pub struct StoredMapping {
     /// has one, by name as written in their files.
     pub channels: Vec<(String, u8)>,
     device: Regex,
+    /// The name as written in the file, shared by its deck layouts.
+    family: String,
 }
 
 /// All mappings found in a list of directories, in priority order.
@@ -90,12 +92,13 @@ impl MappingStore {
 
     fn push_with_channels(&mut self, mapping: Mapping, path: PathBuf, channels: Vec<(String, u8)>) {
         let Ok(device) = mapping.device_regex() else { return };
-        for mapping in mapping.variants() {
+        for variant in mapping.variants() {
             self.entries.push(StoredMapping {
-                mapping,
+                mapping: variant,
                 path: path.clone(),
                 channels: channels.clone(),
                 device: device.clone(),
+                family: mapping.name.clone(),
             });
         }
     }
@@ -137,6 +140,22 @@ impl MappingStore {
             }
         }
         layouts
+    }
+
+    /// Mapping `name` in each of its file's deck layouts, in the file's order;
+    /// just itself for a mapping without layouts, empty for an unknown name.
+    pub fn deck_layouts(&self, name: &str) -> Vec<&Mapping> {
+        let Some(e) = self.entries.iter().find(|e| e.mapping.name == name) else { return Vec::new() };
+        let same = |o: &&StoredMapping| o.family == e.family && o.path == e.path;
+        self.entries.iter().filter(same).map(|o| &o.mapping).collect()
+    }
+
+    /// The deck layout after mapping `name`'s, wrapping around; `None` for a
+    /// mapping with fewer than two layouts.
+    pub fn next_deck_layout(&self, name: &str) -> Option<&Mapping> {
+        let layouts = self.deck_layouts(name);
+        let i = layouts.iter().position(|m| m.name == name)?;
+        (layouts.len() > 1).then(|| layouts[(i + 1) % layouts.len()])
     }
 
     /// The MIDI channels of mapping `name` (a store entry name, deck layout
@@ -217,6 +236,8 @@ mod tests {
         assert_eq!(store.find("DDJ-400:DDJ-400 MIDI 1 24:0").unwrap().name, "My DDJ-400!");
         assert_eq!(store.find("ddj-400 lowercase").unwrap().name, "Bundled DDJ");
         assert_eq!(store.find("Something else").unwrap().name, "Bundled generic");
+        assert_eq!(store.next_deck_layout("Bundled generic"), None);
+        assert!(store.deck_layouts("Unknown").is_empty());
         assert!(store.by_name("Bundled DDJ").is_some());
         let _ = fs::remove_dir_all(&root);
     }
@@ -252,6 +273,8 @@ mod tests {
         let targets: Vec<String> = m.inputs.iter().map(|b| b.target.to_string()).collect();
         assert_eq!(targets, ["deck.C.volume", "deck.D.play"]);
         assert_eq!(store.by_name("Pad (AB)").unwrap().inputs.len(), 1, "the included mapping is unchanged");
+        assert_eq!(store.next_deck_layout("Mixer (CD)"), None, "a single layout");
+        assert_eq!(store.deck_layouts("Mixer (CD)").len(), 1);
         let _ = fs::remove_dir_all(&root);
     }
 

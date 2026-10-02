@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rille — dj software for linux and macos</title>
-<meta name="description" content="rille is free, open source DJ software for Linux and macOS with four decks, remix decks, sync, automatic beatgrids and controller support. Supports Core Audio, PipeWire, JACK and ALSA.">
+<title>rille · free dj software for mac and linux</title>
+<meta name="description" content="rille is free DJ software for Mac and Linux. Mix on up to four decks with automatic beatgrids and sync, plug in your controller or stream from Beatport.">
 <meta name="theme-color" content="#F4F3EF" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">
 <script>
@@ -21,8 +21,8 @@ try {
 <link rel="preload" href="assets/fonts/Geist-Regular.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 <meta property="og:type" content="website">
-<meta property="og:title" content="rille — dj software for linux and macos">
-<meta property="og:description" content="DJ software for Linux and macOS with four decks, remix decks, sync and automatic beatgrids. Free and open source.">
+<meta property="og:title" content="rille · free dj software for mac and linux">
+<meta property="og:description" content="Free DJ software for Mac and Linux. Up to four decks, automatic beatgrids and sync, controllers and Beatport streaming.">
 <meta property="og:image" content="assets/img/og.png">
 <meta name="twitter:card" content="summary_large_image">
 </head>
@@ -54,50 +54,88 @@ try {
 <main id="main">
 
 <section class="wrap hero" id="top">
-  <span class="label">dj software for linux &amp; macos · v0.1.1 · free &amp; open source</span>
-  <h1>Drop the needle.<br>On Linux and Mac.</h1>
-  <p class="lead">Four decks, remix decks, sync and key lock. Runs natively on macOS with Core Audio and on Linux with PipeWire, JACK or ALSA.</p>
-  <div class="actions">
-    <a class="pill pill-signal" href="#install">Download</a>
-    <a class="pill pill-outline" href="https://github.com/birkmann/rille-01">View source</a>
+  <span class="label">mac &amp; linux · free · v0.1.1</span>
+  <h1>Free DJ<br>software</h1>
+  <div class="hero-copy">
+    <p class="lead">Mix your music on up to four decks. rille finds the beat of every track by itself, so your mixes stay in time. Plug in your controller, or stream from Beatport.</p>
+    <div class="actions">
+      <a class="pill pill-signal pill-dl" id="hero-download" href="#install">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+        <span>Download</span>
+      </a>
+      <a class="pill pill-outline" href="https://github.com/birkmann/rille-01">View source</a>
+    </div>
+    <p class="dl-meta" id="hero-download-meta">For Mac and Linux · <a href="#install">all downloads</a></p>
+    <script>
+    // Offer the build for the visitor's system; one click downloads it. Anything else (Windows,
+    // phones, ChromeOS, ARM Linux) keeps the plain button to the install section.
+    (function () {
+      var base = 'https://github.com/birkmann/rille-01/releases/latest/download/';
+      var builds = {
+        mac: { file: 'rille-macos-arm64.dmg', name: 'Mac', meta: 'Apple chip · macOS 12 or later', help: '#macos' },
+        linux: { file: 'rille-x86_64.AppImage', name: 'Linux', meta: '64-bit PC · AppImage', help: '#linux' }
+      };
+      var ua = navigator.userAgent;
+      var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+      var os = null;
+      if (/android|cros|chrome os/i.test(ua + ' ' + platform)) os = null;
+      // iPads report a Mac platform too, but have a touch screen.
+      else if (/mac/i.test(platform) && !(navigator.maxTouchPoints > 1)) os = 'mac';
+      // The AppImage is x86_64 only; userAgentData says just "Linux", navigator.platform the CPU.
+      else if (/linux/i.test(platform) && !/arm|aarch64/i.test(navigator.platform || '')) os = 'linux';
+      if (!os) return;
+      var b = builds[os];
+      var btn = document.getElementById('hero-download');
+      var meta = document.getElementById('hero-download-meta');
+      btn.href = base + b.file;
+      btn.setAttribute('download', '');
+      btn.querySelector('span').textContent = 'Download for ' + b.name;
+      meta.innerHTML = b.meta + ' · <a href="#install">other systems</a>';
+      btn.addEventListener('click', function () {
+        meta.innerHTML = 'Downloading… <a href="' + b.help + '">how to open it</a>';
+      });
+    })();
+    </script>
   </div>
 </section>
 
 <figure class="wrap shot shot-hero">
   <picture>
     <source srcset="assets/img/rille-2-decks.webp" type="image/webp">
-    <img src="assets/img/rille-2-decks.png" width="1592" height="992" alt="rille with two decks playing in sync: waveforms, mixer with EQ and filter, FX units and the track collection.">
+    <img src="assets/img/rille-2-decks.png" width="1592" height="992" alt="rille with two decks playing in sync: waveforms, mixer with EQ and filter, effects and the track collection.">
   </picture>
 </figure>
 
-<section class="wrap proof" aria-label="At a glance">
-  <div><span class="num">4&nbsp;decks</span><span class="what">with sync, key lock, loops and eight hotcues each</span></div>
-  <div><span class="num">6&nbsp;FX</span><span class="what">tempo-synced, across two units with three slots</span></div>
-  <div><span class="num">MIDI&nbsp;+&nbsp;HID</span><span class="what">controller mappings with LED feedback and MIDI learn</span></div>
-  <div><span class="num">GPL&#8209;3.0</span><span class="what">free and open source, native on Linux and macOS</span></div>
+<section class="wrap specs" aria-label="Specifications">
+  <dl>
+    <div><dt>Works on</dt><dd>Mac, Linux</dd></div>
+    <div><dt>Price</dt><dd>Free, no subscription</dd></div>
+    <div><dt>Decks</dt><dd>Up to four</dd></div>
+    <div><dt>Code</dt><dd>Open source</dd></div>
+  </dl>
 </section>
 
 <section class="wrap section" id="features">
   <h2>Features</h2>
   <div class="grid features">
-    <article><span class="idx">01</span><h3>Automatic beatgrids</h3><p>Each track is analyzed once for tempo, bar start, key, loudness and waveform. Tracks with an uncertain grid are marked on the deck.</p></article>
-    <article><span class="idx">02</span><h3>Sync</h3><p>Synced decks stay in phase with the master deck, including after loops, hotcue jumps, seeks and scratches.</p></article>
-    <article><span class="idx">03</span><h3>Four decks</h3><p>Each deck has play, cue, eight hotcues, loops from 1/32 to 32 beats, beatjump, flux, reverse, key lock and key shift.</p></article>
-    <article><span class="idx">04</span><h3>Remix decks</h3><p>Four slots with sixteen cells each. Capture loops from any deck or load one-shots, and trigger them quantized.</p></article>
-    <article><span class="idx">05</span><h3>Mixer</h3><p>Gain with auto-gain, 3-band isolator EQ with full kill, DJ filter, crossfader, headphone cue and a master limiter.</p></article>
-    <article><span class="idx">06</span><h3>FX</h3><p>Two FX units with three slots each. Delay, reverb, LFO filter, flanger, gater and beatmasher, all tempo-synced.</p></article>
-    <article><span class="idx">07</span><h3>Library &amp; explorer</h3><p>Music folders, tags, cover art, search, ratings, colors, playlists, history and Traktor collection import.</p></article>
-    <article><span class="idx">08</span><h3>Controllers</h3><p>MIDI and HID mappings with LED feedback, MIDI learn, soft takeover and hotplug. Settings are saved per device.</p></article>
-    <article><span class="idx">09</span><h3>Stems</h3><p>Each track can be split into drums, bass, other and vocals, each with its own level and mute. Separated stems are kept for the next time.</p></article>
-    <article><span class="idx">10</span><h3>Recording</h3><p>The main mix is recorded to a WAV file, with a cue sheet listing the tracks played.</p></article>
+    <article><span class="idx">01</span><h3>Beatgrids</h3><p>rille listens to each track once and marks every beat. Tracks it isn't sure about are flagged, and you can fix them by hand.</p></article>
+    <article><span class="idx">02</span><h3>Sync</h3><p>Press sync and two tracks play in time. They stay together after loops, cue jumps and scratches.</p></article>
+    <article><span class="idx">03</span><h3>Four decks</h3><p>Cue, eight hot cues, loops and beat jumps on every deck. Key lock keeps the pitch when you change the tempo.</p></article>
+    <article><span class="idx">04</span><h3>Remix decks</h3><p>Grab loops from any track or load short samples, and fire them off in time with the music.</p></article>
+    <article><span class="idx">05</span><h3>Mixer</h3><p>Volume that levels itself, a three-band EQ, a filter, a crossfader and headphone cue, like on a club mixer.</p></article>
+    <article><span class="idx">06</span><h3>Effects</h3><p>Delay, reverb, filter, flanger, gater and beatmasher, all in time with the beat.</p></article>
+    <article><span class="idx">07</span><h3>Library</h3><p>Your music folders with search, ratings, colours, playlists and history. Bring your Traktor collection along.</p></article>
+    <article><span class="idx">08</span><h3>Controllers</h3><p>Ready-made settings for popular DJ controllers, lights included. Teach rille any other MIDI controller with MIDI learn.</p></article>
+    <article><span class="idx">09</span><h3>Stems</h3><p>Split a track into drums, bass, vocals and the rest, and turn each part up or down.</p></article>
+    <article><span class="idx">10</span><h3>Recording</h3><p>Record your mix to a file, together with a list of the tracks you played.</p></article>
   </div>
 </section>
 
 <section class="wrap section split" id="sync">
   <div class="copy">
     <h2>Beatgrids</h2>
-    <p>Grid lines are placed on the start of the kick, and the tempo is calculated from the average of all beats. Tracks with a steady tempo get a constant grid, tracks with tempo changes a piecewise grid, and live-played music a per-beat grid.</p>
-    <p><span class="kbd">TICK</span> on a deck plays a click on every beat to check the grid by ear. Grids can be corrected in the grid editor, and corrections are saved.</p>
+    <p>Every track gets a grid of beat markers, placed on the kick drum. Most music gets an even grid, tracks that speed up or slow down get one that follows them, and live-played music gets a marker on every single beat.</p>
+    <p>Not sure a grid is right? Press <span class="kbd">TICK</span> to hear a click on every beat. Move the grid in the grid editor if needed, and rille remembers it.</p>
   </div>
   <figure class="shot shot-detail">
     <picture>
@@ -116,11 +154,11 @@ try {
       </picture>
     </figure>
     <div class="copy">
-      <h2>Audio</h2>
-      <p>On macOS, rille plays through Core Audio; on Linux it supports PipeWire, JACK and ALSA. Headphone cue goes to outputs 3/4 of a four-channel interface, or to split mono on a two-channel one.</p>
-      <p>External mixer mode sends each deck to its own output channel, for use with a hardware mixer such as the Allen &amp; Heath Xone:96.</p>
+      <h2>Sound</h2>
+      <p>Plug in your sound card and play. Listen to the next track on headphones before the crowd hears it, with a sound card that has four outputs, or by splitting a two-output one between speakers and headphones.</p>
+      <p>Mixing on a hardware mixer like the Allen &amp; Heath Xone:96? rille can send every deck to its own mixer channel.</p>
       <ul class="tags">
-        <li>Core Audio</li><li>PipeWire</li><li>JACK</li><li>ALSA</li><li>macOS</li><li>Wayland</li><li>X11</li><li>GPL-3.0</li>
+        <li>Headphone cue</li><li>Hardware mixers</li><li>Mac</li><li>Linux</li>
       </ul>
     </div>
   </div>
@@ -129,78 +167,74 @@ try {
 <section class="wrap section split" id="streaming">
   <div class="copy">
     <span class="label">new · beatport streaming</span>
-    <h2>The Beatport catalog, on your decks</h2>
-    <p>Sign in with your Beatport streaming subscription and the catalog opens in rille's browser. Search it, paste any beatport.com link to a track, release, chart, playlist, label, artist or genre, or open your own Beatport playlists.</p>
-    <p>A streamed track is analyzed like every other one: beatgrid, key and loudness. Your cues and grid corrections stay with it, even when the file has to be fetched again.</p>
+    <h2>Play from Beatport</h2>
+    <p>With a Beatport streaming subscription, the whole Beatport catalog opens inside rille. Search it, open your Beatport playlists, or paste a link from beatport.com.</p>
+    <p>Streamed tracks get beatgrids just like your own files, and your cues and grid fixes are kept.</p>
     <ul class="tags tags-light">
-      <li>Lossless FLAC</li><li>AAC 256</li><li>Link paste</li><li>Your playlists</li><li>Local cache</li>
+      <li>Lossless FLAC</li><li>Your playlists</li><li>Paste a link</li><li>Local cache</li>
     </ul>
   </div>
   <ol class="steps" aria-label="How Beatport streaming works">
-    <li><span class="idx">01</span><div><h3>Sign in</h3><p>Under Settings → Beatport. rille keeps the sign-in token, never your password.</p></div></li>
-    <li><span class="idx">02</span><div><h3>Find</h3><p>Search from the browser's search box, paste a link, or open your playlists and the tracks you streamed before.</p></div></li>
-    <li><span class="idx">03</span><div><h3>Load</h3><p>The track plays as soon as its first seconds have arrived, while the rest downloads.</p></div></li>
-    <li><span class="idx">04</span><div><h3>Mix</h3><p>Sync, key lock, hotcues and loops work as with your own files. Tracks stay in a local cache up to the size you set.</p></div></li>
+    <li><span class="idx">01</span><div><h3>Sign in</h3><p>Under Settings → Beatport. rille keeps only a sign-in token, never your password.</p></div></li>
+    <li><span class="idx">02</span><div><h3>Find</h3><p>Search, paste a link, or open your playlists and the tracks you played before.</p></div></li>
+    <li><span class="idx">03</span><div><h3>Load</h3><p>A track starts playing within seconds, while the rest downloads.</p></div></li>
+    <li><span class="idx">04</span><div><h3>Mix</h3><p>Sync, key lock, hot cues and loops work as with your own music. Tracks stay on your computer up to a size you choose.</p></div></li>
   </ol>
-  <p class="note split-note">Needs a Beatport streaming subscription; lossless FLAC needs the Professional plan. rille is an independent project, not a Beatport partner integration, and is not affiliated with or endorsed by Beatport.</p>
+  <p class="note split-note">Needs a Beatport streaming subscription; lossless FLAC needs the Professional plan. rille is an independent project and is not affiliated with or endorsed by Beatport.</p>
 </section>
 
 <section class="wrap section" id="controllers">
   <h2>Controllers</h2>
-  <p class="lead narrow">rille includes mappings for these controllers. Other MIDI controllers can be mapped with MIDI learn; other HID controllers can be described in a mapping file.</p>
+  <p class="lead narrow">rille comes with ready-made settings for these controllers. Any other MIDI controller can be set up with MIDI learn: move a knob, click the control on screen, done.</p>
   <ul class="grid hardware">
-    <li><span class="hw">Allen &amp; Heath Xone:K2</span><span class="proto">midi · 4 decks</span></li>
-    <li><span class="hw">Allen &amp; Heath Xone:96</span><span class="proto">audio · external mixer</span></li>
-    <li><span class="hw">Native Instruments Traktor Kontrol F1</span><span class="proto">hid · remix decks</span></li>
-    <li><span class="hw">Native Instruments Traktor Kontrol Z1</span><span class="proto">hid · audio</span></li>
-    <li><span class="hw">Native Instruments Traktor Kontrol X1 MK2</span><span class="proto">hid</span></li>
-    <li><span class="hw">Akai AMX</span><span class="proto">midi · audio</span></li>
-    <li><span class="hw">Pioneer DDJ-400</span><span class="proto">midi</span></li>
-    <li><span class="hw">Hercules DJControl Inpulse 200</span><span class="proto">midi</span></li>
+    <li><span class="hw">Allen &amp; Heath Xone:K2</span><span class="proto">4 decks</span></li>
+    <li><span class="hw">Allen &amp; Heath Xone:96</span><span class="proto">hardware mixer</span></li>
+    <li><span class="hw">Native Instruments Traktor Kontrol F1</span><span class="proto">remix decks</span></li>
+    <li><span class="hw">Native Instruments Traktor Kontrol Z1</span><span class="proto">mixer · sound card</span></li>
+    <li><span class="hw">Native Instruments Traktor Kontrol X1 MK2</span><span class="proto">deck control</span></li>
+    <li><span class="hw">Akai AMX</span><span class="proto">mixer · sound card</span></li>
+    <li><span class="hw">Pioneer DDJ-400</span><span class="proto">2 decks</span></li>
+    <li><span class="hw">Hercules DJControl Inpulse 200</span><span class="proto">2 decks</span></li>
   </ul>
-  <p class="note">Traktor, Xone, DDJ and the other product names belong to their owners; rille is an independent project.</p>
+  <p class="note">On Linux, the Native Instruments controllers need a one-time permission setting; the manual shows how. Traktor, Xone, DDJ and the other product names belong to their owners; rille is an independent project.</p>
 </section>
 
 <section class="install" id="install">
   <div class="wrap section">
     <svg class="mark mark-lg" viewBox="0 0 100 100" fill="none" aria-hidden="true"><circle cx="50" cy="50" r="36" stroke="#F4F3EF" stroke-width="6"/><circle cx="77.6" cy="26.9" r="9" fill="#FF4A1C"/></svg>
     <h2>Install</h2>
-    <p class="lead">rille runs on macOS and Linux.</p>
+    <p class="lead">rille runs on Mac and Linux.</p>
     <div class="platforms">
       <div class="platform" id="macos">
-        <h3>macOS</h3>
-        <p>For Macs with Apple silicon, macOS 12 or later. Open the disk image and drag rille to Applications.</p>
-        <a class="pill pill-signal" href="https://github.com/birkmann/rille-01/releases/latest/download/rille-macos-arm64.dmg">Download for macOS</a>
-        <p class="note">rille is not notarized by Apple yet, so macOS blocks the first launch. Open System Settings → Privacy &amp; Security and choose <b>Open Anyway</b>.</p>
+        <h3>Mac</h3>
+        <p>For Macs with an Apple chip (M1 or newer) on macOS 12 or later. Open the downloaded file and drag rille into your Applications folder.</p>
+        <a class="pill pill-signal" href="https://github.com/birkmann/rille-01/releases/latest/download/rille-macos-arm64.dmg">Download for Mac</a>
+        <p class="note">The first time you open rille, your Mac will say it can't check the app, because rille isn't registered with Apple yet. Go to System Settings → Privacy &amp; Security, scroll down and click <b>Open Anyway</b>. You only need to do this once.</p>
       </div>
       <div class="platform" id="linux">
         <h3>Linux</h3>
-        <p>Build from source and install into <code>~/.local</code>. No root access needed.</p>
-        <div class="code" role="group" aria-label="Install commands">
-          <pre><code><span class="prompt">$</span> git clone https://github.com/birkmann/rille-01.git rille
-<span class="prompt">$</span> cd rille &amp;&amp; ./scripts/install.sh
-<span class="prompt">$</span> rille</code></pre>
-          <button class="copy-btn" type="button" data-copy="git clone https://github.com/birkmann/rille-01.git rille &amp;&amp; cd rille &amp;&amp; ./scripts/install.sh">Copy</button>
-        </div>
+        <p>For 64-bit PCs on recent distributions. Download the file, allow it to run and open it.</p>
+        <a class="pill pill-signal" href="https://github.com/birkmann/rille-01/releases/latest/download/rille-x86_64.AppImage">Download for Linux</a>
+        <p class="note">To allow it to run, right-click the file, open Properties and turn on <b>Allow executing file as program</b>, or run <code>chmod +x rille-x86_64.AppImage</code>. If it still doesn't open, install <code>libfuse2</code>.</p>
       </div>
     </div>
     <div class="install-more">
       <div>
+        <h3>Flatpak</h3>
+        <p>Prefer Flatpak? Download <a href="https://github.com/birkmann/rille-01/releases/latest/download/rille-x86_64.flatpak">rille-x86_64.flatpak</a> and install it with <code>flatpak install rille-x86_64.flatpak</code>. Needs Flathub set up.</p>
+      </div>
+      <div>
         <h3>Arch Linux</h3>
-        <p><code>cd packaging/arch &amp;&amp; makepkg -si</code> — installs system-wide, including the udev rule for HID controllers.</p>
+        <p>Arch users can install the included package with <code>cd packaging/arch &amp;&amp; makepkg -si</code>, which also sets up the controller permissions.</p>
       </div>
       <div>
-        <h3>Flatpak &amp; AppImage</h3>
-        <p>Prebuilt Linux packages are attached to each <a href="https://github.com/birkmann/rille-01/releases">release on GitHub</a>. Recipes are in <code>packaging/</code>.</p>
-      </div>
-      <div>
-        <h3>Build from source</h3>
-        <p>Rust (stable), Qt 6.5+ and <code>clang</code>; on Linux also PipeWire, JACK or ALSA development files. On macOS, <code>./packaging/macos/build-app.sh</code> builds the app.</p>
+        <h3>Build it yourself</h3>
+        <p>rille is written in Rust and Qt. In a copy of the source, <code>./scripts/install.sh</code> builds and installs it for your user. Requirements are in the manual on GitHub.</p>
       </div>
     </div>
     <div class="actions">
       <a class="pill pill-outline-light" href="https://github.com/birkmann/rille-01">Source code</a>
-      <a class="pill pill-outline-light" href="#">Read the manual</a>
+      <a class="pill pill-outline-light" href="https://github.com/birkmann/rille-01#using-it">Read the manual</a>
     </div>
   </div>
 </section>
@@ -209,7 +243,7 @@ try {
 
 <footer class="wrap footer">
   <span>rille · GPL-3.0-or-later · 2026</span>
-  <span><a href="https://github.com/birkmann/rille-01">source</a> · <a href="#">docs</a> · <a href="#">issues</a></span>
+  <span><a href="https://github.com/birkmann/rille-01">source</a> · <a href="https://github.com/birkmann/rille-01#readme">docs</a> · <a href="https://github.com/birkmann/rille-01/issues">issues</a></span>
 </footer>
 
 <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Screenshot" hidden>

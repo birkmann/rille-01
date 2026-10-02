@@ -583,6 +583,8 @@ Popup {
                                     // one on its X:LINK), for a controller moved off its
                                     // factory channel.
                                     readonly property var channels: entry && entry.channels ? entry.channels : []
+                                    // The mapping in each of its deck layouts (AB, CD, …).
+                                    readonly property var layouts: entry && entry.layouts ? entry.layouts : []
                                     Layout.fillWidth: true
                                     implicitHeight: portColumn.implicitHeight
                                     radius: 4
@@ -606,6 +608,34 @@ Popup {
                                                 model: ["No mapping"].concat(dialog.midi.mappings)
                                                 currentIndex: portRow.current.length ? Math.max(0, dialog.midi.mappings.indexOf(portRow.current) + 1) : 0
                                                 onActivated: idx => AppController.setPortMapping(portRow.modelData, idx === 0 ? "" : dialog.midi.mappings[idx - 1])
+                                            }
+                                        }
+                                        RowLayout {
+                                            visible: portRow.layouts.length > 1
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 36
+                                            Layout.leftMargin: 26
+                                            Layout.rightMargin: 6
+                                            spacing: 8
+                                            UiText {
+                                                Layout.fillWidth: true
+                                                text: "Decks"
+                                                color: Theme.textDim
+                                            }
+                                            Row {
+                                                spacing: 4
+                                                Repeater {
+                                                    model: portRow.layouts
+                                                    DjButton {
+                                                        required property var modelData
+                                                        text: modelData.decks.split("").join(" ")
+                                                        implicitHeight: 26
+                                                        lit: modelData.name === portRow.current
+                                                        litColor: Theme.sync
+                                                        tip: "Drive decks " + modelData.decks.split("").join(", ")
+                                                        onClicked: AppController.setPortMapping(portRow.modelData, modelData.name)
+                                                    }
+                                                }
                                             }
                                         }
                                         Repeater {

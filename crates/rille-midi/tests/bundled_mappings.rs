@@ -100,6 +100,21 @@ fn traktor_hid_controllers() {
     // The left deck encoder turning clockwise doubles the loop.
     let enc = hid_targets(ab, &[x1(&[(0x11, 0x05)]), x1(&[(0x11, 0x06)])]);
     assert!(enc.ends_with(&["deck.A.loop_double".to_string()]), "{enc:?}");
+    // SHIFT + browse press (note 33: 0x17 bit 1) switches between AB and CD;
+    // browse press alone does not.
+    let switches = |reports: &[Vec<u8>]| {
+        let mut hid = rille_midi::hid::HidTranslator::new(std::sync::Arc::new(ab.hid.clone().unwrap()));
+        let mut engine = MappingEngine::new(ab.clone());
+        let (mut msgs, mut out) = (Vec::new(), Vec::new());
+        reports.iter().for_each(|r| hid.input(r, &mut msgs));
+        let t = std::time::Instant::now();
+        msgs.iter().for_each(|m| engine.handle(m, t, &ValueMap::default(), &mut out));
+        engine.take_next_deck_layout()
+    };
+    assert!(!switches(&[x1(&[]), x1(&[(0x17, 0x02)])]));
+    assert!(switches(&[x1(&[]), x1(&[(0x14, 0x04)]), x1(&[(0x14, 0x04), (0x17, 0x02)])]));
+    assert_eq!(store.next_deck_layout(&ab.name).map(|m| &m.name), Some(&cd.name));
+    assert_eq!(store.next_deck_layout(&cd.name).map(|m| &m.name), Some(&ab.name));
 
     // Z1: MODE (bit 1) held turns FX 1 (bit 2) into play for deck A.
     let z1 = |knobs: &[(usize, u16)], buttons: u8| {

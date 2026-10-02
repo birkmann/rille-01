@@ -53,6 +53,7 @@ impl FeedbackState {
             let source = match &o.source {
                 InputTarget::Control(t) => values.value(*t),
                 InputTarget::Modifier(m) => f32::from(u8::from(modifier(m))),
+                InputTarget::NextDeckLayout => 0.0,
             };
             let v = output_value(o, source, beat_on);
             if *last != Some(v) {

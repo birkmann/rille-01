@@ -518,7 +518,7 @@ mod tests {
         };
         let app = App::start(opts).unwrap();
         let port = "Traktor Kontrol F1 HID (08C2C27B)";
-        let pick = |app: &App| app.pick_mapping(&app.mappings.lock().unwrap(), port).map(|m| m.name);
+        let pick = |app: &App| app.pick_mapping(&app.mappings.lock().unwrap(), port, &[]).map(|m| m.name);
         assert_eq!(pick(&app).as_deref(), Some("Traktor Kontrol F1 (C)"));
         let mut s = app.settings();
         s.remix_decks = "D".into();

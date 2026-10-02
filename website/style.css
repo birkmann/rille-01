@@ -219,7 +219,7 @@ p { margin: 0; }
 .code { position: relative; max-width: 720px; background: var(--band-raised); border: 1px solid var(--ink-line); border-radius: 10px; }
 .code pre { margin: 0; padding: 20px 96px 20px 24px; overflow-x: auto; font-family: var(--mono); font-size: 15px; line-height: 1.8; }
 .code code { font-size: inherit; }
-.prompt { color: #77756F; user-select: none; }
+.prompt { color: var(--signal); user-select: none; }
 .copy-btn {
   position: absolute; top: 14px; right: 14px;
   font: 13px var(--mono); color: var(--paper); background: transparent;

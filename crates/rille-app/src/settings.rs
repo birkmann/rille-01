@@ -156,10 +156,10 @@ impl MixingMode {
 pub enum WaveformStyle {
     /// Bass red, mids green, highs blue, mixed like light; pastel with a
     /// bright high-band core.
-    #[default]
     Spectrum,
     /// Bands drawn on top of each other: lows blue, mids amber, highs white
     /// (the club media player look).
+    #[default]
     ThreeBand,
     /// One saturated color per column from the band mix.
     Rgb,
@@ -295,10 +295,10 @@ impl Default for Settings {
             library_roots: Vec::new(),
             midi: true,
             waveform_seconds: 8.0,
-            waveform_style: WaveformStyle::Spectrum,
+            waveform_style: WaveformStyle::ThreeBand,
             waveform_bottom: false,
             waveform_height: 1.0,
-            waveform_mixer: false,
+            waveform_mixer: true,
             waveform_fader_dim: false,
             background_analysis: true,
             analysis_paused: false,
@@ -394,8 +394,8 @@ mod tests {
             tempo_range: 0.16,
             library_roots: vec!["/music".into()],
             midi_mappings: midi_mappings.into(),
-            waveform_style: WaveformStyle::ThreeBand,
-            waveform_mixer: true,
+            waveform_style: WaveformStyle::Rgb,
+            waveform_mixer: false,
             show_mixer: false,
             deck_count: 4,
             ..Settings::default()

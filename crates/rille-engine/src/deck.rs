@@ -1094,7 +1094,8 @@ impl Deck {
             }
             for (i, (o, f)) in out.iter_mut().zip(fade.iter()).enumerate() {
                 let g = ((self.fade_pos + i) as f32 / self.fade_len as f32).min(1.0);
-                let (gi, go) = ((g * std::f32::consts::FRAC_PI_2).sin(), (g * std::f32::consts::FRAC_PI_2).cos() * fade_from);
+                let (gi, go) =
+                    ((g * std::f32::consts::FRAC_PI_2).sin(), (g * std::f32::consts::FRAC_PI_2).cos() * fade_from);
                 o[0] = o[0] * gi + f[0] * go;
                 o[1] = o[1] * gi + f[1] * go;
             }

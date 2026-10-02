@@ -654,9 +654,7 @@ impl Engine {
                     // for the next block instead.
                     let jump_pending = deck.fading()
                         || deck.loop_active
-                            && deck
-                                .loop_range
-                                .is_some_and(|(_, e)| grid.secs_at(b0 + err.max(0.0) + k * advance) >= e);
+                            && deck.loop_range.is_some_and(|(_, e)| grid.secs_at(b0 + err.max(0.0) + k * advance) >= e);
                     // A nudge moves the deck on purpose: no jump into phase.
                     let realign = !fractional_loop
                         && !(audible && jump_pending)

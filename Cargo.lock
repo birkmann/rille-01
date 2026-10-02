@@ -2535,7 +2535,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rille-analysis"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "approx",
  "realfft",
@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "rille-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "crossbeam-channel",
  "hound",
@@ -2567,7 +2567,7 @@ dependencies = [
 
 [[package]]
 name = "rille-beatport"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2578,7 +2578,7 @@ dependencies = [
 
 [[package]]
 name = "rille-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "image",
  "rayon",
@@ -2595,7 +2595,7 @@ dependencies = [
 
 [[package]]
 name = "rille-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "approx",
  "bitflags 2.13.2",
@@ -2606,21 +2606,21 @@ dependencies = [
 
 [[package]]
 name = "rille-decode"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "symphonia",
 ]
 
 [[package]]
 name = "rille-dsp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "assert_no_alloc",
 ]
 
 [[package]]
 name = "rille-engine"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "assert_no_alloc",
  "cpal",
@@ -2635,7 +2635,7 @@ dependencies = [
 
 [[package]]
 name = "rille-library"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "hound",
  "image",
@@ -2652,7 +2652,7 @@ dependencies = [
 
 [[package]]
 name = "rille-midi"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "alsa",
  "crossbeam-channel",
@@ -2666,7 +2666,7 @@ dependencies = [
 
 [[package]]
 name = "rille-stems"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rille-dsp",
  "tract-onnx",
@@ -2674,7 +2674,7 @@ dependencies = [
 
 [[package]]
 name = "rille-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cxx",
  "cxx-qt",

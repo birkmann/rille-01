@@ -85,6 +85,9 @@ struct Device {
     port: String,
     engine: SharedEngine,
     link: Link,
+    /// A MIDI input was seen receiving from its port (see
+    /// [`MidiManager::is_alive`]); until then it is taken as alive.
+    seen_subscribed: bool,
     feedback: FeedbackState,
     /// Display messages that override the feedback until the instant, see
     /// [`deck_letters`].
@@ -133,6 +136,9 @@ pub struct MidiManager {
     failed: HashSet<String>,
     /// The HID controllers looked for, from the mappings' `[hid]` tables.
     hid_layouts: Vec<Arc<HidLayout>>,
+    /// For asking the ALSA sequencer whether an input still receives.
+    #[cfg(target_os = "linux")]
+    seq: Option<alsa::Seq>,
 }
 
 impl MidiManager {
@@ -152,6 +158,8 @@ impl MidiManager {
             events: Vec::new(),
             failed: HashSet::new(),
             hid_layouts: Vec::new(),
+            #[cfg(target_os = "linux")]
+            seq: alsa::Seq::open(None, None, false).ok(),
         })
     }
 
@@ -232,7 +240,15 @@ impl MidiManager {
             None => self.connect_midi(port, &engine)?,
         };
         let flash = flash.map(|msgs| (Instant::now() + LAYOUT_FLASH, msgs));
-        self.devices.push(Device { port: port.to_owned(), engine, link, feedback: FeedbackState::new(), flash });
+        let device = Device {
+            port: port.to_owned(),
+            engine,
+            link,
+            seen_subscribed: false,
+            feedback: FeedbackState::new(),
+            flash,
+        };
+        self.devices.push(device);
         let _ = self.tx.send(MidiEvent::Connected { port: port.to_owned(), mapping: mapping_name });
         Ok(())
     }
@@ -301,10 +317,18 @@ impl MidiManager {
     /// each new port, given the ports connected so far and their mappings
     /// (see [`connected`](Self::connected)); ports it returns `None` for stay
     /// disconnected.
+    ///
+    /// A device unplugged and plugged in again since the last call usually
+    /// comes back under the same port name; its dead connection is dropped
+    /// and the port connected again, with the mapping `pick` gives it.
     pub fn refresh_with(&mut self, pick: impl Fn(&str, &[(String, Option<String>)]) -> Option<Mapping>) -> Vec<String> {
         let ports = self.input_ports();
-        let gone: Vec<String> =
-            self.devices.iter().filter(|d| !ports.contains(&d.port)).map(|d| d.port.clone()).collect();
+        let mut gone = Vec::new();
+        for i in 0..self.devices.len() {
+            if !ports.contains(&self.devices[i].port) || !self.is_alive(i) {
+                gone.push(self.devices[i].port.clone());
+            }
+        }
         for port in gone {
             // The device is gone; dropping the connections is all we can do.
             self.devices.retain(|d| d.port != port);
@@ -324,6 +348,34 @@ impl MidiManager {
             }
         }
         added
+    }
+
+    /// Whether device `i` still receives from its controller. A HID reader
+    /// stops when the device goes away. A MIDI input is subscribed to the
+    /// device's sequencer port, and the kernel drops that subscription when
+    /// the port goes, even if a new one with the same name appears.
+    fn is_alive(&mut self, i: usize) -> bool {
+        let d = &mut self.devices[i];
+        match &d.link {
+            Link::Hid(h) => h.is_alive(),
+            #[cfg(target_os = "linux")]
+            Link::Midi { .. } => {
+                let Some(seq) = &self.seq else { return true };
+                match alsa_subscribed(seq, &d.port, &self.client) {
+                    Some(true) => {
+                        d.seen_subscribed = true;
+                        true
+                    }
+                    // Only a subscription seen before counts as lost, so a
+                    // port the check cannot see is never reconnected over and
+                    // over.
+                    Some(false) => !d.seen_subscribed,
+                    None => true,
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            Link::Midi { .. } => true,
+        }
     }
 
     /// Sends changed LED states and flushes pending 14-bit values. Call at
@@ -365,6 +417,18 @@ fn deck_letters(mapping: &Mapping) -> Vec<[u8; 3]> {
     let Some(hid) = &mapping.hid else { return Vec::new() };
     let status = 0xB0 | (hid::DISPLAY_CHANNEL - 1);
     hid.displays.iter().zip(mapping.deck_order()).map(|(d, deck)| [status, d.cc, hid::DISPLAY_DECK + deck]).collect()
+}
+
+/// Whether a client named `client` receives from the sequencer port
+/// `port` (a midir port name, ending in ` client:port`); `None` if the name
+/// has no address.
+#[cfg(target_os = "linux")]
+fn alsa_subscribed(seq: &alsa::Seq, port: &str, client: &str) -> Option<bool> {
+    use alsa::seq::{Addr, PortSubscribeIter, QuerySubsType};
+    let (c, p) = port.rsplit_once(' ')?.1.split_once(':')?;
+    let addr = Addr { client: c.parse().ok()?, port: p.parse().ok()? };
+    let ours = |a: Addr| seq.get_any_client_info(a.client).is_ok_and(|i| i.get_name().is_ok_and(|n| n == client));
+    Some(PortSubscribeIter::new(seq, addr, QuerySubsType::READ).any(|s| ours(s.get_dest())))
 }
 
 /// ALSA port names end in ` client:port`, which can change when the device

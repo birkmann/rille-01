@@ -1,16 +1,46 @@
 //! Audio output through cpal: PipeWire natively where it runs, then JACK
 //! (when a server is running), then plain ALSA.
+//!
+//! The engine lives outside the stream, so it survives the device going
+//! away (a USB cable pulled): [`resume`] plays it on the device again.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::{Engine, EngineHandle, create};
 
-/// A running output stream. Dropping it stops audio.
+/// The engine, shared by the stream that plays it and, while there is no
+/// device, a silent clock. Only `try_lock`ed on the audio thread.
+#[derive(Clone)]
+pub struct SharedEngine {
+    engine: Arc<Mutex<Engine>>,
+    /// The handle's dropout counter.
+    xruns: Arc<AtomicU64>,
+}
+
+impl SharedEngine {
+    /// `engine` with the dropout counter of its `handle`.
+    pub fn new(handle: &EngineHandle, engine: Engine) -> Self {
+        Self { engine: Arc::new(Mutex::new(engine)), xruns: handle.xruns.clone() }
+    }
+
+    /// For rendering off the audio device (see [`SharedEngine`]).
+    pub fn lock(&self) -> MutexGuard<'_, Engine> {
+        self.engine.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+/// A running output stream. Dropping it stops audio; the engine stays.
 pub struct AudioOutput {
     _stream: cpal::Stream,
+    pub engine: SharedEngine,
+    /// The device's name as found (for [`resume`]).
+    pub device: String,
+    /// The host it was opened on (for [`resume`]).
+    pub host: String,
+    /// `device` and host, for display.
     pub device_name: String,
     pub sample_rate: u32,
     pub channels: u16,
@@ -23,6 +53,23 @@ pub struct AudioOutput {
     /// [`is_external_mixer`]) with outputs for at least two of its
     /// channels, so the decks can go to them.
     pub external_mixer: bool,
+    /// Set when the stream reported that the device is gone.
+    lost: Arc<AtomicBool>,
+    /// Audio callbacks so far, to notice a stream that stopped silently.
+    callbacks: Arc<AtomicU64>,
+}
+
+impl AudioOutput {
+    /// Whether the stream reported the device gone (unplugged, or its
+    /// sound server stopped). The stream then plays nothing more.
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Relaxed)
+    }
+
+    /// Audio callbacks so far; stops counting when the device stalls.
+    pub fn callbacks(&self) -> u64 {
+        self.callbacks.load(Ordering::Relaxed)
+    }
 }
 
 /// DJ controllers with a built-in sound card whose 4-channel output carries
@@ -34,7 +81,12 @@ pub struct AudioOutput {
 const CONTROLLER_OUTPUTS: &[&str] = &["Traktor Kontrol Z1", "AMX"];
 
 fn is_controller_output(name: &str, channels: u16) -> bool {
-    channels >= 4 && CONTROLLER_OUTPUTS.iter().any(|c| name.starts_with(c))
+    channels >= 4 && is_controller_output_name(name)
+}
+
+/// Whether `name` is a DJ controller's sound card (any of its outputs).
+pub fn is_controller_output_name(name: &str) -> bool {
+    CONTROLLER_OUTPUTS.iter().any(|c| name.starts_with(c))
 }
 
 /// Hardware DJ mixers with a USB sound card that has an input per mixer
@@ -75,8 +127,10 @@ fn hosts() -> Vec<cpal::Host> {
             ids.push(id);
         }
     }
-    ids.push(cpal::default_host().id());
-    ids.dedup();
+    let default = cpal::default_host().id();
+    if !ids.contains(&default) {
+        ids.push(default);
+    }
     ids.into_iter().filter_map(|id| cpal::host_from_id(id).ok()).collect()
 }
 
@@ -91,24 +145,42 @@ pub fn output_devices() -> Vec<String> {
 /// Opens the output device, creates an engine at its sample rate and starts
 /// the stream. Returns the handle for the app and the running stream.
 pub fn start(config: &AudioConfig) -> Result<(EngineHandle, AudioOutput), String> {
+    let (handle, out) = start_with(config, None, None)?;
+    Ok((handle.expect("a new engine"), out))
+}
+
+/// Plays `engine` (with whatever its decks hold) on the device again, on
+/// host `host` if given, at the engine's sample rate.
+pub fn resume(config: &AudioConfig, engine: SharedEngine, host: Option<&str>) -> Result<AudioOutput, String> {
+    start_with(config, Some(engine), host).map(|(_, out)| out)
+}
+
+/// A new engine (and its handle) when `engine` is `None`.
+type Opened = (Option<EngineHandle>, AudioOutput);
+
+fn start_with(config: &AudioConfig, engine: Option<SharedEngine>, only: Option<&str>) -> Result<Opened, String> {
     let mut errors = Vec::new();
-    for host in hosts() {
-        match start_on(&host, config) {
+    for host in hosts().into_iter().filter(|h| only.is_none_or(|n| h.id().name() == n)) {
+        match start_on(&host, config, engine.clone()) {
             Ok(r) => return Ok(r),
             Err(e) => errors.push(format!("{}: {e}", host.id().name())),
         }
     }
+    if errors.is_empty() {
+        errors.push(format!("{} not available", only.unwrap_or("audio host")));
+    }
     Err(errors.join("; "))
 }
 
-fn start_on(host: &cpal::Host, config: &AudioConfig) -> Result<(EngineHandle, AudioOutput), String> {
-    let wants_controller =
-        config.device.as_deref().is_none_or(|name| CONTROLLER_OUTPUTS.iter().any(|c| name.starts_with(c)));
-    if wants_controller && let Some(r) = controller_output(host).and_then(|d| open(host, d, config).ok()) {
+fn start_on(host: &cpal::Host, config: &AudioConfig, engine: Option<SharedEngine>) -> Result<Opened, String> {
+    let wants_controller = config.device.as_deref().is_none_or(is_controller_output_name);
+    if wants_controller
+        && let Some(r) = controller_output(host).and_then(|d| open(host, d, config, engine.clone()).ok())
+    {
         return Ok(r);
     }
     let wants_mixer = config.device.as_deref().is_none_or(is_external_mixer);
-    if wants_mixer && let Some(r) = mixer_output(host).and_then(|d| open(host, d, config).ok()) {
+    if wants_mixer && let Some(r) = mixer_output(host).and_then(|d| open(host, d, config, engine.clone()).ok()) {
         return Ok(r);
     }
     let device = match &config.device {
@@ -119,7 +191,7 @@ fn start_on(host: &cpal::Host, config: &AudioConfig) -> Result<(EngineHandle, Au
             .ok_or_else(|| format!("output device '{name}' not found"))?,
         None => host.default_output_device().ok_or("no output device")?,
     };
-    open(host, device, config)
+    open(host, device, config, engine)
 }
 
 fn controller_output(host: &cpal::Host) -> Option<cpal::Device> {
@@ -138,21 +210,55 @@ fn mixer_output(host: &cpal::Host) -> Option<cpal::Device> {
         .max_by_key(channels)
 }
 
-fn open(host: &cpal::Host, device: cpal::Device, config: &AudioConfig) -> Result<(EngineHandle, AudioOutput), String> {
-    let device_name = device.description().map(|n| n.name().to_string()).unwrap_or_default();
-    let supported = device.default_output_config().map_err(|e| e.to_string())?;
+/// The device's default output configuration, at `rate` if given (an
+/// existing engine's sample rate).
+fn output_config(device: &cpal::Device, rate: Option<u32>) -> Result<cpal::SupportedStreamConfig, String> {
+    let default = device.default_output_config().map_err(|e| e.to_string())?;
+    let Some(rate) = rate.filter(|r| *r != default.sample_rate()) else { return Ok(default) };
+    device
+        .supported_output_configs()
+        .map_err(|e| e.to_string())?
+        .filter(|c| c.channels() == default.channels() && c.sample_format() == default.sample_format())
+        .find_map(|c| c.try_with_sample_rate(rate))
+        .ok_or_else(|| format!("the device does not run at {rate} Hz any more"))
+}
+
+fn open(
+    host: &cpal::Host,
+    device: cpal::Device,
+    config: &AudioConfig,
+    engine: Option<SharedEngine>,
+) -> Result<Opened, String> {
+    let name = device.description().map(|n| n.name().to_string()).unwrap_or_default();
+    let rate = engine.as_ref().map(|e| e.lock().sample_rate());
+    let supported = output_config(&device, rate)?;
     let mut stream_config: cpal::StreamConfig = supported.config();
     if let Some(frames) = config.buffer_frames {
         stream_config.buffer_size = cpal::BufferSize::Fixed(frames);
     }
     let sample_rate = stream_config.sample_rate;
     let channels = stream_config.channels;
-    let (handle, engine) = create(sample_rate, 1024);
+    let (handle, engine) = match engine {
+        Some(e) => (None, e),
+        None => {
+            let (handle, engine) = create(sample_rate, 1024);
+            let shared = SharedEngine::new(&handle, engine);
+            (Some(handle), shared)
+        }
+    };
     // The callback reports its thread once; a helper thread then asks for
     // real-time priority for it.
     let audio_tid = Arc::new(AtomicI64::new(0));
-    let xruns = handle.xruns.clone();
-    let stream = build(&device, &stream_config, supported.sample_format(), engine, audio_tid.clone(), xruns)?;
+    let xruns = engine.xruns.clone();
+    let (lost, callbacks) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicU64::new(0)));
+    let shared = Shared {
+        engine: engine.clone(),
+        audio_tid: audio_tid.clone(),
+        xruns,
+        lost: lost.clone(),
+        callbacks: callbacks.clone(),
+    };
+    let stream = build(&device, &stream_config, supported.sample_format(), shared)?;
     stream.play().map_err(|e| e.to_string())?;
     let realtime_priority = Arc::new(AtomicI64::new(0));
     let granted = realtime_priority.clone();
@@ -173,47 +279,69 @@ fn open(host: &cpal::Host, device: cpal::Device, config: &AudioConfig) -> Result
         });
     }
     // A mixer card on a stereo profile reaches one channel: mix internally.
-    let external_mixer = is_mixer_output(&device_name, channels);
-    let device_name = format!("{device_name} ({})", host.id().name());
+    let external_mixer = is_mixer_output(&name, channels);
+    let host_name = host.id().name().to_string();
     Ok((
         handle,
         AudioOutput {
             _stream: stream,
-            device_name,
+            engine,
+            device_name: format!("{name} ({host_name})"),
+            device: name,
+            host: host_name,
             sample_rate,
             channels,
             buffer_frames: config.buffer_frames,
             realtime_priority,
             external_mixer,
+            lost,
+            callbacks,
         },
     ))
+}
+
+/// What the stream callbacks share with the rest of the app.
+struct Shared {
+    engine: SharedEngine,
+    audio_tid: Arc<AtomicI64>,
+    xruns: Arc<AtomicU64>,
+    lost: Arc<AtomicBool>,
+    callbacks: Arc<AtomicU64>,
 }
 
 fn build(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     format: cpal::SampleFormat,
-    mut engine: Engine,
-    audio_tid: Arc<AtomicI64>,
-    xruns: Arc<AtomicU64>,
+    shared: Shared,
 ) -> Result<cpal::Stream, String> {
+    let Shared { engine, audio_tid, xruns, lost, callbacks } = shared;
     let channels = usize::from(config.channels);
     // Once, from inside the callback: which thread runs the audio.
     let mut reported = false;
     let mut report = move || {
+        callbacks.fetch_add(1, Ordering::Relaxed);
         if !reported {
             reported = true;
             audio_tid.store(crate::realtime::current_tid(), Ordering::Release);
         }
     };
+    // Renders into `out`, or silence in the instant the engine changes hands.
+    let render = move |out: &mut [f32]| match engine.engine.try_lock() {
+        Ok(mut e) => e.process_interleaved(out, channels),
+        Err(_) => out.fill(0.0),
+    };
     // Dropouts are only counted (the app shows them): this may run on the
     // audio thread, and printing each one would add to the problem.
-    let err = move |e: cpal::Error| {
-        if e.kind() == cpal::ErrorKind::Xrun {
+    let err = move |e: cpal::Error| match e.kind() {
+        cpal::ErrorKind::Xrun => {
             xruns.fetch_add(1, Ordering::Relaxed);
-        } else {
-            eprintln!("audio stream: {e}");
         }
+        cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::StreamInvalidated | cpal::ErrorKind::HostUnavailable => {
+            eprintln!("audio stream: {e}");
+            lost.store(true, Ordering::Relaxed);
+        }
+        _ => eprintln!("audio stream: {e}"),
     };
     match format {
         cpal::SampleFormat::F32 => device
@@ -221,7 +349,7 @@ fn build(
                 *config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     report();
-                    engine.process_interleaved(data, channels);
+                    render(data);
                 },
                 err,
                 None,
@@ -235,7 +363,7 @@ fn build(
                     move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
                         report();
                         let buf = &mut scratch[..data.len().min(65_536)];
-                        engine.process_interleaved(buf, channels);
+                        render(buf);
                         for (d, s) in data.iter_mut().zip(buf.iter()) {
                             *d = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
                         }
@@ -253,7 +381,7 @@ fn build(
                     move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
                         report();
                         let buf = &mut scratch[..data.len().min(65_536)];
-                        engine.process_interleaved(buf, channels);
+                        render(buf);
                         for (d, s) in data.iter_mut().zip(buf.iter()) {
                             *d = (f64::from(s.clamp(-1.0, 1.0)) * 2_147_483_647.0) as i32;
                         }

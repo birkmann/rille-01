@@ -617,9 +617,10 @@ impl qobject::AppController {
         self.as_mut().set_fx_json(QString::from(format!("[{}]", fx.join(","))));
         let a = app.audio_status();
         let external = app.external_mixing();
-        let audio = match &a.error {
-            Some(_) => "No audio output".to_string(),
-            None => format!(
+        let audio = match (&a.waiting_for, &a.error) {
+            (Some(device), _) => format!("Waiting for {device}…"),
+            (None, Some(_)) => "No audio output".to_string(),
+            (None, None) => format!(
                 "{} · {} Hz · {} frames · {} channels{}",
                 a.device,
                 a.sample_rate,

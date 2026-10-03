@@ -154,25 +154,7 @@ EOF
 
 For the Traktor Kontrol controllers, install the udev rule as described under
 **Controllers** below. To update, replace the file with the newer AppImage.
-
-**Uninstalling:** delete the AppImage and, if you added them, the launcher,
-the icon and the udev rule:
-
-```sh
-rm ~/Applications/rille-x86_64.AppImage
-rm -f ~/.local/share/applications/rille.desktop \
-      ~/.local/share/icons/hicolor/scalable/apps/rille.svg
-sudo rm -f /etc/udev/rules.d/70-rille-controllers.rules   # only if installed
-```
-
-This keeps your settings, library, analysis, cues and the downloaded stems
-model, so a reinstall picks up where you left off. To remove those as well:
-
-```sh
-rm -r ~/.config/rille ~/.local/share/rille ~/.cache/rille
-```
-
-Recordings in your music folder's `rille recordings` are not touched.
+To remove it, see [Uninstalling](#uninstalling).
 
 ### macOS
 
@@ -190,6 +172,71 @@ To build it yourself (Rust, the Xcode command line tools and Qt 6.5+, e.g.
 
 With Qt's own installer instead of Homebrew, point `QT_ROOT_DIR` at it
 (`QT_ROOT_DIR=~/Qt/6.8.3/macos`).
+
+### Uninstalling
+
+Quit rille first. Then run only the block for the way you installed it
+(pacman reports `target not found: rille` when rille was not installed as a
+package).
+
+AppImage, with the launcher and icon if you added them:
+
+```sh
+rm ~/Applications/rille-x86_64.AppImage   # wherever you put it
+rm -f ~/.local/share/applications/rille.desktop \
+      ~/.local/share/icons/hicolor/scalable/apps/rille.svg
+```
+
+`scripts/install.sh` (use the same `PREFIX`, and `sudo`, if you changed it).
+`share/rille` is also where the library lives under `~/.local`, so only its
+`mappings` folder is removed here:
+
+```sh
+PREFIX=~/.local
+rm -f "$PREFIX"/bin/rille "$PREFIX"/bin/rille-cli \
+      "$PREFIX"/share/applications/rille.desktop \
+      "$PREFIX"/share/icons/hicolor/*/apps/rille.{png,svg} \
+      "$PREFIX"/share/metainfo/io.github.birkmann.rille.metainfo.xml
+rm -rf "$PREFIX"/share/rille/mappings "$PREFIX"/share/licenses/rille
+```
+
+Arch package (this also removes its udev rule):
+
+```sh
+sudo pacman -R rille
+```
+
+Flatpak:
+
+```sh
+flatpak uninstall io.github.birkmann.rille
+```
+
+macOS:
+
+```sh
+rm -rf /Applications/rille.app
+```
+
+If you installed the udev rule for the Traktor Kontrol controllers by hand,
+remove it as well:
+
+```sh
+sudo rm -f /etc/udev/rules.d/70-rille-controllers.rules
+sudo udevadm control --reload
+```
+
+This keeps your settings, library, analysis, cues, learned mappings, the
+Beatport sign-in and the downloaded stems model, so a later install picks up
+where you left off. To remove those as well (the same folders on Linux and
+macOS):
+
+```sh
+rm -rf ~/.config/rille ~/.local/share/rille ~/.cache/rille
+rm -rf ~/.var/app/io.github.birkmann.rille   # Flatpak keeps its data here instead
+```
+
+Recordings in your music folder's `rille recordings` are not touched.
 
 ## Using it
 

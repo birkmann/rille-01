@@ -322,6 +322,33 @@ Popup {
                             }
                         }
                         SettingsSection {
+                            title: "Drum machine"
+                            SettingRow {
+                                label: "Show the drum machine"
+                                hint: "Eight instruments, sixteen steps, in time with the master. Hidden, it keeps playing. The DRUMS button in the title bar does the same."
+                                ToggleSwitch { checked: !!dialog.s.drums_visible; onToggled: dialog.set("drums_visible", checked) }
+                            }
+                            SettingRow {
+                                label: "Position"
+                                StyledCombo {
+                                    width: 180
+                                    model: ["Above the decks", "Below the decks"]
+                                    currentIndex: dialog.s.drums_position === 1 ? 1 : 0
+                                    onActivated: idx => dialog.set("drums_position", idx)
+                                }
+                            }
+                            SettingRow {
+                                label: "Sequencer rows"
+                                hint: "One row edits the selected instrument (the most room for the decks); four show half the instruments at once."
+                                StyledCombo {
+                                    width: 180
+                                    model: ["1 row", "4 rows"]
+                                    currentIndex: dialog.s.drums_rows === 4 ? 1 : 0
+                                    onActivated: idx => dialog.set("drums_rows", idx === 1 ? 4 : 1)
+                                }
+                            }
+                        }
+                        SettingsSection {
                             title: "Load lock"
                             SettingRow {
                                 label: "Protect decks on air"

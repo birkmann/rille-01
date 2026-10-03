@@ -6,6 +6,7 @@
 //! needs goes back to be freed on the app side.
 
 mod deck;
+pub mod drums;
 mod engine;
 mod mixer;
 pub mod remix;
@@ -20,10 +21,13 @@ pub mod realtime;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+pub use drums::{DrumKit, DrumParams};
 pub use engine::Engine;
 pub use mixer::{band_gains, crossfader_gain, fader_gain, fader_level, gain_knob_db};
 pub use remix::{DEFAULT_REMIX_QUANT, REMIX_QUANT_SIZES, RemixDeck, RemixSample, remix_grid};
-pub use snapshot::{ChannelState, DeckState, FxState, RemixCellState, RemixSlotState, RemixState, Snapshot};
+pub use snapshot::{
+    ChannelState, DeckState, DrumInstState, DrumState, FxState, RemixCellState, RemixSlotState, RemixState, Snapshot,
+};
 pub use types::{
     Command, DEFAULT_LOOP_SIZE, Event, FX_UNITS, HOTCUES, Hotcue, LOOP_SIZES, LoadedTrack, MAX_DECKS, Recorder,
     STEM_NAMES, STEMS, Settings, StemAudio, TrackAudio,

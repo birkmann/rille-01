@@ -57,6 +57,9 @@ QtObject {
     // The browser keeps at least this much when the decks grow.
     readonly property int browserMinHeight: 200
     readonly property int stripHeight: 34
+    // The drum machine panel with one or four sequencer rows.
+    readonly property int drumsHeight1: 92
+    readonly property int drumsHeight4: 172
     readonly property int mixerWidth: 272
     readonly property int mixerWidth4: 296
 

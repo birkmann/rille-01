@@ -39,6 +39,9 @@ ApplicationWindow {
     readonly property int mixerWidth: fourDecks ? Theme.mixerWidth4 : Theme.mixerWidth
     // Settings → Decks → Deck height, for each deck (twice per side with 4).
     readonly property int deckRowExtra: (Theme.deckHeightExtra[AppController.deckHeight] || 0) * (fourDecks ? 2 : 1)
+    // Settings → Decks → Drum machine: shown above or below the decks.
+    readonly property int drumsHeight: AppController.drumsRows === 4 ? Theme.drumsHeight4 : Theme.drumsHeight1
+    readonly property int drumsRoom: AppController.drumsVisible ? drumsHeight + Theme.gap : 0
 
     // One state refresh per frame.
     FrameAnimation {
@@ -131,6 +134,16 @@ ApplicationWindow {
                 FxUnitPanel { unitIndex: 1; Layout.preferredWidth: 1; Layout.fillWidth: true; Layout.fillHeight: true }
             }
 
+            // The drum machine, above the decks (only one panel exists).
+            Loader {
+                active: AppController.drumsVisible && AppController.drumsPosition === 0
+                visible: active
+                sourceComponent: drumPanel
+                Layout.fillWidth: true
+                Layout.preferredHeight: window.drumsHeight
+                Layout.fillHeight: false
+            }
+
             RowLayout {
                 Layout.fillWidth: true
                 // 4 decks take about half the window, never less than 2 decks.
@@ -139,7 +152,7 @@ ApplicationWindow {
                     ? Math.max(Theme.deckRowHeight, Math.min(Theme.deckRowHeight4, Math.round(window.height * 0.49)))
                     : Theme.deckRowHeight
                 readonly property int room: rootLayout.height - Theme.headerHeight - Theme.topRowHeight - Theme.stripHeight
-                    - 4 * Theme.gap - Theme.browserMinHeight
+                    - 4 * Theme.gap - Theme.browserMinHeight - window.drumsRoom
                 Layout.preferredHeight: Math.max(baseHeight, Math.min(baseHeight + window.deckRowExtra, room))
                 Layout.fillHeight: false
                 spacing: Theme.gap
@@ -186,6 +199,16 @@ ApplicationWindow {
                 fourDecks: window.fourDecks
             }
 
+            // …or below them.
+            Loader {
+                active: AppController.drumsVisible && AppController.drumsPosition === 1
+                visible: active
+                sourceComponent: drumPanel
+                Layout.fillWidth: true
+                Layout.preferredHeight: window.drumsHeight
+                Layout.fillHeight: false
+            }
+
             Browser {
                 id: browserView
                 Layout.fillWidth: true
@@ -223,6 +246,11 @@ ApplicationWindow {
             cursorShape: edge.modelData.c
             onPressed: window.startSystemResize(edge.modelData.e)
         }
+    }
+
+    Component {
+        id: drumPanel
+        DrumMachine {}
     }
 
     SettingsDialog { id: settings }

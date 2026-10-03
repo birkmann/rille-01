@@ -89,6 +89,11 @@ impl Paths {
         self.config.join("mappings")
     }
 
+    /// Drum machine: its state and the user's kits (`kits/<name>/`).
+    pub fn drums(&self) -> PathBuf {
+        self.data.join("drums")
+    }
+
     /// Files of tracks streamed from Beatport.
     pub fn beatport_cache(&self) -> PathBuf {
         self.cache.join("beatport")
@@ -200,6 +205,12 @@ pub struct Settings {
     pub deck_height: u8,
     /// Letters of the decks that are remix decks, e.g. "CD".
     pub remix_decks: String,
+    /// The drum machine panel is shown.
+    pub drums_visible: bool,
+    /// Where the drum machine panel sits: 0 above the decks, 1 below.
+    pub drums_position: u8,
+    /// Sequencer rows shown at once: 1 (the selected instrument) or 4.
+    pub drums_rows: u8,
     /// Headphones on the left channel, master on the right (2-channel cards).
     pub split_cue: bool,
     pub mixing: MixingMode,
@@ -288,6 +299,9 @@ impl Default for Settings {
             deck_count: 2,
             deck_height: 0,
             remix_decks: String::new(),
+            drums_visible: false,
+            drums_position: 0,
+            drums_rows: 1,
             split_cue: false,
             mixing: MixingMode::Auto,
             mixer_channels: "CABD".into(),
@@ -403,6 +417,9 @@ mod tests {
             show_mixer: false,
             deck_count: 4,
             deck_height: 2,
+            drums_visible: true,
+            drums_position: 1,
+            drums_rows: 4,
             ..Settings::default()
         };
         s.save(&p).unwrap();

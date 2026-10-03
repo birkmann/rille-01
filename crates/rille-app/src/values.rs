@@ -4,16 +4,41 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use rille_core::drums::{INST_COLORS, INSTRUMENTS, PATTERNS, STEPS};
 use rille_core::remix::{CELLS, SLOTS, led_code, pad_cell};
-use rille_core::{Control, ControlTarget};
-use rille_engine::{EngineHandle, MAX_DECKS, REMIX_QUANT_SIZES, RemixState};
+use rille_core::{Control, ControlTarget, Scope};
+use rille_engine::{DrumState, MAX_DECKS, REMIX_QUANT_SIZES, RemixState, Snapshot};
 use rille_midi::ValueSource;
 use rille_midi::hid::DISPLAY_LOOP_SIZE;
 
 use crate::engine_slot::EngineSlot;
 
-/// The engine's state, plus whether the main mix is being recorded.
-pub struct SnapshotValues(pub Arc<EngineSlot>, pub Arc<AtomicBool>);
+/// The engine's state, plus whether the main mix is being recorded and
+/// whether the drum machine is shown.
+pub struct SnapshotValues {
+    engine: Arc<EngineSlot>,
+    recording: Arc<AtomicBool>,
+    drums_visible: Arc<AtomicBool>,
+    /// One snapshot for a whole round of LED updates (taking one copies it).
+    frozen: Option<Snapshot>,
+}
+
+impl SnapshotValues {
+    /// Reads the engine's latest state on every call (soft takeover).
+    pub fn live(engine: Arc<EngineSlot>, recording: Arc<AtomicBool>, drums_visible: Arc<AtomicBool>) -> Self {
+        Self { engine, recording, drums_visible, frozen: None }
+    }
+
+    /// The engine's state now, for one round of controller LEDs.
+    pub fn frozen(engine: &Arc<EngineSlot>, recording: Arc<AtomicBool>, drums_visible: Arc<AtomicBool>) -> Self {
+        let frozen = engine.get().map(|e| e.snapshot());
+        Self { engine: engine.clone(), recording, drums_visible, frozen }
+    }
+
+    fn snapshot(&self) -> Option<Snapshot> {
+        self.frozen.or_else(|| self.engine.get().map(|e| e.snapshot()))
+    }
+}
 
 fn b(v: bool) -> f32 {
     if v { 1.0 } else { 0.0 }
@@ -31,10 +56,15 @@ fn cell_led(r: &RemixState, cell: usize, beat_phase: f64) -> f32 {
 impl ValueSource for SnapshotValues {
     fn value(&self, t: ControlTarget) -> f32 {
         if t.control == Control::Record {
-            return b(self.1.load(Ordering::Relaxed));
+            return b(self.recording.load(Ordering::Relaxed));
         }
-        let Some(engine): Option<Arc<EngineHandle>> = self.0.get() else { return t.control.default_value() };
-        let s = engine.snapshot();
+        if t.control == Control::DrumShow {
+            return b(self.drums_visible.load(Ordering::Relaxed));
+        }
+        let Some(s) = self.snapshot() else { return t.control.default_value() };
+        if t.control.scope() == Scope::Drum {
+            return drum_value(t.control, &s.drums, s.clock_beat.rem_euclid(1.0));
+        }
         let u = usize::from(t.unit);
         if u >= MAX_DECKS {
             return 0.0;
@@ -113,12 +143,69 @@ impl ValueSource for SnapshotValues {
     }
 
     fn beat_phase(&self) -> f64 {
-        self.0.get().map_or(0.0, |e| e.snapshot().clock_beat.rem_euclid(1.0))
+        self.snapshot().map_or(0.0, |s| s.clock_beat.rem_euclid(1.0))
+    }
+}
+
+/// Drum machine controls read back for controller LEDs and soft takeover.
+fn drum_value(c: Control, d: &DrumState, beat_phase: f64) -> f32 {
+    let idx = |n: u8, max: usize| usize::from(n).checked_sub(1).filter(|&i| i < max);
+    let pat = &d.patterns[usize::from(d.current).min(PATTERNS - 1)];
+    let sel = usize::from(d.selected).min(INSTRUMENTS - 1);
+    let inst = |n: u8| idx(n, INSTRUMENTS).map(|i| &d.inst[i]);
+    let playhead = |s: usize| d.step == Some(s as u8);
+    match c {
+        Control::DrumPlay => b(d.playing),
+        Control::DrumRecord => b(d.record),
+        // A running light: the playhead inverts the step under it.
+        Control::DrumStep(n) => idx(n, STEPS).map_or(0.0, |s| b(pat.is_on(sel, s) != playhead(s))),
+        Control::DrumAccent(n) => idx(n, STEPS).map_or(0.0, |s| b(pat.is_accent(sel, s))),
+        Control::DrumStepLed(n) => idx(n, STEPS).map_or(0.0, |s| {
+            if playhead(s) {
+                f32::from(led_code(0, true))
+            } else if pat.is_on(sel, s) {
+                f32::from(led_code(INST_COLORS[sel], pat.is_accent(sel, s) || !d.playing))
+            } else {
+                0.0
+            }
+        }),
+        Control::DrumCell(n) => idx(n, STEPS * INSTRUMENTS).map_or(0.0, |c| b(pat.is_on(c / STEPS, c % STEPS))),
+        Control::DrumCellAccent(n) => {
+            idx(n, STEPS * INSTRUMENTS).map_or(0.0, |c| b(pat.is_accent(c / STEPS, c % STEPS)))
+        }
+        Control::DrumInst(n) => idx(n, INSTRUMENTS).map_or(0.0, |i| b(i == sel)),
+        Control::DrumInstLed(n) => idx(n, INSTRUMENTS).map_or(0.0, |i| {
+            if i == sel || pat.has_steps(i) { f32::from(led_code(INST_COLORS[i], i == sel)) } else { 0.0 }
+        }),
+        Control::DrumTrigger(n) => inst(n).map_or(0.0, |i| b(i.loaded && !i.muted)),
+        Control::DrumInstMute(n) => inst(n).map_or(0.0, |i| b(i.muted)),
+        Control::DrumInstLevel(n) => inst(n).map_or(1.0, |i| i.level),
+        Control::DrumInstTune(n) => inst(n).map_or(0.5, |i| i.tune),
+        Control::DrumInstDecay(n) => inst(n).map_or(1.0, |i| i.decay),
+        Control::DrumSelLevel => d.inst[sel].level,
+        Control::DrumSelTune => d.inst[sel].tune,
+        Control::DrumSelDecay => d.inst[sel].decay,
+        // The current pattern lit, the one waiting to start blinking.
+        Control::DrumPattern(n) => idx(n, PATTERNS).map_or(0.0, |p| {
+            if d.queued == Some(p as u8) { b(beat_phase < 0.5) } else { b(usize::from(d.current) == p) }
+        }),
+        // Numbers for two-digit displays.
+        Control::DrumPatternSelect => f32::from(d.queued.unwrap_or(d.current)) + 1.0,
+        Control::DrumLength => f32::from(pat.length),
+        Control::DrumSwing => pat.swing,
+        Control::DrumLevel => d.channel.volume,
+        Control::DrumFilter => d.channel.filter,
+        Control::DrumFxAssign(n) => idx(n, 2).map_or(0.0, |i| b(d.channel.fx_assign[i])),
+        Control::DrumPfl => b(d.channel.pfl),
+        Control::DrumMeter => d.channel.meter[0].max(d.channel.meter[1]),
+        other => other.default_value(),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use rille_core::drums::Pattern;
     use rille_engine::LOOP_SIZES;
     use rille_midi::hid::{DISPLAY_LOOP_SIZE, display_text};
 
@@ -128,5 +215,34 @@ mod tests {
             let text = display_text(DISPLAY_LOOP_SIZE + i as u8);
             assert_eq!(text.parse::<f64>().ok(), Some(*size), "{text}");
         }
+    }
+
+    #[test]
+    fn drum_leds() {
+        let mut d = DrumState::default();
+        let mut p = Pattern::default();
+        p.set(1, 0, true);
+        p.set_accent(1, 4, true);
+        d.patterns[2] = p;
+        d.current = 2;
+        d.selected = 1;
+        d.playing = true;
+        d.step = Some(4);
+        d.queued = Some(5);
+        let v = |c| drum_value(c, &d, 0.25);
+        assert_eq!(v(Control::DrumStep(1)), 1.0);
+        assert_eq!(v(Control::DrumStep(5)), 0.0, "the playhead inverts a step that is on");
+        assert_eq!(v(Control::DrumStep(6)), 0.0);
+        assert_eq!(v(Control::DrumStepLed(5)), f32::from(led_code(0, true)), "white playhead");
+        assert_eq!(v(Control::DrumStepLed(1)), f32::from(led_code(INST_COLORS[1], false)));
+        assert_eq!(v(Control::DrumCell(16 + 5)), 1.0);
+        assert_eq!(v(Control::DrumInst(2)), 1.0);
+        assert_eq!(v(Control::DrumInstLed(2)), f32::from(led_code(INST_COLORS[1], true)));
+        assert_eq!(v(Control::DrumInstLed(1)), 0.0, "no steps, not selected");
+        assert_eq!(v(Control::DrumPattern(3)), 1.0);
+        assert_eq!(v(Control::DrumPattern(6)), 1.0, "queued blinks: on in the first half of the beat");
+        assert_eq!(drum_value(Control::DrumPattern(6), &d, 0.75), 0.0);
+        assert_eq!(v(Control::DrumPatternSelect), 6.0);
+        assert_eq!(v(Control::DrumStep(17)), 0.0);
     }
 }

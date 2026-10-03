@@ -203,6 +203,27 @@ Rectangle {
             tipBelow: true
         }
         DjButton {
+            icon: "drums"
+            text: "DRUMS"
+            lit: AppController.drumsVisible
+            litColor: Theme.sync
+            tip: AppController.drumsVisible ? "Hide the drum machine (it keeps playing)" : "Show the drum machine"
+            tipBelow: true
+            onClicked: AppController.setSetting("drums_visible", AppController.drumsVisible ? "false" : "true")
+            // Playing while hidden.
+            Rectangle {
+                visible: AppController.drumsPlaying && !AppController.drumsVisible
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 3
+                width: 6
+                height: 6
+                radius: 3
+                color: Theme.play
+                opacity: ((AppController.clockBeat % 1) + 1) % 1 < 0.5 ? 1 : 0.3
+            }
+        }
+        DjButton {
             icon: "midi"
             text: "LEARN"
             lit: AppController.learning

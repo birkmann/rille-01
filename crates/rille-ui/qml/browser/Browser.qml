@@ -371,6 +371,10 @@ Item {
                 var parts = a.split(":")
                 if (list.currentIndex >= 0)
                     tracks.loadRowToCell(list.currentIndex, Number(parts[1]), Number(parts[2]))
+            } else if (a.startsWith("drum:")) {
+                // "drum:<instrument>": the selected track as a drum sound.
+                if (list.currentIndex >= 0)
+                    AppController.drumLoadTrack(Number(a.substring(5)), tracks.trackId(list.currentIndex))
             } else if (a.startsWith("scroll:")) {
                 list.currentIndex = Math.max(0, Math.min(list.count - 1, list.currentIndex + Math.round(Number(a.substring(7)))))
                 tracks.select(list.currentIndex, 0)

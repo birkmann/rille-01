@@ -1,8 +1,9 @@
 //! Control identifiers shared by the UI, keyboard shortcuts and MIDI mappings.
 //!
-//! A [`ControlTarget`] names one control on one unit (a deck, an FX unit, or
-//! the global section). Its string form is used in mapping files:
-//! `deck.A.play`, `deck.B.hotcue.3`, `fx.1.knob.2`, `global.crossfader`.
+//! A [`ControlTarget`] names one control on one unit (a deck, an FX unit, the
+//! drum machine or the global section). Its string form is used in mapping
+//! files: `deck.A.play`, `deck.B.hotcue.3`, `fx.1.knob.2`, `drum.step.5`,
+//! `global.crossfader`.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -14,6 +15,8 @@ pub enum Scope {
     /// Deck transport and the deck's mixer channel.
     Deck,
     Fx,
+    /// The drum machine (one unit).
+    Drum,
     Global,
 }
 
@@ -159,6 +162,69 @@ pub enum Control {
     StemVolume(u8),
     /// Mutes or unmutes stem 1..=4 (toggles on press).
     StemMute(u8),
+    // Drum machine (see `rille_core::drums`). Steps, accents and the
+    // instrument's knobs act on the selected instrument; cells address any
+    // instrument's step directly. Step and cell controls toggle on press and
+    // set on an absolute value (on from 0.5).
+    /// Start or stop the sequencer (it starts in phase with the master clock).
+    DrumPlay,
+    /// Live recording: triggers while playing write the nearest step.
+    DrumRecord,
+    /// Step 1..=16 of the selected instrument. Read back: lit when on,
+    /// inverted under the playhead (a running light).
+    DrumStep(u8),
+    /// Accent on step 1..=16 of the selected instrument.
+    DrumAccent(u8),
+    /// Read-only pad colour of step 1..=16 (`rille_core::remix::led_code`):
+    /// the instrument's colour when on, white under the playhead.
+    DrumStepLed(u8),
+    /// Step of any instrument, 1..=128 (`instrument * 16 + step + 1`).
+    DrumCell(u8),
+    DrumCellAccent(u8),
+    /// Select instrument 1..=8.
+    DrumInst(u8),
+    /// Read-only pad colour of instrument 1..=8: bright when selected, dim
+    /// when it has steps.
+    DrumInstLed(u8),
+    /// Play instrument 1..=8 now (and record it while REC is on).
+    DrumTrigger(u8),
+    /// Select the next or previous instrument (relative).
+    DrumInstSelect,
+    DrumInstMute(u8),
+    DrumInstLevel(u8),
+    /// Pitch of instrument 1..=8, 0.5 = original, ±12 semitones.
+    DrumInstTune(u8),
+    /// Length of instrument 1..=8's sound, 1.0 = the whole sample.
+    DrumInstDecay(u8),
+    /// Level, tune and decay of the selected instrument.
+    DrumSelLevel,
+    DrumSelTune,
+    DrumSelDecay,
+    /// Select pattern 1..=16; while playing it starts when the current one
+    /// comes round.
+    DrumPattern(u8),
+    /// Next or previous pattern (relative).
+    DrumPatternSelect,
+    /// Pattern length in steps (relative).
+    DrumLength,
+    DrumSwing,
+    /// Clear the selected instrument's steps.
+    DrumClear,
+    DrumClearPattern,
+    /// Next or previous kit (relative).
+    DrumKitSelect,
+    /// Drum channel fader.
+    DrumLevel,
+    /// Drum channel filter, 0.5 = off.
+    DrumFilter,
+    /// Send the drums through FX unit 1..=2.
+    DrumFxAssign(u8),
+    /// Drums in the headphones.
+    DrumPfl,
+    /// Drum channel level, like [`Control::Meter`]. Read-only.
+    DrumMeter,
+    /// Show or hide the drum machine panel.
+    DrumShow,
 }
 
 impl Control {
@@ -169,6 +235,7 @@ impl Control {
             Crossfader | CrossfaderCurve | CrossfaderReverse | MainLevel | MainMeter(_) | CueMix | CueVolume
             | Quantize | Snap | Limiter | ClockTempo | BrowserScroll | BrowserTreeScroll | BrowserToggleNode
             | Record => Scope::Global,
+            c if c.is_drum() => Scope::Drum,
             _ => Scope::Deck,
         }
     }
@@ -178,9 +245,13 @@ impl Control {
         match self {
             Tempo | Seek | Gain | EqHi | EqMid | EqLo | Filter | Volume | KeyShift | Meter | FxDryWet | FxKnob(_)
             | FxParam(_) | Crossfader | CrossfaderCurve | MainLevel | MainMeter(_) | CueMix | CueVolume
-            | ClockTempo | RemixVolume(_) | RemixFilter(_) | StemVolume(_) => ControlKind::Continuous,
+            | ClockTempo | RemixVolume(_) | RemixFilter(_) | StemVolume(_) | DrumInstLevel(_) | DrumInstTune(_)
+            | DrumInstDecay(_) | DrumSelLevel | DrumSelTune | DrumSelDecay | DrumSwing | DrumLevel | DrumFilter
+            | DrumMeter => ControlKind::Continuous,
             Jog | FxSelect(_) | BrowserScroll | BrowserTreeScroll | RemixPage | RemixQuantizeSize
-            | RemixCaptureSource => ControlKind::Relative,
+            | RemixCaptureSource | DrumInstSelect | DrumPatternSelect | DrumLength | DrumKitSelect => {
+                ControlKind::Relative
+            }
             _ => ControlKind::Button,
         }
     }
@@ -207,10 +278,50 @@ impl Control {
         )
     }
 
+    /// A drum machine control.
+    pub fn is_drum(self) -> bool {
+        use Control::*;
+        matches!(
+            self,
+            DrumPlay
+                | DrumRecord
+                | DrumStep(_)
+                | DrumAccent(_)
+                | DrumStepLed(_)
+                | DrumCell(_)
+                | DrumCellAccent(_)
+                | DrumInst(_)
+                | DrumInstLed(_)
+                | DrumTrigger(_)
+                | DrumInstSelect
+                | DrumInstMute(_)
+                | DrumInstLevel(_)
+                | DrumInstTune(_)
+                | DrumInstDecay(_)
+                | DrumSelLevel
+                | DrumSelTune
+                | DrumSelDecay
+                | DrumPattern(_)
+                | DrumPatternSelect
+                | DrumLength
+                | DrumSwing
+                | DrumClear
+                | DrumClearPattern
+                | DrumKitSelect
+                | DrumLevel
+                | DrumFilter
+                | DrumFxAssign(_)
+                | DrumPfl
+                | DrumMeter
+                | DrumShow
+        )
+    }
+
     /// Whether hardware or the UI can drive it; false for read-only state
     /// such as [`Control::Meter`].
     pub fn is_input(self) -> bool {
-        !matches!(self, Control::Meter | Control::MainMeter(_))
+        use Control::*;
+        !matches!(self, Meter | MainMeter(_) | DrumMeter | DrumStepLed(_) | DrumInstLed(_))
     }
 
     /// Resting value of continuous controls (used for reset and soft-takeover).
@@ -218,9 +329,10 @@ impl Control {
         use Control::*;
         match self {
             Tempo | Gain | EqHi | EqMid | EqLo | Filter | KeyShift | Crossfader | CrossfaderCurve | CueMix
-            | RemixFilter(_) => 0.5,
-            Volume | RemixVolume(_) | StemVolume(_) => 1.0,
-            MainLevel | CueVolume => 0.8,
+            | RemixFilter(_) | DrumInstTune(_) | DrumSelTune | DrumFilter => 0.5,
+            Volume | RemixVolume(_) | StemVolume(_) | DrumInstLevel(_) | DrumSelLevel | DrumInstDecay(_)
+            | DrumSelDecay => 1.0,
+            MainLevel | CueVolume | DrumLevel => 0.8,
             _ => 0.0,
         }
     }
@@ -308,6 +420,37 @@ impl Control {
         for f in [RemixStop, RemixMute, RemixVolume, RemixFilter] {
             v.extend((1..=crate::remix::SLOTS as u8).map(f));
         }
+        use crate::drums::{CELLS, INSTRUMENTS, PATTERNS, STEPS};
+        v.extend([
+            DrumPlay,
+            DrumRecord,
+            DrumInstSelect,
+            DrumSelLevel,
+            DrumSelTune,
+            DrumSelDecay,
+            DrumPatternSelect,
+            DrumLength,
+            DrumSwing,
+            DrumClear,
+            DrumClearPattern,
+            DrumKitSelect,
+            DrumLevel,
+            DrumFilter,
+            DrumPfl,
+            DrumMeter,
+            DrumShow,
+        ]);
+        for f in [DrumStep, DrumAccent, DrumStepLed] {
+            v.extend((1..=STEPS as u8).map(f));
+        }
+        for f in [DrumCell, DrumCellAccent] {
+            v.extend((1..=CELLS as u8).map(f));
+        }
+        for f in [DrumInst, DrumInstLed, DrumTrigger, DrumInstMute, DrumInstLevel, DrumInstTune, DrumInstDecay] {
+            v.extend((1..=INSTRUMENTS as u8).map(f));
+        }
+        v.extend((1..=PATTERNS as u8).map(DrumPattern));
+        v.extend((1..=2).map(DrumFxAssign));
         v
     }
 
@@ -395,16 +538,49 @@ impl Control {
             RemixQuantize => ("remix_quantize", None),
             RemixQuantizeSize => ("remix_quantize_size", None),
             RemixCaptureSource => ("remix_capture_source", None),
+            DrumPlay => ("play", None),
+            DrumRecord => ("record", None),
+            DrumStep(n) => ("step", Some(n)),
+            DrumAccent(n) => ("accent", Some(n)),
+            DrumStepLed(n) => ("step_led", Some(n)),
+            DrumCell(n) => ("cell", Some(n)),
+            DrumCellAccent(n) => ("cell_accent", Some(n)),
+            DrumInst(n) => ("inst", Some(n)),
+            DrumInstLed(n) => ("inst_led", Some(n)),
+            DrumTrigger(n) => ("trigger", Some(n)),
+            DrumInstSelect => ("inst_select", None),
+            DrumInstMute(n) => ("inst_mute", Some(n)),
+            DrumInstLevel(n) => ("inst_level", Some(n)),
+            DrumInstTune(n) => ("inst_tune", Some(n)),
+            DrumInstDecay(n) => ("inst_decay", Some(n)),
+            DrumSelLevel => ("sel_level", None),
+            DrumSelTune => ("sel_tune", None),
+            DrumSelDecay => ("sel_decay", None),
+            DrumPattern(n) => ("pattern", Some(n)),
+            DrumPatternSelect => ("pattern_select", None),
+            DrumLength => ("length", None),
+            DrumSwing => ("swing", None),
+            DrumClear => ("clear", None),
+            DrumClearPattern => ("clear_pattern", None),
+            DrumKitSelect => ("kit_select", None),
+            DrumLevel => ("level", None),
+            DrumFilter => ("filter", None),
+            DrumFxAssign(n) => ("fx_assign", Some(n)),
+            DrumPfl => ("pfl", None),
+            DrumMeter => ("meter", None),
+            DrumShow => ("show", None),
         }
     }
 
-    fn from_name(name: &str, n: Option<u8>) -> Option<Control> {
-        Control::all().into_iter().find(|c| c.name() == (name, n))
+    /// Names repeat across scopes (`deck.A.play`, `drum.play`).
+    fn from_name(scope: Scope, name: &str, n: Option<u8>) -> Option<Control> {
+        Control::all().into_iter().find(|c| c.scope() == scope && c.name() == (name, n))
     }
 }
 
 /// A control on a specific unit. `unit` is the deck index (0 = A) for deck
-/// controls, the FX unit index (0 = unit 1) for FX controls, and 0 for global.
+/// controls, the FX unit index (0 = unit 1) for FX controls, and 0 for the
+/// drum machine and global.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ControlTarget {
     pub control: Control,
@@ -423,6 +599,10 @@ impl ControlTarget {
     pub fn global(control: Control) -> Self {
         Self { control, unit: 0 }
     }
+
+    pub fn drum(control: Control) -> Self {
+        Self { control, unit: 0 }
+    }
 }
 
 impl fmt::Display for ControlTarget {
@@ -431,6 +611,7 @@ impl fmt::Display for ControlTarget {
         match self.control.scope() {
             Scope::Deck => write!(f, "deck.{}.{name}", char::from(b'A' + self.unit))?,
             Scope::Fx => write!(f, "fx.{}.{name}", self.unit + 1)?,
+            Scope::Drum => write!(f, "drum.{name}")?,
             Scope::Global => write!(f, "global.{name}")?,
         }
         if let Some(n) = n {
@@ -466,6 +647,7 @@ impl FromStr for ControlTarget {
                 let u: u8 = u.parse().ok().filter(|u| (1..=4).contains(u)).ok_or_else(err)?;
                 (Scope::Fx, u - 1, rest)
             }
+            ["drum", rest @ ..] => (Scope::Drum, 0, rest),
             ["global", rest @ ..] => (Scope::Global, 0, rest),
             _ => return Err(err()),
         };
@@ -474,7 +656,7 @@ impl FromStr for ControlTarget {
             [name, n] => (*name, Some(n.parse::<u8>().map_err(|_| err())?)),
             _ => return Err(err()),
         };
-        let control = Control::from_name(name, n).filter(|c| c.scope() == scope).ok_or_else(err)?;
+        let control = Control::from_name(scope, name, n).ok_or_else(err)?;
         Ok(Self { control, unit })
     }
 }
@@ -519,7 +701,7 @@ mod tests {
             let units: &[u8] = match c.scope() {
                 Scope::Deck => &[0, 3],
                 Scope::Fx => &[0, 1],
-                Scope::Global => &[0],
+                Scope::Drum | Scope::Global => &[0],
             };
             for &unit in units {
                 let t = ControlTarget { control: c, unit };
@@ -540,5 +722,25 @@ mod tests {
         assert_eq!(ControlTarget::deck(2, Control::RemixCell(64)).to_string(), "deck.C.remix_cell.64");
         assert_eq!("deck.D.remix_volume.4".parse(), Ok(ControlTarget::deck(3, Control::RemixVolume(4))));
         assert!("deck.C.remix_pad.17".parse::<ControlTarget>().is_err());
+    }
+
+    #[test]
+    fn drum_targets() {
+        assert_eq!(ControlTarget::drum(Control::DrumStep(5)).to_string(), "drum.step.5");
+        // Names shared with deck and global controls resolve by scope.
+        assert_eq!("drum.play".parse(), Ok(ControlTarget::drum(Control::DrumPlay)));
+        assert_eq!("deck.A.play".parse(), Ok(ControlTarget::deck(0, Control::Play)));
+        assert_eq!("drum.filter".parse(), Ok(ControlTarget::drum(Control::DrumFilter)));
+        assert_eq!("deck.B.filter".parse(), Ok(ControlTarget::deck(1, Control::Filter)));
+        assert_eq!("drum.record".parse(), Ok(ControlTarget::drum(Control::DrumRecord)));
+        assert_eq!("global.record".parse(), Ok(ControlTarget::global(Control::Record)));
+        assert_eq!("drum.cell.128".parse(), Ok(ControlTarget::drum(Control::DrumCell(128))));
+        assert!("drum.cell.129".parse::<ControlTarget>().is_err());
+        assert!("drum.step.17".parse::<ControlTarget>().is_err());
+        assert!("drum.A.play".parse::<ControlTarget>().is_err());
+        assert!(!Control::DrumStepLed(1).is_input() && Control::DrumStep(1).is_input());
+        assert_eq!(Control::DrumPatternSelect.kind(), ControlKind::Relative);
+        assert_eq!(Control::DrumSelTune.kind(), ControlKind::Continuous);
+        assert!(Control::all().iter().all(|c| c.is_drum() == (c.scope() == Scope::Drum)));
     }
 }

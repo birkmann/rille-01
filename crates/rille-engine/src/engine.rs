@@ -18,6 +18,7 @@ use rille_core::{BeatClock, Control, ControlEvent, ControlValue, Scope};
 use rille_dsp::{FxCtx, FxUnit, PeakLimiter, PeakMeter, SincTable, SoftClip, flush_denormals};
 
 use crate::deck::{Deck, Modes, RenderCtx, filter_roll_beats};
+use crate::drums::DrumMachine;
 use crate::mixer::{Strip, crossfader_gain};
 use crate::snapshot::{ChannelState, DeckState, FxState, Snapshot};
 use crate::types::{Command, Event, FX_UNITS, Garbage, LOOP_SIZES, MAX_DECKS, Recorder, Settings};
@@ -42,6 +43,14 @@ struct Clock {
     explicit: bool,
     bpm: f64,
     beat: f64,
+    /// Clock beat of a downbeat of the leading track: bars (and drum
+    /// patterns) count from here.
+    bar_origin: f64,
+    /// Leader the origin was taken from.
+    origin_leader: Option<u8>,
+    /// A different origin the leader suggests, and the clock beat since
+    /// when (it must hold a beat before it is taken: loops wrap, rolls end).
+    origin_shift: Option<(f64, f64)>,
 }
 
 pub struct Engine {
@@ -68,6 +77,7 @@ pub struct Engine {
     /// FILTER ROLL held, per deck.
     filter_roll: [bool; MAX_DECKS],
     clock: Clock,
+    drums: DrumMachine,
     commands: rtrb::Consumer<Command>,
     events: rtrb::Producer<Event>,
     garbage: rtrb::Producer<Garbage>,
@@ -133,7 +143,17 @@ impl Engine {
             cue_mix: 0.5,
             cue_volume: 0.8,
             filter_roll: [false; MAX_DECKS],
-            clock: Clock { master: None, auto: true, explicit: false, bpm: 120.0, beat: 0.0 },
+            clock: Clock {
+                master: None,
+                auto: true,
+                explicit: false,
+                bpm: 120.0,
+                beat: 0.0,
+                bar_origin: 0.0,
+                origin_leader: None,
+                origin_shift: None,
+            },
+            drums: DrumMachine::new(sample_rate, max_block),
             commands: ch.commands,
             events: ch.events,
             garbage: ch.garbage,
@@ -301,6 +321,13 @@ impl Engine {
                         let _ = self.garbage.push(Garbage::Recorder(old));
                     }
                 }
+                Command::SetDrumKit(kit) => {
+                    for old in self.drums.set_kit(kit).into_iter().flatten() {
+                        let _ = self.garbage.push(Garbage::DrumKit(old));
+                    }
+                }
+                Command::SetDrumPattern { index, pattern } => self.drums.set_pattern(usize::from(index), pattern),
+                Command::SetDrumParams(p) => self.drums.set_params(p),
             }
         }
     }
@@ -382,6 +409,9 @@ impl Engine {
                 _ => {}
             },
             Scope::Fx if unit < FX_UNITS => self.fx_control(unit, target.control, value),
+            Scope::Drum => {
+                self.drums.control(target.control, value);
+            }
             Scope::Deck if unit < MAX_DECKS => {
                 let strip = &mut self.strips[unit];
                 match target.control {
@@ -628,11 +658,22 @@ impl Engine {
             {
                 let heard = b / deck.sync_mult;
                 self.clock.beat = heard + (self.clock.beat - heard).round();
+                if let Some(grid) = deck.grid.as_deref() {
+                    let k = deck.sync_mult;
+                    let bar_len = f64::from(grid.beats_per_bar.max(1)) / k;
+                    let cand = self.clock.beat - grid.bar_phase(b) / k;
+                    let force = self.clock.origin_leader != Some(m as u8) || self.drums.origin_request;
+                    let rolling = deck.loop_active || deck.flux;
+                    update_origin(&mut self.clock, cand, bar_len, force, rolling);
+                    self.clock.origin_leader = Some(m as u8);
+                }
             }
             travel
         } else {
             let travel = self.clock.bpm / 60.0 * block_secs;
             self.clock.beat += travel;
+            self.clock.origin_leader = None;
+            self.clock.origin_shift = None;
             travel
         };
         let clock_end = self.clock.beat;
@@ -741,6 +782,11 @@ impl Engine {
                 let _ = self.events.push(e);
             }
         }
+
+        self.drums.render(n, clock_end, self.clock.bar_origin, self.clock.bpm);
+        if let Some(old) = self.drums.take_faded_kit() {
+            let _ = self.garbage.push(Garbage::DrumKit(old));
+        }
     }
 
     fn mix(&mut self, n: usize) {
@@ -753,7 +799,8 @@ impl Engine {
             self.mix_external(n);
             return;
         }
-        let chain = (0..MAX_DECKS).any(|i| self.strips[i].fx_assign.iter().all(|a| *a));
+        let chain = (0..MAX_DECKS).any(|i| self.strips[i].fx_assign.iter().all(|a| *a))
+            || self.drums.strip.fx_assign.iter().all(|a| *a);
         for i in 0..MAX_DECKS {
             let deck = &mut self.decks[i];
             let strip = &mut self.strips[i];
@@ -767,6 +814,27 @@ impl Engine {
             }
             let x = if self.crossfader_reverse { 1.0 - self.crossfader } else { self.crossfader };
             strip.process_post(buf, crossfader_gain(x, i % 2, self.crossfader_curve));
+            let dest = match strip.fx_assign {
+                [true, _] => &mut self.bus[0],
+                [false, true] => &mut self.bus[1],
+                _ => &mut self.master,
+            };
+            for (d, s) in dest[..n].iter_mut().zip(buf.iter()) {
+                d[0] += s[0];
+                d[1] += s[1];
+            }
+        }
+        // The drum machine's own channel: not on the crossfader.
+        {
+            let (strip, buf) = (&mut self.drums.strip, &mut self.drums.buf[..n]);
+            strip.process_pre(buf, 0.0);
+            if strip.pfl {
+                for (c, s) in self.cue[..n].iter_mut().zip(buf.iter()) {
+                    c[0] += s[0];
+                    c[1] += s[1];
+                }
+            }
+            strip.process_post(buf, 1.0);
             let dest = match strip.fx_assign {
                 [true, _] => &mut self.bus[0],
                 [false, true] => &mut self.bus[1],
@@ -870,6 +938,7 @@ impl Engine {
             time_nanos: self.started.elapsed().as_nanos() as u64,
             cpu_load: self.cpu_load,
             fx: self.fx_state,
+            drums: self.drums.state(clock.beat, clock.bar_origin),
             ..Snapshot::default()
         };
         for (i, u) in snap.fx.iter_mut().enumerate() {
@@ -949,5 +1018,31 @@ impl Engine {
             };
         }
         self.snapshot.write(snap);
+    }
+}
+
+/// Takes the bar origin `cand` (a clock beat on the leader's downbeat; bars
+/// are `bar_len` clock beats) on the lattice nearest the current origin. A
+/// different lattice is taken at once when `force`d, otherwise only when it
+/// has held for a beat and the leader is not looping or rolling (a loop
+/// wrap or a roll moves the leader's beats only for a moment).
+fn update_origin(clock: &mut Clock, cand: f64, bar_len: f64, force: bool, rolling: bool) {
+    let snapped = cand + ((clock.bar_origin - cand) / bar_len).round() * bar_len;
+    let shift = snapped - clock.bar_origin;
+    if force {
+        clock.bar_origin = snapped;
+        clock.origin_shift = None;
+    } else if shift.abs() < 1e-6 || rolling {
+        clock.origin_shift = None;
+    } else {
+        match clock.origin_shift {
+            Some((s, since)) if (s - shift).abs() < 1e-3 => {
+                if clock.beat - since >= 1.0 {
+                    clock.bar_origin = snapped;
+                    clock.origin_shift = None;
+                }
+            }
+            _ => clock.origin_shift = Some((shift, clock.beat)),
+        }
     }
 }

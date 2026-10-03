@@ -47,6 +47,14 @@ automatically and precisely enough that sync never drifts.**
   from a playing track deck's loop — started in time with the deck (quantized
   to 1/4 beat … 2 bars), with per-slot volume, filter, mute and stop. The deck
   syncs like a track deck; its cells are saved and come back on the next start.
+- **Drum machine:** a 16-step sequencer with eight instruments (bass drum,
+  snare, closed and open hi-hat, clap, rim shot, tom, cymbal) and 16 patterns,
+  always in time and in phase with the master: step 1 falls on the leading
+  track's downbeat. Three synthesized factory kits, your own kits from your
+  own samples, swing, accents, live recording, per-instrument tune, decay,
+  level and mute, and a channel of its own (level, filter, FX 1/2, headphone
+  cue). Shown above or below the decks with **DRUMS** in the title bar; every
+  control can be mapped to a controller.
 - **Mixer:** gain with auto-gain (loudness levelling), 3-band isolator EQ with
   full kill, DJ filter, channel faders, crossfader, headphone cue with mix and
   volume, master limiter, meters.
@@ -269,6 +277,39 @@ double time counts), then key (Camelot neighbours) and genre decide the order.
 Tracks on the decks and those played in this session are left out, and the
 list follows along as the mix moves on. The **Match** column (COLUMNS) shows
 the score.
+
+**Drum machine:** **DRUMS** in the title bar shows it (Settings → Decks:
+above or below the decks, one sequencer row or four). The tabs choose the
+instrument the row and the TUNE, DECAY and LEVEL knobs edit; double-click a
+tab (or ▸) to play it, middle-click to mute it. Click steps to switch them,
+drag to paint several, right-click (or Shift-click) for an accent. Play starts
+in phase with the master clock, and a pattern chosen while playing starts when
+the current one comes round. With **REC** on, instruments you play while it
+runs are written to the nearest step. Patterns and settings are saved as you
+go, in `~/.local/share/rille/drums/state.toml`.
+
+Your own kits live in `~/.local/share/rille/drums/kits/<kit name>/`: put
+samples named after the instruments in a folder there (`BD.wav` or
+`kick.wav`, `SD`/`snare`, `CH`/`hihat`, `OH`/`openhat`, `CP`/`clap`,
+`RS`/`rim`, `LT`/`tom`, `CY`/`cymbal`; WAV, FLAC, MP3, OGG, AIFF), or name
+the files in a `kit.toml` (`[samples]` with `BD = "my kick.wav"`). In the
+drum machine's menu, "New kit from this one" copies the current kit's
+sounds into a new folder; dropping a track or file on an instrument's tab
+(or "Load a sound") replaces that sound, making a kit of your own first when
+the current one is a factory kit. Samples longer than 8 seconds are cut.
+
+Mapping targets (for mapping files and MIDI learn): `drum.play`,
+`drum.record`, `drum.step.1`-`16` and `drum.accent.1`-`16` (the selected
+instrument), `drum.cell.1`-`128` and `drum.cell_accent.1`-`128` (any
+instrument: `instrument × 16 + step`), `drum.inst.1`-`8` (select),
+`drum.trigger.1`-`8` (play), `drum.inst_mute/inst_level/inst_tune/inst_decay.1`-`8`,
+`drum.sel_level`, `drum.sel_tune`, `drum.sel_decay` (the selected
+instrument), `drum.pattern.1`-`16`, `drum.pattern_select`, `drum.inst_select`,
+`drum.kit_select`, `drum.length` (relative), `drum.swing`, `drum.clear`,
+`drum.clear_pattern`, `drum.level`, `drum.filter`, `drum.fx_assign.1`-`2`,
+`drum.pfl`, `drum.show`. For LEDs, `drum.step.N` lights the steps that are on
+with the playhead running across them; `drum.step_led.N` and `drum.inst_led.N`
+give RGB pad colors and `drum.meter` the level.
 
 **Correcting a grid:** press **GRID** on a deck. The arrows move the grid by
 10/1 ms, ×2/÷2 fix half/double tempo, BEAT HERE puts a beat on the play

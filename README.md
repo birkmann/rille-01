@@ -86,16 +86,16 @@ Measured, not assumed:
 |---|---|
 | Synthetic tracks, 8 tempos (95–174 BPM, incl. 126.37 and 133.33) at 44.1/48/96 kHz | exact BPM, every beat within 0.37 ms, correct downbeat |
 | Synthetic breakdown (16 bars without kick) / tempo change / live drift | exact / piecewise grid within 2 ms / follows the drummer within 4 ms (p95) |
-| 1,142 real electronic tracks | 1,132 constant grids, 10 variable; every beat within 2 ms of the grid (p95) on 872 tracks, median p95 0.49 ms; BPM equal to Mixxx's analysis on 251 of 264 shared tracks |
+| 1,142 real electronic tracks | 1,132 constant grids, 10 variable; every beat within 2 ms of the grid (p95) on 872 tracks, median p95 0.49 ms |
 | Keys vs. Beatport tags (390 tracks) | 56 % exact, 72 % harmonically compatible |
 | Sync on rendered audio, 60 s, 124 vs 128 BPM | worst phase error 0.016 ms (varispeed), 0.41 ms (keylock) |
 | Loops | 125 wraps, every interval exact to one sample, with and without keylock |
 | Sync torture test: 40 random seeks, jumps, loops, scratches, nudges, keylock and master changes per run | every follower click within 1 ms of the master's 200 ms after each operation (30 seeds) |
 
-Run `rille-cli eval <folders> [--mixxx ~/.var/app/org.mixxx.Mixxx/.mixxx/mixxxdb.sqlite]`
-to measure your own library, `rille-cli gridplot <out-dir> <files>` to see every
-beat of a track stacked against its grid lines, and `rille-cli click <out-dir>
-<files>` to write copies with a click on every beat.
+Run `rille-cli eval <folders>` to measure your own library, `rille-cli gridplot
+<out-dir> <files>` to see every beat of a track stacked against its grid lines,
+and `rille-cli click <out-dir> <files>` to write copies with a click on every
+beat.
 
 ## Installing
 
@@ -374,7 +374,7 @@ RILLE_STEM_MODEL=htdemucs.onnx cargo test --release -p rille-stems -p rille-app 
   be off by a beat. Such tracks are marked "check bar start"; fix them with
   BAR START in the grid editor.
 - The bundled DDJ-400, Inpulse 200, Xone:K2, Z1, X1 MK2, X1 MK1, F1 and AMX mappings
-  were converted from Mixxx or community mappings and have not all been
+  were converted from community mappings and have not all been
   tested on the hardware; the tempo fader direction may need `invert = true`.
   The X1 MK2's display layout comes from a community script and has not been
   checked on a device. The X1 MK1's encoder direction and SHIFT/HOTCUE LEDs
@@ -403,8 +403,8 @@ colors, type, rules) is in `rille-brand/`; the app's colors live in
 ## Credits
 
 Most bundled controller mappings and the HID report layouts are derived from
-the [Mixxx](https://mixxx.org/) controller mappings (GPL-2.0-or-later) and
-community mappings; each file in `mappings/` names its sources and authors.
+existing community mappings (GPL-2.0-or-later); each file in `mappings/` names
+its sources and authors.
 
 ## License
 
@@ -414,6 +414,6 @@ GPL-3.0-or-later. See `LICENSE`. The bundled Geist and Geist Mono fonts are
 under the SIL Open Font License (`crates/rille-ui/assets/fonts/OFL.txt`).
 
 rille is not affiliated with or endorsed by Native Instruments, Pioneer DJ,
-Allen & Heath, Hercules, Akai Professional, Beatport or the Mixxx project.
+Allen & Heath, Hercules, Akai Professional or Beatport.
 Product names are trademarks of their respective owners and are used only to
 identify compatible hardware and file formats.

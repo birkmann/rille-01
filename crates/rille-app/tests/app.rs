@@ -697,3 +697,80 @@ fn loading_and_ejecting_update_the_rows() {
     assert!(!app.played_in_session(a) && !app.played_in_session(b));
     app.shutdown();
 }
+
+fn drum(app: &App, c: Control, v: ControlValue) {
+    app.control(ControlEvent { target: ControlTarget::drum(c), value: v });
+}
+
+#[test]
+fn drum_machine_edits_kits_and_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = start(dir.path());
+    // A fresh install: the factory kit and grooves.
+    assert_eq!(app.drum_kit_name(), "909 Core");
+    wait_for("factory kit", 5.0, || app.snapshot().drums.inst.iter().all(|i| i.loaded));
+    assert!(!app.snapshot().drums.patterns[0].is_empty(), "factory patterns");
+
+    // Edit from controls: pattern 9, instrument SD, steps 1 and 9, accent.
+    drum(&app, Control::DrumPattern(9), ControlValue::Press(true));
+    drum(&app, Control::DrumInst(2), ControlValue::Press(true));
+    for n in [1, 9] {
+        drum(&app, Control::DrumStep(n), ControlValue::Press(true));
+    }
+    drum(&app, Control::DrumAccent(9), ControlValue::Press(true));
+    drum(&app, Control::DrumSelTune, ControlValue::Absolute(0.25));
+    wait_for("edits", 5.0, || {
+        let d = app.snapshot().drums;
+        d.current == 8 && d.patterns[8].is_on(1, 0) && d.patterns[8].is_accent(1, 8) && d.inst[1].tune == 0.25
+    });
+    // Saved a moment later.
+    let state = dir.path().join("data/drums/state.toml");
+    wait_for("saved", 5.0, || {
+        app.tick();
+        std::fs::read_to_string(&state).is_ok_and(|t| t.contains("SD = \"x.......X.......\""))
+    });
+
+    // A new audio engine keeps it.
+    let mut s = app.settings();
+    s.buffer_frames = Some(512);
+    app.set_settings(s);
+    wait_for("restored after audio restart", 5.0, || {
+        let d = app.snapshot().drums;
+        d.current == 8 && d.patterns[8].is_accent(1, 8) && d.inst.iter().all(|i| i.loaded)
+    });
+
+    // Kits: step to the next factory kit from a controller.
+    drum(&app, Control::DrumKitSelect, ControlValue::Delta(1.0));
+    wait_for("next kit", 5.0, || app.drum_kit_name() == "808 Boom");
+
+    // Loading a sample into a factory kit makes a kit of your own.
+    let wav = dir.path().join("cowbell.wav");
+    let frames = (0..4800).map(|i| [((i as f32) * 0.05).sin() * 0.5; 2]).collect();
+    write_wav(&wav, &rille_decode::DecodedAudio { sample_rate: 48_000, frames });
+    app.drum_load_file(5, &wav);
+    wait_for("own kit", 5.0, || app.drum_kit_name() == "My 808 Boom");
+    assert!(app.drum_kits().iter().any(|k| k.name == "My 808 Boom" && !k.factory));
+    // The cowbell is in: 4800 stereo float frames (and a header).
+    let rs = dir.path().join("data/drums/kits/My 808 Boom/RS.wav");
+    let data = 4800 * 8;
+    wait_for("cowbell saved", 5.0, || std::fs::metadata(&rs).is_ok_and(|m| (data..data + 200).contains(&m.len())));
+    app.drum_clear_sample(5);
+    wait_for("sample removed", 5.0, || !app.snapshot().drums.inst[5].loaded);
+
+    // The panel's visibility from a controller.
+    assert!(!app.settings().drums_visible);
+    drum(&app, Control::DrumShow, ControlValue::Press(true));
+    assert!(app.settings().drums_visible && app.drums_visible());
+
+    // Everything comes back after a restart.
+    app.shutdown();
+    drop(app);
+    let app = start(dir.path());
+    assert_eq!(app.drum_kit_name(), "My 808 Boom");
+    wait_for("restored after restart", 5.0, || {
+        let d = app.snapshot().drums;
+        d.current == 8 && d.patterns[8].is_on(1, 0) && d.inst[1].tune == 0.25 && d.inst[0].loaded && !d.inst[5].loaded
+    });
+    assert!(app.settings().drums_visible);
+    app.shutdown();
+}

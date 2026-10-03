@@ -5,6 +5,7 @@
 pub mod analysis;
 mod audio;
 pub mod beatport;
+pub mod drums;
 mod engine_slot;
 pub mod explorer;
 pub mod record;
@@ -18,7 +19,7 @@ mod values;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
@@ -73,6 +74,8 @@ pub enum UiEvent {
     BeatportDownloads,
     /// The stem model's download moved on, or finished.
     StemsChanged,
+    /// The drum machine's kit or kit list changed.
+    DrumsChanged,
 }
 
 /// The analysis queue's state for the status bar.
@@ -257,6 +260,11 @@ pub struct App {
     /// A recording is running (for controller LEDs).
     recording_on: Arc<AtomicBool>,
     stems: stems::StemsState,
+    drums: Mutex<drums::Drums>,
+    /// The drum machine panel is shown (for controller LEDs).
+    drums_visible: Arc<AtomicBool>,
+    /// This app, for work that must outlive a `&self` call.
+    me: Weak<App>,
 }
 
 /// Options for [`App::start`].
@@ -283,7 +291,11 @@ impl App {
         let mut mapping_dirs = vec![paths.user_mappings()];
         mapping_dirs.extend(opts.bundled_mappings.clone());
         let mappings = MappingStore::load_with_channels(&mapping_dirs, &settings.midi_channels);
-        let app = Arc::new(App {
+        let drums_visible = Arc::new(AtomicBool::new(settings.drums_visible));
+        let app = Arc::new_cyclic(|me| App {
+            drums: Mutex::new(drums::Drums::load(&paths.drums())),
+            drums_visible,
+            me: me.clone(),
             settings: RwLock::new(settings),
             engine: Arc::new(EngineSlot::default()),
             audio_status: RwLock::new(AudioStatus::default()),
@@ -332,6 +344,7 @@ impl App {
         self.queue.shutdown();
         *self.midi.lock().expect("midi lock") = None;
         self.stop_recording();
+        self.capture_drums();
         *self.audio_runner.lock().expect("audio lock") = None;
     }
 
@@ -346,6 +359,7 @@ impl App {
         let old = self.settings();
         *self.settings.write().expect("settings lock") = s.clone();
         let _ = s.save(&self.paths.settings_file());
+        self.drums_visible.store(s.drums_visible, Ordering::Relaxed);
         if old.audio_device != s.audio_device || old.buffer_frames != s.buffer_frames {
             self.restart_audio(true);
         } else {
@@ -438,6 +452,8 @@ impl App {
                 app.audio_device_changed(status);
             }
         });
+        // The drum machine's state lives in the engine: keep it.
+        self.capture_drums();
         self.engine.set(Some(handle));
         *self.audio_status.write().expect("audio status lock") = status.clone();
         *self.audio_runner.lock().expect("audio lock") = Some(runner);
@@ -460,6 +476,7 @@ impl App {
                 self.load_track(d, id);
             }
         }
+        self.install_drums();
         self.notify(UiEvent::AudioChanged);
     }
 
@@ -522,6 +539,18 @@ impl App {
                     self.toggle_recording();
                 }
             }
+            Control::DrumShow => {
+                if matches!(ev.value, ControlValue::Press(true)) {
+                    self.toggle_drums_visible();
+                }
+            }
+            Control::DrumKitSelect => {
+                if let (ControlValue::Delta(d), Some(app)) = (ev.value, self.me.upgrade())
+                    && d.round() != 0.0
+                {
+                    app.step_drum_kit(d.round() as i64);
+                }
+            }
             // Cell edits need the app (files, the other decks' audio).
             Control::RemixPadLoad(_) => self.notify(UiEvent::Browser(ev)),
             Control::RemixPadDelete(pad) | Control::RemixPadCapture(pad) | Control::RemixPadType(pad) => {
@@ -561,12 +590,17 @@ impl App {
             drop(logged);
             let snap = engine.snapshot();
             self.log_history(&snap, dt);
+            self.drums_tick(&snap.drums);
             if self.settings.read().expect("settings lock").suggestions {
                 self.follow_playing_track(&snap);
             }
         }
         if let Some(m) = self.midi.lock().expect("midi lock").as_mut() {
-            m.send_feedback(&values::SnapshotValues(self.engine.clone(), self.recording_on.clone()));
+            m.send_feedback(&values::SnapshotValues::frozen(
+                &self.engine,
+                self.recording_on.clone(),
+                self.drums_visible.clone(),
+            ));
         }
     }
 
@@ -1761,7 +1795,11 @@ impl App {
 
     fn start_midi(self: &Arc<Self>) {
         let (tx, rx) = crossbeam_channel::unbounded::<MidiEvent>();
-        let values = Arc::new(values::SnapshotValues(self.engine.clone(), self.recording_on.clone()));
+        let values = Arc::new(values::SnapshotValues::live(
+            self.engine.clone(),
+            self.recording_on.clone(),
+            self.drums_visible.clone(),
+        ));
         match MidiManager::new("rille", tx, values) {
             Ok(mut m) => {
                 let store = self.mappings.lock().expect("mappings lock");

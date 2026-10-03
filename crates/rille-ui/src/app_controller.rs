@@ -97,7 +97,67 @@ pub mod qobject {
         #[qproperty(QString, beatport_download_text, cxx_name = "beatportDownloadText")]
         /// Share of the batch done, 0..1.
         #[qproperty(f64, beatport_download_fraction, cxx_name = "beatportDownloadFraction")]
+        /// Settings → Decks: the drum machine panel is shown, above (0) or
+        /// below (1) the decks, with 1 or 4 sequencer rows.
+        #[qproperty(bool, drums_visible, cxx_name = "drumsVisible")]
+        #[qproperty(i32, drums_position, cxx_name = "drumsPosition")]
+        #[qproperty(i32, drums_rows, cxx_name = "drumsRows")]
+        #[qproperty(bool, drums_playing, cxx_name = "drumsPlaying")]
+        #[qproperty(bool, drums_record, cxx_name = "drumsRecord")]
+        /// Step under the playhead (0..15), −1 while stopped.
+        #[qproperty(i32, drums_step, cxx_name = "drumsStep")]
+        /// Patterns, instruments, kit and channel as JSON (changes on edits).
+        #[qproperty(QString, drums_json, cxx_name = "drumsJson")]
+        /// Hit counters per instrument, comma-separated (a change = a hit).
+        #[qproperty(QString, drums_hits, cxx_name = "drumsHits")]
+        #[qproperty(f64, drums_meter, cxx_name = "drumsMeter")]
         type AppController = super::AppControllerRust;
+
+        /// Switches the drum machine to kit `name`.
+        #[qinvokable]
+        #[cxx_name = "selectDrumKit"]
+        fn select_drum_kit(self: &AppController, name: &QString);
+
+        /// Saves the current kit as a new kit of your own; returns an error
+        /// message, or empty.
+        #[qinvokable]
+        #[cxx_name = "newDrumKit"]
+        fn new_drum_kit(self: &AppController, name: &QString) -> QString;
+
+        /// An audio file as instrument `inst`'s sound.
+        #[qinvokable]
+        #[cxx_name = "drumLoadUrl"]
+        fn drum_load_url(self: &AppController, inst: i32, url: &QUrl);
+
+        /// A library track (drag and drop, the browser's selection) as
+        /// instrument `inst`'s sound.
+        #[qinvokable]
+        #[cxx_name = "drumLoadTrack"]
+        fn drum_load_track(self: &AppController, inst: i32, track_id: i64);
+
+        /// A file by path token (drag and drop from the explorer).
+        #[qinvokable]
+        #[cxx_name = "drumLoadPath"]
+        fn drum_load_path(self: &AppController, inst: i32, token: i64);
+
+        /// Asks the browser to load its selected track into instrument `inst`.
+        #[qinvokable]
+        #[cxx_name = "drumLoadSelected"]
+        fn drum_load_selected(self: Pin<&mut AppController>, inst: i32);
+
+        #[qinvokable]
+        #[cxx_name = "drumClearSample"]
+        fn drum_clear_sample(self: &AppController, inst: i32);
+
+        /// "copy" or "paste" the current pattern.
+        #[qinvokable]
+        #[cxx_name = "drumPattern"]
+        fn drum_pattern(self: &AppController, action: &QString);
+
+        /// Shows the folder of the user's drum kits.
+        #[qinvokable]
+        #[cxx_name = "openDrumKitsFolder"]
+        fn open_drum_kits_folder(self: &AppController);
 
         /// Downloads a Beatport playlist of the user for offline use.
         #[qinvokable]
@@ -428,6 +488,17 @@ pub struct AppControllerRust {
     beatport_downloading: bool,
     beatport_download_text: QString,
     beatport_download_fraction: f64,
+    drums_visible: bool,
+    drums_position: i32,
+    drums_rows: i32,
+    drums_playing: bool,
+    drums_record: bool,
+    drums_step: i32,
+    drums_json: QString,
+    drums_hits: QString,
+    drums_meter: f64,
+    /// The kit list as JSON, read again when kits change.
+    drum_kits_json: Option<String>,
 }
 
 struct ImportReport {
@@ -642,6 +713,10 @@ impl qobject::AppController {
         self.as_mut().set_mixer_hidden(!settings.show_mixer);
         self.as_mut().set_mixer_key(settings.mixer_key);
         self.as_mut().set_suggestions_enabled(settings.suggestions);
+        self.as_mut().set_drums_visible(settings.drums_visible);
+        self.as_mut().set_drums_position(i32::from(settings.drums_position.min(1)));
+        self.as_mut().set_drums_rows(if settings.drums_rows >= 4 { 4 } else { 1 });
+        self.as_mut().update_drums(app, &s.drums);
         let channels = if external { settings.mixer_channels.to_uppercase() } else { String::new() };
         if *self.mixer_channels() != QString::from(&channels) {
             self.as_mut().set_mixer_channels(QString::from(channels));
@@ -697,6 +772,7 @@ impl qobject::AppController {
                     let r = *self.stems_revision() + 1;
                     self.as_mut().set_stems_revision(r);
                 }
+                UiEvent::DrumsChanged => self.as_mut().rust_mut().drum_kits_json = None,
                 UiEvent::LibraryChanged => {
                     let r = *self.library_revision() + 1;
                     self.as_mut().set_library_revision(r);
@@ -764,6 +840,132 @@ impl qobject::AppController {
         self.as_mut().set_analysis_time(QString::from(t));
         let t = self.import.as_ref().map_or_else(String::new, ImportReport::text);
         self.as_mut().set_import_text(QString::from(t));
+    }
+
+    /// Drum machine state for the panel; properties only change when the
+    /// values do (QML re-parses the JSON on a change).
+    fn update_drums(mut self: Pin<&mut Self>, app: &rille_app::App, d: &rille_engine::DrumState) {
+        use rille_core::drums::{INST_COLORS, INSTRUMENTS, NAMES, PATTERNS};
+        self.as_mut().set_drums_playing(d.playing);
+        self.as_mut().set_drums_record(d.record);
+        self.as_mut().set_drums_step(d.step.map_or(-1, i32::from));
+        self.as_mut().set_drums_meter(f64::from(d.channel.meter[0].max(d.channel.meter[1])));
+        let hits = d.inst.iter().map(|i| i.hits.to_string()).collect::<Vec<_>>().join(",");
+        if *self.drums_hits() != QString::from(&hits) {
+            self.as_mut().set_drums_hits(QString::from(hits));
+        }
+        if self.drum_kits_json.is_none() {
+            let kits: Vec<String> = app
+                .drum_kits()
+                .iter()
+                .map(|k| format!(r#"{{"name":{},"factory":{}}}"#, json_str(&k.name), k.factory))
+                .collect();
+            self.as_mut().rust_mut().drum_kits_json = Some(format!("[{}]", kits.join(",")));
+        }
+        let kit = app.drum_kit_name();
+        let pat = &d.patterns[usize::from(d.current).min(PATTERNS - 1)];
+        let rows: Vec<String> = (0..INSTRUMENTS).map(|i| json_str(&pat.row_text(i))).collect();
+        let used: Vec<String> = d.patterns.iter().map(|p| (!p.is_empty()).to_string()).collect();
+        let inst: Vec<String> = d
+            .inst
+            .iter()
+            .zip(NAMES.iter().zip(INST_COLORS))
+            .map(|(i, (name, color))| {
+                format!(
+                    r##"{{"name":"{}","color":"#{:06x}","level":{:.4},"tune":{:.4},"decay":{:.4},"muted":{},"loaded":{}}}"##,
+                    name,
+                    rille_core::remix::COLORS[usize::from(color)],
+                    i.level,
+                    i.tune,
+                    i.decay,
+                    i.muted,
+                    i.loaded
+                )
+            })
+            .collect();
+        let c = &d.channel;
+        let json = format!(
+            r#"{{"current":{},"queued":{},"selected":{},"length":{},"swing":{:.4},"rows":[{}],"used":[{}],"inst":[{}],"level":{:.4},"filter":{:.4},"fx":[{},{}],"pfl":{},"kit":{},"factory":{},"kits":{},"clipboard":{}}}"#,
+            d.current,
+            d.queued.map_or(-1, i32::from),
+            d.selected,
+            pat.length,
+            pat.swing,
+            rows.join(","),
+            used.join(","),
+            inst.join(","),
+            c.volume,
+            c.filter,
+            c.fx_assign[0],
+            c.fx_assign[1],
+            c.pfl,
+            json_str(&kit),
+            rille_app::drums::kits::is_factory(&kit),
+            self.drum_kits_json.as_deref().unwrap_or("[]"),
+            app.drum_has_clipboard(),
+        );
+        if *self.drums_json() != QString::from(&json) {
+            self.as_mut().set_drums_json(QString::from(json));
+        }
+    }
+
+    fn select_drum_kit(&self, name: &QString) {
+        if let Some(app) = app() {
+            app.select_drum_kit(&name.to_string());
+        }
+    }
+
+    fn new_drum_kit(&self, name: &QString) -> QString {
+        let Some(app) = app() else { return QString::default() };
+        match app.new_drum_kit(&name.to_string()) {
+            Ok(_) => QString::default(),
+            Err(e) => QString::from(e),
+        }
+    }
+
+    fn drum_load_url(&self, inst: i32, url: &QUrl) {
+        if let (Some(app), Ok(inst)) = (app(), usize::try_from(inst)) {
+            app.drum_load_file(inst, &url_path(url));
+        }
+    }
+
+    fn drum_load_track(&self, inst: i32, track_id: i64) {
+        if let (Some(app), Ok(inst)) = (app(), usize::try_from(inst)) {
+            app.drum_load_track(inst, track_id);
+        }
+    }
+
+    fn drum_load_path(&self, inst: i32, token: i64) {
+        if let (Some(app), Ok(inst), Some(p)) = (app(), usize::try_from(inst), token_path(token)) {
+            app.drum_load_file(inst, &p);
+        }
+    }
+
+    fn drum_load_selected(mut self: Pin<&mut Self>, inst: i32) {
+        self.as_mut().set_browser_action(QString::from(format!("drum:{inst}")));
+        let seq = *self.browser_action_seq() + 1;
+        self.as_mut().set_browser_action_seq(seq);
+    }
+
+    fn drum_clear_sample(&self, inst: i32) {
+        if let (Some(app), Ok(inst)) = (app(), usize::try_from(inst)) {
+            app.drum_clear_sample(inst);
+        }
+    }
+
+    fn drum_pattern(&self, action: &QString) {
+        let Some(app) = app() else { return };
+        match action.to_string().as_str() {
+            "copy" => app.drum_copy_pattern(),
+            "paste" => app.drum_paste_pattern(),
+            _ => {}
+        }
+    }
+
+    fn open_drum_kits_folder(&self) {
+        if let Some(app) = app() {
+            let _ = std::process::Command::new("xdg-open").arg(app.drum_kits_folder()).spawn();
+        }
     }
 
     fn press(&self, t: &QString, down: bool) {
@@ -856,7 +1058,7 @@ impl qobject::AppController {
         let s = app.settings();
         let roots: Vec<String> = s.library_roots.iter().map(|r| json_str(&r.display().to_string())).collect();
         QString::from(format!(
-            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"deck_height":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"mixer_key":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{},"beatport_quality":{},"beatport_cache_mb":{},"stems_cache_mb":{},"load_lock":{},"load_lock_level":{},"load_lock_decks":{}}}"#,
+            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"deck_height":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"mixer_key":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{},"beatport_quality":{},"beatport_cache_mb":{},"stems_cache_mb":{},"load_lock":{},"load_lock_level":{},"load_lock_decks":{},"drums_visible":{},"drums_position":{},"drums_rows":{}}}"#,
             s.audio_device.as_deref().map_or("null".into(), json_str),
             s.buffer_frames.map_or("null".into(), |b| b.to_string()),
             s.tempo_range,
@@ -896,7 +1098,10 @@ impl qobject::AppController {
             s.stems_cache_mb,
             s.load_lock,
             s.load_lock_level,
-            json_str(&s.load_lock_decks)
+            json_str(&s.load_lock_decks),
+            s.drums_visible,
+            s.drums_position,
+            s.drums_rows
         ))
     }
 
@@ -957,6 +1162,9 @@ impl qobject::AppController {
                 s.load_lock_decks = v.to_uppercase().chars().filter(|c| ('A'..='D').contains(c)).collect()
             }
             "suggestions" => s.suggestions = b,
+            "drums_visible" => s.drums_visible = b,
+            "drums_position" => s.drums_position = v.parse::<u8>().unwrap_or(0).min(1),
+            "drums_rows" => s.drums_rows = if v == "4" { 4 } else { 1 },
             "beatport_quality" => s.beatport_quality = rille_app::BeatportQuality::from_name(&v).name().to_owned(),
             "stems_cache_mb" => s.stems_cache_mb = v.parse::<u32>().unwrap_or(s.stems_cache_mb).clamp(1024, 1 << 20),
             "beatport_cache_mb" => {

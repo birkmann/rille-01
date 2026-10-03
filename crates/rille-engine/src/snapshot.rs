@@ -1,5 +1,6 @@
 //! State published by the audio thread after every block.
 
+use rille_core::drums::{INSTRUMENTS, PATTERNS, Pattern};
 use rille_core::remix::{CELLS, SLOTS};
 
 use crate::types::{FX_UNITS, HOTCUES, Hotcue, MAX_DECKS, STEMS};
@@ -138,11 +139,60 @@ impl Default for RemixState {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DrumInstState {
+    pub level: f32,
+    pub tune: f32,
+    pub decay: f32,
+    pub muted: bool,
+    /// The kit has a sample for it.
+    pub loaded: bool,
+    /// Hits since start (wraps); a change means it just played.
+    pub hits: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrumState {
+    pub playing: bool,
+    pub record: bool,
+    /// Step under the playhead (`0..16`) while playing.
+    pub step: Option<u8>,
+    /// Pattern playing (`0..16`) and the one waiting to start.
+    pub current: u8,
+    pub queued: Option<u8>,
+    /// Instrument that steps, accents and the knobs edit.
+    pub selected: u8,
+    pub patterns: [Pattern; PATTERNS],
+    pub inst: [DrumInstState; INSTRUMENTS],
+    /// The drum channel: level (`volume`), filter, FX assign, PFL, meter.
+    pub channel: ChannelState,
+    /// Changes with every edit worth saving.
+    pub edit_rev: u32,
+}
+
+impl Default for DrumState {
+    fn default() -> Self {
+        Self {
+            playing: false,
+            record: false,
+            step: None,
+            current: 0,
+            queued: None,
+            selected: 0,
+            patterns: [Pattern::default(); PATTERNS],
+            inst: [DrumInstState::default(); INSTRUMENTS],
+            channel: ChannelState::default(),
+            edit_rev: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Snapshot {
     pub decks: [DeckState; MAX_DECKS],
     pub channels: [ChannelState; MAX_DECKS],
     pub remix: [RemixState; MAX_DECKS],
     pub fx: [FxState; FX_UNITS],
+    pub drums: DrumState,
     pub crossfader: f32,
     pub crossfader_curve: f32,
     pub crossfader_reverse: bool,

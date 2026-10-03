@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicU64;
 
 use rille_core::{BeatGrid, ControlEvent, CueKind};
 
+use crate::drums::{DrumKit, DrumParams};
 use crate::remix::{RemixDeck, RemixSample};
 
 pub const MAX_DECKS: usize = rille_core::ids::MAX_DECKS;
@@ -166,6 +167,15 @@ pub enum Command {
         audio: Arc<TrackAudio>,
         length_secs: Option<f64>,
     },
+    /// The drum machine's samples (`None` = silent).
+    SetDrumKit(Option<Arc<DrumKit>>),
+    /// Replace drum pattern `index` (`0..16`).
+    SetDrumPattern {
+        index: u8,
+        pattern: rille_core::drums::Pattern,
+    },
+    /// Restore the drum machine's levels, tuning, pattern and channel.
+    SetDrumParams(DrumParams),
 }
 
 /// Where the audio thread copies every rendered block of the main mix while
@@ -216,4 +226,5 @@ pub(crate) enum Garbage {
     Sample(RemixSample),
     Recorder(Box<Recorder>),
     Stems(Arc<StemAudio>),
+    DrumKit(Arc<DrumKit>),
 }

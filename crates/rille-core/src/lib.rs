@@ -2,6 +2,7 @@
 
 pub mod beatgrid;
 pub mod control;
+pub mod drums;
 pub mod ids;
 pub mod key;
 pub mod quantize;

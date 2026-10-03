@@ -843,3 +843,80 @@ fn stems_mute_and_level_parts_of_the_track() {
     let quiet: f32 = no_bass.iter().take(4000).skip(2000).map(|f| f[0].abs()).fold(0.0, f32::max);
     assert!(quiet < 0.01, "between clicks: {quiet}");
 }
+
+fn drum(h: &EngineHandle, c: Control, v: ControlValue) {
+    let target = ControlTarget::drum(c);
+    assert!(h.send(Command::Control(ControlEvent { target, value: v })).is_ok());
+}
+
+/// A kit whose bass drum is a short full-scale burst; the rest is silent.
+fn burst_kit() -> Arc<rille_engine::DrumKit> {
+    let mut samples: [Option<Arc<TrackAudio>>; rille_core::drums::INSTRUMENTS] = Default::default();
+    let mut frames = vec![[0.9f32; 2]; 48];
+    frames.extend(std::iter::repeat_n([0.0f32; 2], 480));
+    samples[0] = Some(Arc::new(TrackAudio { sample_rate: SR, frames }));
+    Arc::new(rille_engine::DrumKit { samples })
+}
+
+/// Step 1 lands on the leading track's downbeats, even with the drums
+/// started mid-bar and the bar starting on the track's third beat.
+#[test]
+fn drum_pattern_follows_the_leaders_bars() {
+    let (h, mut e) = create(SR, BLOCK);
+    let (audio, grid) = click_track(120.0, 0.25, 30.0, SR);
+    let mut grid = (*grid).clone();
+    grid.downbeat_beat_index = 2;
+    load(&h, 0, 1, (audio, Arc::new(grid)), 0.0);
+    // Only the drums are heard.
+    ctl(&h, 0, Control::Volume, ControlValue::Absolute(0.0));
+    let mut pattern = rille_core::drums::Pattern::default();
+    pattern.set_row_text(0, "X...............");
+    assert!(h.send(Command::SetDrumKit(Some(burst_kit()))).is_ok());
+    assert!(h.send(Command::SetDrumPattern { index: 0, pattern }).is_ok());
+    press(&h, 0, Control::Play);
+    run(&mut e, 1.3);
+    drum(&h, Control::DrumPlay, ControlValue::Press(true));
+    let start = (1.3 * f64::from(SR) / BLOCK as f64).ceil() as usize * BLOCK;
+    let out = run(&mut e, 9.0);
+    let s = h.snapshot().drums;
+    assert!(s.playing && s.inst[0].hits >= 4, "{s:?}");
+    let on = onsets(&out);
+    assert!(on.len() >= 4, "{on:?}");
+    for &f in &on {
+        // Track time heard: the deck plays at 1.0x from 0.
+        let t = (start + f) as f64 / f64::from(SR) - LIMITER_FRAMES / f64::from(SR);
+        // Downbeats: beat 2, 6, 10 … = 1.25 s + 2 s * k.
+        let phase = ((t - 1.25) / 2.0).rem_euclid(1.0);
+        let off = if phase > 0.5 { phase - 1.0 } else { phase } * 2000.0;
+        assert!(off.abs() < 1.0, "drum hit at {t:.4} s is {off:.2} ms off the downbeat");
+    }
+}
+
+#[test]
+fn drum_channel_routes_and_meters() {
+    let (h, mut e) = create(SR, BLOCK);
+    assert!(h.send(Command::SetDrumKit(Some(burst_kit()))).is_ok());
+    drum(&h, Control::DrumPfl, ControlValue::Press(true));
+    drum(&h, Control::DrumTrigger(1), ControlValue::Press(true));
+    let mut cue_peak = 0.0f32;
+    assert_no_alloc(|| {
+        let (m, c) = e.render(BLOCK);
+        assert!(m.iter().any(|f| f[0] > 0.3), "drums in the main mix");
+        cue_peak = c.iter().fold(0.0, |p, f| p.max(f[0]));
+    });
+    assert!(cue_peak > 0.1, "and in the headphones");
+    drum(&h, Control::DrumLevel, ControlValue::Absolute(0.0));
+    drum(&h, Control::DrumTrigger(1), ControlValue::Press(true));
+    run(&mut e, 0.1);
+    let out = run(&mut e, 0.1);
+    assert!(out.iter().all(|f| f[0].abs() < 1e-4), "level down");
+    // A new kit replaces the old one, which is freed off the audio thread.
+    let kit = burst_kit();
+    let weak = Arc::downgrade(&kit);
+    assert!(h.send(Command::SetDrumKit(Some(kit))).is_ok());
+    assert!(h.send(Command::SetDrumKit(None)).is_ok());
+    run(&mut e, 0.1);
+    assert!(weak.upgrade().is_some(), "waiting in the garbage queue");
+    h.poll(|_| {});
+    assert!(weak.upgrade().is_none());
+}

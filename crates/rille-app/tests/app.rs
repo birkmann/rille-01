@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rille_analysis::synth::{self, Spec};
-use rille_app::{App, BeatportList, GridEdit, Paths, SortKey, Source, StartOptions};
+use rille_app::{App, BeatportList, GridEdit, Paths, SortKey, Source, StartOptions, UiEvent};
 use rille_core::{BeatClock, Control, ControlEvent, ControlTarget, ControlValue};
 
 fn write_wav(path: &Path, audio: &rille_decode::DecodedAudio) {
@@ -654,5 +654,46 @@ fn load_lock_keeps_tracks_off_decks_on_air() {
     assert!(!app.load_locked(0));
     app.load_track(0, b);
     assert_eq!(app.deck(0).track_id, Some(b));
+    app.shutdown();
+}
+
+#[test]
+fn loading_and_ejecting_update_the_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir_all(&music).unwrap();
+    for (name, seed) in [("a.wav", 1), ("b.wav", 2)] {
+        let r = synth::render(&Spec { sections: vec![(8, 126.0)], seed, ..Spec::default() });
+        write_wav(&music.join(name), &r.audio);
+    }
+    let app = start(dir.path());
+    app.add_music_folder(music);
+    wait_for("scan", 20.0, || app.tracks(Source::Collection, "", SortKey::Title, false).len() == 2);
+    let rows = app.tracks(Source::Collection, "", SortKey::Title, false);
+    let (a, b) = (rows[0].id, rows[1].id);
+    let changed = || {
+        app.poll_ui_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                UiEvent::TracksChanged(ids) => Some(ids),
+                _ => None,
+            })
+            .flatten()
+            .collect::<Vec<_>>()
+    };
+    changed();
+
+    // The rows of the track loaded and of the one it replaced.
+    app.load_track(0, a);
+    assert_eq!(app.deck_track(0), Some(a));
+    assert!(changed().contains(&a));
+    app.load_track(0, b);
+    let ids = changed();
+    assert!(ids.contains(&a) && ids.contains(&b), "{ids:?}");
+    app.eject(0);
+    assert_eq!(app.deck_track(0), None);
+    assert!(changed().contains(&b));
+    // Nothing played for 30 s yet.
+    assert!(!app.played_in_session(a) && !app.played_in_session(b));
     app.shutdown();
 }

@@ -239,6 +239,8 @@ pub struct App {
     analysis_kick: Sender<()>,
     queue: Arc<AnalysisQueue>,
     history_session: Mutex<Option<i64>>,
+    /// Tracks logged to this session's history (see `log_history`).
+    played: RwLock<HashSet<TrackId>>,
     /// What the suggestions were made for, while they are switched on.
     suggest_for: Mutex<SuggestFor>,
     midi: Mutex<Option<MidiManager>>,
@@ -295,6 +297,7 @@ impl App {
             analysis_kick: kick_tx,
             queue: Arc::new(AnalysisQueue::default()),
             history_session: Mutex::new(None),
+            played: RwLock::default(),
             suggest_for: Mutex::default(),
             midi: Mutex::new(None),
             mappings: Mutex::new(mappings),
@@ -383,6 +386,17 @@ impl App {
 
     pub fn deck(&self, deck: u8) -> DeckInfo {
         self.decks[usize::from(deck).min(MAX_DECKS - 1)].read().expect("deck lock").clone()
+    }
+
+    /// The track on a deck, without copying the rest of [`DeckInfo`].
+    pub fn deck_track(&self, deck: u8) -> Option<TrackId> {
+        self.decks[usize::from(deck).min(MAX_DECKS - 1)].read().expect("deck lock").track_id
+    }
+
+    /// Whether a track counts as played in this session (it is in the
+    /// session's history).
+    pub fn played_in_session(&self, id: TrackId) -> bool {
+        self.played.read().expect("played lock").contains(&id)
     }
 
     /// Events for the UI since the last call.
@@ -613,6 +627,9 @@ impl App {
                         let _ = lib.log_played(s, id, d as u8);
                     }
                     drop((session, lib));
+                    self.played.write().expect("played lock").insert(id);
+                    // The row's played mark, play count and last played.
+                    self.refresh_track(id);
                     self.add_recorded_track(id, d);
                 }
             }
@@ -731,11 +748,8 @@ impl App {
             return Vec::new();
         }
         let Some((_, reference)) = self.suggestion_reference() else { return Vec::new() };
-        let mut exclude: HashSet<TrackId> = (0..MAX_DECKS as u8).filter_map(|d| self.deck(d).track_id).collect();
-        let session = *self.history_session.lock().expect("history lock");
-        if let Some(s) = session {
-            exclude.extend(self.library.lock().expect("library lock").history_tracks(s).unwrap_or_default());
-        }
+        let mut exclude: HashSet<TrackId> = (0..MAX_DECKS as u8).filter_map(|d| self.deck_track(d)).collect();
+        exclude.extend(self.played.read().expect("played lock").iter().copied());
         suggest::suggest(&reference, &self.tracks.read().expect("tracks lock").rows, &exclude)
     }
 
@@ -758,8 +772,9 @@ impl App {
             _ => return,
         };
         let seq = self.load_seq.fetch_add(1, Ordering::Relaxed);
-        {
+        let previous = {
             let mut info = self.decks[d].write().expect("deck lock");
+            let previous = info.track_id;
             let revision = info.revision + 1;
             *info = DeckInfo {
                 track_id: Some(id),
@@ -777,8 +792,11 @@ impl App {
                 revision,
                 ..DeckInfo::default()
             };
-        }
+            previous
+        };
         self.notify(UiEvent::DeckChanged(deck));
+        // The rows' deck marks.
+        self.notify(UiEvent::TracksChanged(previous.into_iter().chain([id]).collect()));
         let app = self.clone();
         std::thread::Builder::new()
             .name(format!("load-deck-{deck}"))
@@ -841,10 +859,14 @@ impl App {
         self.send(Command::Unload { deck });
         let d = usize::from(deck).min(MAX_DECKS - 1);
         let mut info = self.decks[d].write().expect("deck lock");
+        let previous = info.track_id;
         let revision = info.revision + 1;
         *info = DeckInfo { revision, ..DeckInfo::default() };
         drop(info);
         self.notify(UiEvent::DeckChanged(deck));
+        if let Some(id) = previous {
+            self.notify(UiEvent::TracksChanged(vec![id]));
+        }
     }
 
     fn update_deck(&self, deck: u8, seq: u64, f: impl FnOnce(&mut DeckInfo)) -> bool {

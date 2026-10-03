@@ -114,6 +114,66 @@ Other options: `packaging/arch/PKGBUILD` (`makepkg -si` in that folder),
 the macOS disk image and attaches them to the GitHub release of every `v*`
 tag; it can also be started by hand from the Actions tab.
 
+### Linux (AppImage)
+
+Download `rille-x86_64.AppImage` from the latest GitHub release (64-bit PC,
+recent distributions) and make it executable. Keeping it in `~/Applications`
+is a convention, any folder works:
+
+```sh
+mkdir -p ~/Applications
+mv ~/Downloads/rille-x86_64.AppImage ~/Applications/
+chmod +x ~/Applications/rille-x86_64.AppImage
+~/Applications/rille-x86_64.AppImage
+```
+
+In a file manager the same works with right-click → Properties → **Allow
+executing file as program**. If it does not start, install `libfuse2`
+(`sudo apt install libfuse2t64` on Ubuntu 24.04 and later, `libfuse2` on
+older Ubuntu and Debian, `fuse2` on Arch and Fedora).
+
+To get rille into the application menu, add a launcher and its icon:
+
+```sh
+cd ~/Applications
+./rille-x86_64.AppImage --appimage-extract usr/share/icons/hicolor/scalable/apps/rille.svg
+install -Dm644 squashfs-root/usr/share/icons/hicolor/scalable/apps/rille.svg \
+    ~/.local/share/icons/hicolor/scalable/apps/rille.svg
+rm -r squashfs-root
+mkdir -p ~/.local/share/applications
+cat > ~/.local/share/applications/rille.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=rille
+Comment=DJ software
+Exec=$HOME/Applications/rille-x86_64.AppImage
+Icon=rille
+Categories=AudioVideo;Audio;
+EOF
+```
+
+For the Traktor Kontrol controllers, install the udev rule as described under
+**Controllers** below. To update, replace the file with the newer AppImage.
+
+**Uninstalling:** delete the AppImage and, if you added them, the launcher,
+the icon and the udev rule:
+
+```sh
+rm ~/Applications/rille-x86_64.AppImage
+rm -f ~/.local/share/applications/rille.desktop \
+      ~/.local/share/icons/hicolor/scalable/apps/rille.svg
+sudo rm -f /etc/udev/rules.d/70-rille-controllers.rules   # only if installed
+```
+
+This keeps your settings, library, analysis, cues and the downloaded stems
+model, so a reinstall picks up where you left off. To remove those as well:
+
+```sh
+rm -r ~/.config/rille ~/.local/share/rille ~/.cache/rille
+```
+
+Recordings in your music folder's `rille recordings` are not touched.
+
 ### macOS
 
 Download `rille-macos-arm64.dmg` from the latest GitHub release (Apple

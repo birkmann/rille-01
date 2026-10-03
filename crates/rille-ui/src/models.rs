@@ -224,6 +224,7 @@ const TRACK_ROLES: &[&str] = &[
     "gridNote",
     "playCount",
     "deckMark",
+    "sessionPlayed",
     "remixer",
     "comment",
     "missing",
@@ -804,11 +805,12 @@ impl qobject::TrackListModel {
             "missing" => QVariant::from(&(r.missing && r.beatport_id.is_none())),
             "deckMark" => {
                 let marks: String = (0..4u8)
-                    .filter(|d| r.id >= 0 && app.deck(*d).track_id == Some(r.id))
+                    .filter(|d| r.id >= 0 && app.deck_track(*d) == Some(r.id))
                     .map(|d| char::from(b'A' + d))
                     .collect();
                 s(&marks)
             }
+            "sessionPlayed" => QVariant::from(&(r.id >= 0 && app.played_in_session(r.id))),
             "rowNumber" => QVariant::from(&(i as i32 + 1)),
             "tagColor" => s(&r.color.map_or(String::new(), |c| format!("#{c:06x}"))),
             "analysisState" => s(state_text(app.analysis_state(r))),

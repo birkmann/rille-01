@@ -22,7 +22,12 @@ Rectangle {
     property int rowHeight: 30
     property int coverSize: 26
     height: rowHeight
-    color: row.model.selected ? Theme.selection : (row.index % 2 ? Theme.panel : Theme.rowAlt)
+    // On a deck: tinted. Played in this session (and off the decks): faded.
+    readonly property bool onDeck: row.model.deckMark.length > 0
+    readonly property bool played: row.model.sessionPlayed && !row.onDeck
+    readonly property color baseColor: row.index % 2 ? Theme.panel : Theme.rowAlt
+    color: row.model.selected ? Theme.selection
+        : (row.onDeck ? Qt.tint(row.baseColor, Qt.rgba(Theme.sync.r, Theme.sync.g, Theme.sync.b, 0.14)) : row.baseColor)
 
     Drag.active: dragArea.drag.active
     Drag.dragType: Drag.Automatic
@@ -55,6 +60,7 @@ Rectangle {
                 readonly property var modelData: row.columns[cell.index] || ({ kind: "text", width: 0 })
                 width: cell.modelData.width
                 height: row.rowHeight
+                opacity: row.played && cell.modelData.kind !== "status" ? 0.45 : 1
                 sourceComponent: {
                     switch (cell.modelData.kind) {
                     case "status": return statusCell
@@ -188,12 +194,40 @@ Rectangle {
                         }
                     }
                 }
-                UiText {
-                    visible: row.model.deckMark.length > 0
-                    text: row.model.deckMark
+                Rectangle {
+                    visible: row.onDeck
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.max(14, deckLabel.implicitWidth + 6)
+                    height: 14
+                    radius: 2
                     color: Theme.sync
-                    font.bold: true
-                    font.pixelSize: Theme.fontSmall
+                    UiText {
+                        id: deckLabel
+                        anchors.centerIn: parent
+                        text: row.model.deckMark
+                        color: Theme.textOnLit
+                        font.bold: true
+                        font.pixelSize: Theme.fontSmall
+                    }
+                    HoverHandler { id: deckHover }
+                    Tip {
+                        visible: deckHover.hovered
+                        text: row.model.deckMark.length > 1
+                            ? "Loaded on decks " + row.model.deckMark.split("").join(", ")
+                            : "Loaded on deck " + row.model.deckMark
+                    }
+                }
+                Icon {
+                    visible: row.played
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: "played"
+                    size: 13
+                    color: Theme.textDim
+                    HoverHandler { id: playedHover }
+                    Tip {
+                        visible: playedHover.hovered
+                        text: "Played in this session"
+                    }
                 }
                 Icon {
                     // Catalog tracks are analyzed when they are loaded.

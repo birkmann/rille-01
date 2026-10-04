@@ -9,7 +9,7 @@ Popup {
     id: about
     modal: true
     focus: true
-    width: 440
+    width: Math.min(440, parent ? parent.width - 16 : 440)
     anchors.centerIn: Overlay.overlay
     padding: 0
 

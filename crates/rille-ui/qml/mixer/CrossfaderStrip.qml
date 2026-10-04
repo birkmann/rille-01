@@ -10,6 +10,8 @@ Rectangle {
     property int mixerWidth: Theme.mixerWidth
     /// Decks A and C play on the left side, B and D on the right.
     property bool fourDecks: false
+    /// Mobile layout: the crossfader takes the free width, no mixer column.
+    property bool compact: false
     color: Theme.panel
     radius: Theme.radius
     border.color: Theme.panelEdge
@@ -18,11 +20,11 @@ Rectangle {
         anchors.fill: parent
         spacing: Theme.gap
 
-        Item { Layout.fillWidth: true; Layout.preferredWidth: 1 }
+        Item { visible: !strip.compact; Layout.fillWidth: true; Layout.preferredWidth: 1 }
 
         RowLayout {
-            Layout.preferredWidth: strip.mixerWidth
-            Layout.fillWidth: false
+            Layout.preferredWidth: strip.compact ? -1 : strip.mixerWidth
+            Layout.fillWidth: strip.compact
             Layout.fillHeight: true
             spacing: 6
             UiText { Layout.leftMargin: 8; text: strip.fourDecks ? "A C" : "A"; color: Theme.textDim; font.bold: true; font.family: Theme.fontCondensed; font.pixelSize: Theme.fontLarge }
@@ -40,11 +42,11 @@ Rectangle {
         }
 
         RowLayout {
-            Layout.fillWidth: true
-            Layout.preferredWidth: 1
+            Layout.fillWidth: !strip.compact
+            Layout.preferredWidth: strip.compact ? -1 : 1
             Layout.fillHeight: true
             spacing: 6
-            Item { Layout.fillWidth: true }
+            Item { visible: !strip.compact; Layout.fillWidth: true }
             Icon { name: "headphones"; size: 16; color: Theme.textDim }
             Knob {
                 size: 24

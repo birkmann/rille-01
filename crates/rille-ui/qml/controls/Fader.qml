@@ -93,6 +93,8 @@ Item {
         id: area
         anchors.fill: parent
         hoverEnabled: fader.tip.length > 0
+        // Inside a scrolling view (mobile mixer) the drag moves the fader.
+        preventStealing: true
         cursorShape: fader.vertical ? Qt.SizeVerCursor : Qt.SizeHorCursor
         property real grab: 0
         function valueAt(mouse) {

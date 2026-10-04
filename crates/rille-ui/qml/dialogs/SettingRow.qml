@@ -2,18 +2,22 @@ import QtQuick
 import QtQuick.Layouts
 import rille.ui
 
-// One setting: name and a short explanation on the left, the control on the right.
-RowLayout {
+// One setting: name and a short explanation on the left, the control on the
+// right; narrow (phone), the control below them.
+GridLayout {
     id: row
     property string label: ""
     property string hint: ""
     default property alias control: slot.data
+    readonly property bool stacked: width < 460
 
     // Always as wide as the card, so controls line up on the right even
     // for rows without an explanation.
     Layout.fillWidth: true
     Layout.preferredWidth: 4000
-    spacing: 16
+    columns: stacked ? 1 : 2
+    columnSpacing: 16
+    rowSpacing: 6
 
     ColumnLayout {
         Layout.fillWidth: true
@@ -30,7 +34,7 @@ RowLayout {
     }
     Item {
         id: slot
-        Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
+        Layout.alignment: row.stacked ? Qt.AlignLeft : Qt.AlignVCenter | Qt.AlignRight
         implicitWidth: childrenRect.width
         implicitHeight: childrenRect.height
     }

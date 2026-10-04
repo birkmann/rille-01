@@ -8,8 +8,9 @@ ApplicationWindow {
     id: window
     width: 1440
     height: 900
-    minimumWidth: 1280
-    minimumHeight: 700
+    // Down to phone size: narrow windows switch to the mobile layout.
+    minimumWidth: 360
+    minimumHeight: 320
     visible: true
     // No system frame (GNOME would draw a light one): the header bar is the
     // title bar, the edges below resize.
@@ -42,6 +43,20 @@ ApplicationWindow {
     // Settings → Decks → Drum machine: shown above or below the decks.
     readonly property int drumsHeight: AppController.drumsRows === 4 ? Theme.drumsHeight4 : Theme.drumsHeight1
     readonly property int drumsRoom: AppController.drumsVisible ? drumsHeight + Theme.gap : 0
+
+    // Mobile layout: one view at a time (`tab`) behind a tab bar, for
+    // phones and windows too small for everything at once. `--mobile` and
+    // `--desktop` force a layout.
+    readonly property bool mobile: AppController.hasArg("mobile")
+        || (!AppController.hasArg("desktop") && Theme.isMobileSize(width, height))
+    readonly property bool landscape: width > height
+    property int tab: 0 // decks, mixer, drums, library
+    // With 4 decks, the pair on the decks view: A/B or C/D.
+    property int deckPair: 0
+    onMobileChanged: Theme.mobile = mobile
+    function deckShown(d: int): bool {
+        return !mobile || !fourDecks || Math.floor(d / 2) === deckPair
+    }
 
     // One state refresh per frame.
     FrameAnimation {
@@ -111,6 +126,7 @@ ApplicationWindow {
             spacing: Theme.gap
 
             HeaderBar {
+                compact: window.mobile
                 Layout.fillWidth: true
                 Layout.preferredHeight: Theme.headerHeight
                 onSettingsRequested: settings.open()
@@ -124,6 +140,7 @@ ApplicationWindow {
             }
 
             RowLayout {
+                visible: !window.mobile
                 Layout.fillWidth: true
                 Layout.preferredHeight: Theme.topRowHeight
                 Layout.fillHeight: false
@@ -134,18 +151,49 @@ ApplicationWindow {
                 FxUnitPanel { unitIndex: 1; Layout.preferredWidth: 1; Layout.fillWidth: true; Layout.fillHeight: true }
             }
 
-            // The drum machine, above the decks (only one panel exists).
+            // The drum machine, above the decks (only one panel exists);
+            // the drums view in the mobile layout.
             Loader {
-                active: AppController.drumsVisible && AppController.drumsPosition === 0
+                active: window.mobile ? window.tab === 2 : (AppController.drumsVisible && AppController.drumsPosition === 0)
                 visible: active
                 sourceComponent: drumPanel
                 Layout.fillWidth: true
-                Layout.preferredHeight: window.drumsHeight
-                Layout.fillHeight: false
+                Layout.preferredHeight: window.mobile ? -1 : window.drumsHeight
+                Layout.fillHeight: window.mobile
             }
 
+            // Mobile, 4 decks: which pair the decks view shows.
             RowLayout {
+                visible: window.mobile && window.tab === 0 && window.fourDecks
                 Layout.fillWidth: true
+                Layout.fillHeight: false
+                spacing: Theme.gap
+                Repeater {
+                    model: ["A · B", "C · D"]
+                    DjButton {
+                        required property string modelData
+                        required property int index
+                        Layout.fillWidth: true
+                        implicitHeight: 36
+                        text: modelData
+                        lit: window.deckPair === index
+                        litColor: Theme.sync
+                        onClicked: window.deckPair = index
+                    }
+                }
+            }
+
+            // Mobile: the decks view, decks stacked in portrait, side by
+            // side in landscape (no mixer between them).
+            GridLayout {
+                id: deckArea
+                visible: !window.mobile || window.tab === 0
+                readonly property bool stacked: window.mobile && !window.landscape
+                // Short decks on a small screen: the compact deck layout.
+                readonly property bool tight: (deckArea.stacked ? (deckArea.height - Theme.gap) / 2 : deckArea.height) < 280
+                Layout.fillWidth: true
+                rowSpacing: Theme.gap
+                columnSpacing: Theme.gap
                 // 4 decks take about half the window, never less than 2 decks.
                 // Taller decks grow as far as the browser keeps its minimum.
                 readonly property int baseHeight: window.fourDecks
@@ -153,22 +201,25 @@ ApplicationWindow {
                     : Theme.deckRowHeight
                 readonly property int room: rootLayout.height - Theme.headerHeight - Theme.topRowHeight - Theme.stripHeight
                     - 4 * Theme.gap - Theme.browserMinHeight - window.drumsRoom
-                Layout.preferredHeight: Math.max(baseHeight, Math.min(baseHeight + window.deckRowExtra, room))
-                Layout.fillHeight: false
-                spacing: Theme.gap
+                Layout.preferredHeight: window.mobile ? -1 : Math.max(baseHeight, Math.min(baseHeight + window.deckRowExtra, room))
+                Layout.fillHeight: window.mobile
                 ColumnLayout {
+                    Layout.row: 0
+                    Layout.column: 0
                     Layout.preferredWidth: 1
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     spacing: Theme.gap
-                    Deck { dc: deckA; compact: window.fourDecks; visible: !deckA.remix; Layout.fillWidth: true; Layout.fillHeight: true }
-                    RemixDeck { dc: deckA; compact: window.fourDecks; visible: deckA.remix; Layout.fillWidth: true; Layout.fillHeight: true }
-                    Deck { dc: deckC; compact: true; visible: window.fourDecks && !deckC.remix; Layout.fillWidth: true; Layout.fillHeight: true }
-                    RemixDeck { dc: deckC; compact: true; visible: window.fourDecks && deckC.remix; Layout.fillWidth: true; Layout.fillHeight: true }
+                    Deck { dc: deckA; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: !deckA.remix && window.deckShown(0); Layout.fillWidth: true; Layout.fillHeight: true }
+                    RemixDeck { dc: deckA; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: deckA.remix && window.deckShown(0); Layout.fillWidth: true; Layout.fillHeight: true }
+                    Deck { dc: deckC; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && !deckC.remix && window.deckShown(2); Layout.fillWidth: true; Layout.fillHeight: true }
+                    RemixDeck { dc: deckC; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && deckC.remix && window.deckShown(2); Layout.fillWidth: true; Layout.fillHeight: true }
                 }
                 // Settings → Audio: hidden when a controller does the mixing.
                 Mixer {
-                    visible: !AppController.mixerHidden
+                    visible: !AppController.mixerHidden && !window.mobile
+                    Layout.row: 0
+                    Layout.column: 1
                     deckA: deckA
                     deckB: deckB
                     deckC: deckC
@@ -179,29 +230,32 @@ ApplicationWindow {
                     Layout.fillHeight: true
                 }
                 ColumnLayout {
+                    Layout.row: deckArea.stacked ? 1 : 0
+                    Layout.column: deckArea.stacked ? 0 : 2
                     Layout.preferredWidth: 1
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     spacing: Theme.gap
-                    Deck { dc: deckB; compact: window.fourDecks; visible: !deckB.remix; Layout.fillWidth: true; Layout.fillHeight: true }
-                    RemixDeck { dc: deckB; compact: window.fourDecks; visible: deckB.remix; Layout.fillWidth: true; Layout.fillHeight: true }
-                    Deck { dc: deckD; compact: true; visible: window.fourDecks && !deckD.remix; Layout.fillWidth: true; Layout.fillHeight: true }
-                    RemixDeck { dc: deckD; compact: true; visible: window.fourDecks && deckD.remix; Layout.fillWidth: true; Layout.fillHeight: true }
+                    Deck { dc: deckB; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: !deckB.remix && window.deckShown(1); Layout.fillWidth: true; Layout.fillHeight: true }
+                    RemixDeck { dc: deckB; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: deckB.remix && window.deckShown(1); Layout.fillWidth: true; Layout.fillHeight: true }
+                    Deck { dc: deckD; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && !deckD.remix && window.deckShown(3); Layout.fillWidth: true; Layout.fillHeight: true }
+                    RemixDeck { dc: deckD; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && deckD.remix && window.deckShown(3); Layout.fillWidth: true; Layout.fillHeight: true }
                 }
             }
 
             // A hardware mixer has the crossfader and headphones.
             CrossfaderStrip {
-                visible: AppController.mixerChannels.length === 0 && !AppController.mixerHidden
+                visible: AppController.mixerChannels.length === 0 && !AppController.mixerHidden && (!window.mobile || window.tab === 0)
+                compact: window.mobile
                 Layout.fillWidth: true
-                Layout.preferredHeight: Theme.stripHeight
+                Layout.preferredHeight: window.mobile ? Theme.stripHeight + 6 : Theme.stripHeight
                 mixerWidth: window.mixerWidth
                 fourDecks: window.fourDecks
             }
 
             // …or below them.
             Loader {
-                active: AppController.drumsVisible && AppController.drumsPosition === 1
+                active: !window.mobile && AppController.drumsVisible && AppController.drumsPosition === 1
                 visible: active
                 sourceComponent: drumPanel
                 Layout.fillWidth: true
@@ -211,12 +265,49 @@ ApplicationWindow {
 
             Browser {
                 id: browserView
+                // Hidden, not unloaded, in the mobile layout: keeps its place.
+                visible: !window.mobile || window.tab === 3
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 onSettingsRequested: page => {
                     settings.page = page
                     settings.open()
                 }
+            }
+
+            Loader {
+                active: window.mobile && window.tab === 1
+                visible: active
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                sourceComponent: MobileMixerPage {
+                    deckA: deckA
+                    deckB: deckB
+                    deckC: deckC
+                    deckD: deckD
+                    fourDecks: window.fourDecks
+                }
+            }
+
+            MiniDeckStrip {
+                visible: window.mobile && window.tab !== 0
+                decks: window.fourDecks ? [deckA, deckB, deckC, deckD] : [deckA, deckB]
+                Layout.fillWidth: true
+                Layout.preferredHeight: Theme.miniStripHeight
+                onDeckRequested: d => {
+                    window.tab = 0
+                    window.deckPair = Math.floor(d / 2)
+                }
+            }
+
+            MobileTabBar {
+                visible: window.mobile
+                current: window.tab
+                drumsPlaying: AppController.drumsPlaying
+                beat: AppController.clockBeat
+                Layout.fillWidth: true
+                Layout.preferredHeight: Theme.tabBarHeight
+                onSelected: i => window.tab = i
             }
         }
     }
@@ -258,6 +349,14 @@ ApplicationWindow {
 
     // First start: no music folder yet.
     Component.onCompleted: {
+        Theme.mobile = window.mobile
+        // `--tab-mixer`, `--tab-drums`, `--tab-library`: start on a view of
+        // the mobile layout (screenshots).
+        var tabs = ["mixer", "drums", "library"]
+        for (var i = 0; i < tabs.length; i++) {
+            if (AppController.hasArg("tab-" + tabs[i]))
+                window.tab = i + 1
+        }
         // `--settings` (or `--settings1`…`--settings4` for a page) opens the settings.
         for (var p = 0; p < settings.pages.length; p++) {
             if (AppController.hasArg(p === 0 ? "settings" : "settings" + p)) {
@@ -279,8 +378,9 @@ ApplicationWindow {
         }
     }
 
-    // `rille --smoke-test`: render briefly, then quit. CI runs this offscreen
-    // with QT_FATAL_WARNINGS=1 so any QML warning fails the build.
+    // `rille --smoke-test`: render briefly, walk through the mobile layout
+    // (portrait, every view, landscape) and back, then quit. CI runs this
+    // offscreen with QT_FATAL_WARNINGS=1 so any QML warning fails the build.
     // `rille --screenshot=<file.png>`: save one frame, then quit.
     Timer {
         running: AppController.smokeTest() || AppController.screenshotPath() !== ""
@@ -288,10 +388,32 @@ ApplicationWindow {
         onTriggered: {
             var path = AppController.screenshotPath()
             if (path === "") {
-                Qt.exit(0)
+                smokeSteps.start()
                 return
             }
             (window.grabItem ? window.grabItem : (settings.opened ? settings.background.parent : (about.opened ? about.background.parent : rootLayout))).grabToImage(result => Qt.exit(result.saveToFile(path) ? 0 : 1))
+        }
+    }
+    Timer {
+        id: smokeSteps
+        // The window size to come back to.
+        property size origin
+        property int step: 0
+        readonly property var steps: [
+            () => { origin = Qt.size(window.width, window.height); window.width = 390; window.height = 844 },
+            () => window.tab = 1, () => window.tab = 2, () => window.tab = 3,
+            () => { window.tab = 0; window.deckPair = 1 },
+            () => { window.width = 844; window.height = 390 },
+            () => window.tab = 1, () => window.tab = 2, () => window.tab = 3,
+            () => { window.tab = 0; window.deckPair = 0; window.width = smokeSteps.origin.width; window.height = smokeSteps.origin.height }
+        ]
+        interval: 150
+        repeat: true
+        onTriggered: {
+            if (step < steps.length)
+                steps[step++]()
+            else
+                Qt.exit(0)
         }
     }
 }

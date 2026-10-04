@@ -158,6 +158,8 @@ Item {
         id: area
         anchors.fill: parent
         hoverEnabled: true
+        // Inside a scrolling view (mobile mixer) the drag turns the knob.
+        preventStealing: true
         property real startY: 0
         property real startValue: 0
         cursorShape: Qt.SizeVerCursor

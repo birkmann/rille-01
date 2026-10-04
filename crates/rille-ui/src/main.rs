@@ -36,7 +36,9 @@ fn bundled_mappings() -> Option<PathBuf> {
 /// `--press=deck.C.remix_cell.1` presses a control after that (once remix
 /// decks have decoded their cells);
 /// `--browse=<folder>` opens a folder in the browser's explorer;
-/// `--size=WxH` sets the window size; `--settings` opens the settings;
+/// `--size=WxH` sets the window size; `--mobile` / `--desktop` force a
+/// layout and `--tab-mixer|drums|library` opens a view of the mobile one;
+/// `--settings` opens the settings;
 /// `--scan` rescans the music folders (with `--delay=<secs>` before a
 /// screenshot, a prepared profile's library gets analyzed first).
 fn demo_loads(app: &std::sync::Arc<App>, args: &[String]) {

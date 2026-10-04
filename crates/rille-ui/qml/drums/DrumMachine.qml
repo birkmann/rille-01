@@ -20,6 +20,12 @@ Rectangle {
     readonly property var hits: AppController.drumsHits.split(",")
     readonly property bool beatOn: ((AppController.clockBeat % 1) + 1) % 1 < 0.5
     readonly property bool external: AppController.mixerChannels.length > 0
+    // Phone width: the steps get a row of their own (two lines of eight),
+    // the sound, channel and kit go below them.
+    readonly property bool narrow: width < 700
+    // Mobile landscape: the steps beside the transport, sound, channel and
+    // kit in a second row.
+    readonly property bool twoRows: Theme.mobile && !narrow
     readonly property var fullNames: ["Bass drum", "Snare drum", "Closed hi-hat", "Open hi-hat", "Clap", "Rim shot", "Tom", "Cymbal"]
 
     function instName(i) {
@@ -52,18 +58,27 @@ Rectangle {
         readonly property string steps: (drums.st.rows || [])[instIndex] || "................"
         readonly property int length: drums.st.length || 16
         readonly property int groupGap: 6
-        readonly property real stepWidth: (width - 15 * 3 - 3 * groupGap) / 16
+        // Narrow: steps 1–8 above 9–16.
+        readonly property int lines: drums.narrow ? 2 : 1
+        readonly property int perLine: 16 / lines
+        readonly property real stepWidth: (width - (perLine - 1) * 3 - (perLine / 4 - 1) * groupGap) / perLine
+        readonly property real lineHeight: (height - (lines - 1) * groupGap) / lines
         property int hoverStep: -1
 
         function stepX(s) {
-            return s * (stepWidth + 3) + Math.floor(s / 4) * groupGap
+            var c = s % perLine
+            return c * (stepWidth + 3) + Math.floor(c / 4) * groupGap
         }
-        function stepAt(x) {
-            for (var s = 0; s < 16; s++) {
+        function stepY(s) {
+            return Math.floor(s / perLine) * (lineHeight + groupGap)
+        }
+        function stepAt(x, y) {
+            var first = y > lineHeight + groupGap / 2 ? perLine * Math.min(lines - 1, Math.floor((y + groupGap / 2) / (lineHeight + groupGap))) : 0
+            for (var s = first; s < first + perLine - 1; s++) {
                 if (x < stepX(s) + stepWidth + 1.5)
                     return s
             }
-            return 15
+            return first + perLine - 1
         }
         function target(kind, s) {
             if (single)
@@ -76,8 +91,9 @@ Rectangle {
             DrumStep {
                 required property int index
                 x: row.stepX(index)
+                y: row.stepY(index)
                 width: row.stepWidth
-                height: row.height
+                height: row.lineHeight
                 number: index + 1
                 on: row.steps[index] !== "."
                 accent: row.steps[index] === "X"
@@ -96,7 +112,7 @@ Rectangle {
             property int last: -1
             property bool value: true
             onPressed: mouse => {
-                var s = row.stepAt(mouse.x)
+                var s = row.stepAt(mouse.x, mouse.y)
                 if (mouse.button === Qt.RightButton || (mouse.modifiers & Qt.ShiftModifier)) {
                     drums.tap(row.target("accent", s))
                     last = -1
@@ -107,7 +123,7 @@ Rectangle {
                 AppController.setValue(row.target("step", s), value ? 1 : 0)
             }
             onPositionChanged: mouse => {
-                row.hoverStep = row.stepAt(mouse.x)
+                row.hoverStep = row.stepAt(mouse.x, mouse.y)
                 if (pressed && last >= 0 && row.hoverStep !== last) {
                     last = row.hoverStep
                     AppController.setValue(row.target("step", last), value ? 1 : 0)
@@ -118,15 +134,21 @@ Rectangle {
         }
     }
 
-    RowLayout {
+    // One row; narrow: transport, steps, sound and channel, kit below
+    // each other (cells apart from the wide layout's, so they never clash).
+    GridLayout {
         anchors.fill: parent
         anchors.margins: 6
-        spacing: 10
+        columnSpacing: 10
+        rowSpacing: drums.narrow || drums.twoRows ? 6 : 0
 
         // --- Transport and pattern -----------------------------------------
         ColumnLayout {
+            Layout.row: 0
+            Layout.column: 0
             Layout.alignment: Qt.AlignVCenter
             Layout.fillWidth: false
+            Layout.fillHeight: false
             spacing: 4
             RowLayout {
                 spacing: 4
@@ -198,8 +220,11 @@ Rectangle {
 
         // Length and swing.
         ColumnLayout {
+            Layout.row: 0
+            Layout.column: 1
             Layout.alignment: Qt.AlignVCenter
             Layout.fillWidth: false
+            Layout.fillHeight: false
             spacing: 2
             UiText {
                 Layout.alignment: Qt.AlignHCenter
@@ -238,7 +263,9 @@ Rectangle {
             }
         }
         Knob {
-            Layout.alignment: Qt.AlignVCenter
+            Layout.row: 0
+            Layout.column: 2
+            Layout.alignment: drums.narrow ? Qt.AlignVCenter | Qt.AlignLeft : Qt.AlignVCenter
             label: "SWING"
             size: 30
             value: drums.st.swing || 0
@@ -252,11 +279,16 @@ Rectangle {
         ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.minimumWidth: 360
+            Layout.row: drums.narrow ? 1 : 0
+            Layout.column: drums.narrow ? 0 : 3
+            Layout.columnSpan: drums.narrow ? 3 : 1
+            Layout.minimumWidth: drums.narrow ? 0 : 280
+            // Narrow: pads up to about 64 px tall, the rest of the room below.
+            Layout.maximumHeight: drums.narrow ? (Theme.mobile ? 34 : 26) + (drums.four ? 4 : 1) * (2 * 64 + 6 + 4) : Number.POSITIVE_INFINITY
             spacing: 4
             RowLayout {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 22
+                Layout.preferredHeight: Theme.mobile ? 30 : 22
                 Layout.fillHeight: false
                 spacing: 3
                 Repeater {
@@ -334,8 +366,11 @@ Rectangle {
 
         // --- The selected instrument's sound -------------------------------
         ColumnLayout {
+            Layout.row: drums.narrow ? 2 : (drums.twoRows ? 1 : 0)
+            Layout.column: drums.narrow || drums.twoRows ? 0 : 4
             Layout.alignment: Qt.AlignVCenter
             Layout.fillWidth: false
+            Layout.fillHeight: false
             spacing: 0
             RowLayout {
                 spacing: 4
@@ -396,9 +431,13 @@ Rectangle {
 
         // --- The drums' channel ---------------------------------------------
         RowLayout {
+            Layout.row: drums.narrow ? 2 : (drums.twoRows ? 1 : 0)
+            Layout.column: drums.narrow || drums.twoRows ? 1 : 5
+            Layout.columnSpan: drums.narrow || drums.twoRows ? 2 : 1
             Layout.alignment: Qt.AlignVCenter
             Layout.preferredHeight: 70
             Layout.fillWidth: false
+            Layout.fillHeight: false
             spacing: 2
             Knob {
                 label: "FILTER"
@@ -459,11 +498,22 @@ Rectangle {
             }
         }
 
+        Item {
+            visible: drums.narrow
+            Layout.row: 4
+            Layout.column: 0
+            Layout.fillHeight: true
+        }
+
         // --- Kit ---------------------------------------------------------------
         ColumnLayout {
-            Layout.alignment: Qt.AlignVCenter
-            Layout.fillWidth: false
-            Layout.preferredWidth: 150
+            Layout.row: drums.narrow ? 3 : (drums.twoRows ? 1 : 0)
+            Layout.column: drums.narrow ? 0 : (drums.twoRows ? 3 : 6)
+            Layout.columnSpan: drums.narrow ? 3 : 1
+            Layout.alignment: drums.twoRows ? Qt.AlignVCenter | Qt.AlignRight : Qt.AlignVCenter
+            Layout.fillWidth: drums.narrow
+            Layout.fillHeight: false
+            Layout.preferredWidth: drums.narrow ? -1 : 150
             spacing: 4
             StyledCombo {
                 id: kitCombo
@@ -517,7 +567,7 @@ Rectangle {
     Popup {
         id: patternPopup
         x: 6
-        y: drums.height - 6
+        y: drums.narrow ? 40 : drums.height - 6
         padding: 6
         background: Rectangle { color: Theme.panelRaised; border.color: Theme.border; radius: 6 }
         Grid {
@@ -657,13 +707,17 @@ Rectangle {
             text: "Clear pattern"
             onTriggered: drums.tap("drum.clear_pattern")
         }
-        StyledMenuSeparator {}
+        StyledMenuSeparator { visible: !Theme.mobile; height: visible ? implicitHeight : 0 }
         StyledMenuItem {
+            visible: !Theme.mobile
+            height: visible ? implicitHeight : 0
             iconName: AppController.drumsPosition === 0 ? "chevron-down" : "chevron-up"
             text: AppController.drumsPosition === 0 ? "Move below the decks" : "Move above the decks"
             onTriggered: AppController.setSetting("drums_position", AppController.drumsPosition === 0 ? "1" : "0")
         }
         StyledMenuItem {
+            visible: !Theme.mobile
+            height: visible ? implicitHeight : 0
             iconName: "eye-off"
             text: "Hide the drum machine"
             onTriggered: AppController.setSetting("drums_visible", "false")

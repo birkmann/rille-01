@@ -26,6 +26,9 @@ Rectangle {
     // Mobile landscape: the steps beside the transport, sound, channel and
     // kit in a second row.
     readonly property bool twoRows: Theme.mobile && !narrow
+    // Wide screens: the layout stops growing here and sits in the middle,
+    // so the steps keep their shape instead of stretching across the panel.
+    readonly property int maxContentWidth: 1400
     readonly property var fullNames: ["Bass drum", "Snare drum", "Closed hi-hat", "Open hi-hat", "Clap", "Rim shot", "Tom", "Cymbal"]
 
     function instName(i) {
@@ -137,8 +140,13 @@ Rectangle {
     // One row; narrow: transport, steps, sound and channel, kit below
     // each other (cells apart from the wide layout's, so they never clash).
     GridLayout {
-        anchors.fill: parent
-        anchors.margins: 6
+        id: grid
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.topMargin: 6
+        anchors.bottomMargin: 6
+        width: Math.min(drums.width - 12, drums.maxContentWidth)
         columnSpacing: 10
         rowSpacing: drums.narrow || drums.twoRows ? 6 : 0
 
@@ -566,7 +574,7 @@ Rectangle {
     // Choose a pattern.
     Popup {
         id: patternPopup
-        x: 6
+        x: grid.x
         y: drums.narrow ? 40 : drums.height - 6
         padding: 6
         background: Rectangle { color: Theme.panelRaised; border.color: Theme.border; radius: 6 }

@@ -210,6 +210,65 @@ p { margin: 0; }
 .drums-more { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; border-top: 1px solid var(--ink-line); padding-top: 28px; }
 .drums-more p { font-size: 16px; line-height: 1.55; color: var(--on-ink-dim); }
 
+/* Maschine Mikro MK2: the controller drawn in CSS, always dark like the
+   hardware. The display is rille's own output (assets/img/mikro-screen.png,
+   16 frames of the playhead at 124 BPM); the pad playhead runs in time with
+   it. */
+.mikro-head { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 64px; align-items: end; }
+.mikro-head .copy { display: flex; flex-direction: column; gap: 20px; }
+.mikro { margin: 0; display: flex; flex-direction: column; gap: 16px; --step: 0.121s; --cycle: calc(16 * var(--step)); --inst: #E5484D; }
+.mikro figcaption { font-size: 13px; color: var(--muted); max-width: 760px; }
+.mk-body {
+  display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.42fr) minmax(0, 1.7fr); gap: clamp(14px, 2.4vw, 32px);
+  padding: clamp(18px, 3vw, 40px); border-radius: 18px; background: #161616;
+  border: 1px solid var(--shot-edge); box-shadow: var(--shot-shadow);
+  font-family: var(--mono); color: #CFCDC6;
+}
+.mk-left { display: flex; flex-direction: column; gap: clamp(8px, 1.2vw, 14px); min-width: 0; }
+.mk-keys { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: clamp(6px, 0.8vw, 10px); }
+.mk-transport { margin-top: clamp(4px, 1vw, 12px); }
+.mk-key {
+  display: grid; place-items: center; min-width: 0; height: clamp(20px, 2.4vw, 30px); padding: 0 2px;
+  border-radius: 5px; background: #2A2A29; border: 1px solid #3A3A38;
+  font-size: clamp(7px, 0.75vw, 10px); letter-spacing: 0.02em; white-space: nowrap; overflow: hidden;
+}
+.mk-keys-top .mk-key { background: #1F1F1E; }
+.mk-key.lit { background: #EDE6D2; color: #111; border-color: #EDE6D2; }
+.mk-play { background: #2DBE6C; color: #0C2416; border-color: #2DBE6C; }
+.mk-rec { color: #F07B78; border-color: #5A2A29; }
+.mk-shift { background: #0E0E0E; }
+.mk-group { background: var(--inst); color: #2A0A0B; border-color: var(--inst); }
+.mk-display { padding: clamp(6px, 0.8vw, 10px); border-radius: 6px; background: #0B0B0B; }
+.mk-screen {
+  aspect-ratio: 2 / 1; width: 100%;
+  background: #4C5BD4 url("assets/img/mikro-screen.png") 0 0 / 100% 1600% no-repeat;
+  image-rendering: pixelated; image-rendering: crisp-edges;
+  animation: mk-screen var(--cycle) steps(16) infinite;
+}
+@keyframes mk-screen { to { background-position: 0 calc(100% * 16 / 15); } }
+.mk-mid { display: flex; flex-direction: column; justify-content: space-between; gap: clamp(6px, 0.8vw, 10px); }
+.mk-mid .mk-key { height: auto; flex: 1; max-height: 34px; }
+.mk-pads { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: clamp(6px, 1vw, 14px); align-content: center; }
+.mk-pad { position: relative; aspect-ratio: 1; border-radius: 8px; background: #262625; border: 1px solid #333331; }
+.mk-pad.on { background: color-mix(in srgb, var(--inst) 38%, #262625); border-color: color-mix(in srgb, var(--inst) 55%, #333331); }
+.mk-pad.acc { background: var(--inst); border-color: var(--inst); box-shadow: 0 0 22px -4px color-mix(in srgb, var(--inst) 70%, transparent); }
+.mk-pad::after {
+  content: ""; position: absolute; inset: -1px; border-radius: inherit; visibility: hidden;
+  background: #F4F3EF; box-shadow: 0 0 24px -2px rgba(244, 243, 239, 0.75);
+  /* Lit for the last sixteenth of the cycle, shifted so pad i lights at step i. */
+  animation: mk-playhead var(--cycle) infinite; animation-delay: calc((var(--i) - 15) * var(--step));
+}
+/* visibility switches at once and runs with the display's frames on the main thread. */
+@keyframes mk-playhead { 0%, 93.74% { visibility: hidden; } 93.75%, 100% { visibility: visible; } }
+.mikro-more { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; border-top: 1px solid var(--fg); padding-top: 28px; }
+.mikro-more p { font-size: 16px; line-height: 1.55; color: var(--text); }
+.keys { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 48px; border-top: 1px solid var(--rule); }
+.keys > div { display: grid; grid-template-columns: minmax(150px, 2fr) minmax(0, 3fr); gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--rule); }
+.keys dt { font-family: var(--mono); font-size: 13px; color: var(--fg); padding-top: 2px; }
+.keys dd { margin: 0; font-size: 15px; color: var(--text); }
+.hw a { text-decoration: none; }
+.hw a:hover { color: var(--muted); }
+
 /* Controllers */
 .hardware { list-style: none; margin: 0; padding: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--fg); column-gap: 48px; }
 .hardware li { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 18px 0; border-bottom: 1px solid var(--rule); }
@@ -331,7 +390,11 @@ p { margin: 0; }
   .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .specs dl { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 8px; }
   .hero { grid-template-columns: minmax(0, 1fr); row-gap: 28px; }
-  .split, .split-reverse, .platforms, .drums-head { grid-template-columns: minmax(0, 1fr); gap: 40px; }
+  .split, .split-reverse, .platforms, .drums-head, .mikro-head { grid-template-columns: minmax(0, 1fr); gap: 40px; }
+  .mikro-head { gap: 24px; }
+  .mk-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); }
+  .mk-mid { display: none; }
+  .keys { grid-template-columns: minmax(0, 1fr); }
   .drums-head { gap: 24px; }
   .split-reverse .shot { order: 2; }
 }
@@ -345,10 +408,15 @@ p { margin: 0; }
   .shot img, .shot picture { border-radius: 8px; }
   .hardware li { flex-direction: column; gap: 4px; }
   .code pre { padding-right: 24px; padding-top: 52px; font-size: 13px; }
-  .drums-more { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .drums-more, .mikro-more { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  /* Phones: the display above the pads. */
+  .mk-body { grid-template-columns: minmax(0, 1fr); }
+  .mk-left .mk-keys { display: none; }
+  .keys > div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .pill, .shot-open img, .lb-img { transition: none; }
+  .mk-screen, .mk-pad::after { animation: none; }
   .shot-open:hover img { transform: none; }
 }

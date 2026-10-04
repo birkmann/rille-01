@@ -309,9 +309,17 @@ instrument: `instrument × 16 + step`), `drum.inst.1`-`8` (select),
 instrument), `drum.pattern.1`-`16`, `drum.pattern_select`, `drum.inst_select`,
 `drum.kit_select`, `drum.length` (relative), `drum.swing`, `drum.clear`,
 `drum.clear_pattern`, `drum.level`, `drum.filter`, `drum.fx_assign.1`-`2`,
-`drum.pfl`, `drum.show`. For LEDs, `drum.step.N` lights the steps that are on
-with the playhead running across them; `drum.step_led.N` and `drum.inst_led.N`
-give RGB pad colors and `drum.meter` the level.
+`drum.pfl`, `drum.show`, `drum.inst_solo/inst_clear.1`-`8`, `drum.repeat.1`-`8`
+(held: rolls) and `drum.repeat_rate`, `drum.length_set.1`-`16`,
+`drum.pattern_copy.1`-`16`, `drum.kit.1`-`16`, `drum.load_selected.1`-`8`,
+`drum.nudge` (relative), `drum.undo`, `drum.redo`, `drum.copy`, `drum.paste`,
+`drum.choke`, `drum.play_bar`, `drum.count_in`, `drum.replace`. Pads mapped with
+`mode = "velocity"` play at the velocity of the hit, and a hard hit records or
+sets an accent. For LEDs, `drum.step.N` lights the steps that are on
+with the playhead running across them; `drum.step_led.N`, `drum.inst_led.N`,
+`drum.trigger_led.N`, `drum.mute_led.N`, `drum.pattern_led.N`,
+`drum.length_led.N`, `drum.kit_led.N` and `drum.sel_led` give RGB pad colors
+and `drum.meter` the level.
 
 **Correcting a grid:** press **GRID** on a deck. The arrows move the grid by
 10/1 ms, ×2/÷2 fix half/double tempo, BEAT HERE puts a beat on the play
@@ -387,19 +395,6 @@ pressure pads, segment and pixel displays); a mapping with such a table makes
 rille look for that device, so a new HID controller needs a mapping file, not a
 new build. See the files in `mappings/` and the field list in `hid.rs`.
 
-The Maschine Mikro MK2 drives the drum machine and opens it when it connects;
-it works next to any DJ controller. Its pads are the selected instrument's 16
-steps (a hard hit sets an accent); PAD MODE turns the top two rows into
-velocity-sensitive instrument pads (A–H as printed) and the bottom two into
-their mutes. Hold a button and press a pad for the rest: GROUP selects, MUTE
-and SOLO mute and solo, ERASE clears, PATTERN picks the pattern (from the
-next bar), DUPLICATE copies it, GRID sets the length, SCENE loads a kit, NOTE
-REPEAT rolls in time, SAMPLING loads the track selected in the library as
-the instrument's sound, SHIFT does what is printed on the pads (UNDO, NUDGE,
-COPY, SEMITONE …). SHIFT+REC counts in to the next downbeat; ERASE+REC
-switches on replace recording. F1–F3, CONTROL and MAIN choose what the encoder edits; the
-display shows all eight instruments' steps and the playhead. The full layout
-is at the top of `mappings/native-instruments-maschine-mikro-mk2.toml`.
 The Traktor Kontrol X1 MK1 is not HID: the kernel's snd-usb-caiaq driver
 claims it. rille reads the driver's input device, rebuilds its events into
 reports for the same kind of `[hid]` table (`transport = "caiaq"`, see
@@ -410,6 +405,40 @@ install it once (a new HID controller needs its own line in the rule):
 
     sudo install -m644 packaging/udev/70-rille-controllers.rules /etc/udev/rules.d/
     sudo udevadm control --reload && sudo udevadm trigger
+
+**Maschine Mikro MK2:** plugged in, it drives the drum machine and opens it;
+it works next to any DJ controller. The pads, button lights, the RGB pads and
+the display are mapped. The display is drawn by rille: pattern, transport, the
+selected instrument, tempo, all eight instruments' steps with the playhead and
+what the encoder edits; while a button is held it shows what the pads do.
+
+![The Mikro's display as rille draws it: the steps with the playhead, and while PATTERN, MUTE or NOTE REPEAT is held](website/assets/img/mikro-screens.png)
+
+Steps, patterns, lengths and kits count from the top-left pad, row by row; the
+instruments are the top two rows, A–H as printed (BD SD CH OH / CP RS LT CY).
+
+| On the Mikro | Does |
+|---|---|
+| Pads | Steps 1–16 of the selected instrument; a hard hit sets an accent |
+| PAD MODE | Top two rows play the instruments with velocity (recorded while REC is on), bottom two rows mute them; again: back to steps (also SHIFT+GROUP, STEP MODE) |
+| GROUP or SELECT + pad | Select the instrument |
+| MUTE / SOLO + pad | Mute / solo the instrument; SHIFT+MUTE (CHOKE): closed hi-hat cuts the open one |
+| ERASE + pad | Clear the instrument's steps; SHIFT+ERASE clears the pattern |
+| PATTERN + pad | Pattern 1–16, from the next bar while playing (tap PATTERN to keep it up) |
+| DUPLICATE + pad | Copy the pattern there |
+| GRID + pad | Pattern length 1–16 |
+| SCENE + pad | Kit 1–16 (BROWSE + encoder: next or previous kit) |
+| NOTE REPEAT + pad | Rolls in time while held; the encoder sets 1/4 … 1/32 (tap NOTE REPEAT to keep it on) |
+| SAMPLING + pad | The track selected in the library as the instrument's sound; a tap on SAMPLING: drums in the headphones |
+| SHIFT + pad | As printed: UNDO, REDO, QUANTIZE (no swing), QUANT 50% (half swing), NUDGE ◄ ►, CLEAR, CLR AUTO (the pattern), COPY, PASTE, SEMITONE − +, OCTAVE − + |
+| PLAY · RESTART | Start/stop; start on the next downbeat or stop at the end of the bar |
+| REC | Live recording; SHIFT+REC (COUNT-IN) from the next downbeat; ERASE+REC (REPLACE) a new take clears the instrument's old steps |
+| ◄ STEP ► · ◄ ► | Previous/next pattern · previous/next instrument |
+| Encoder | F1 level, F2 tune, F3 decay (the selected instrument), CONTROL filter, MAIN volume; SHIFT+turn swing; push: back to the default |
+| VIEW · NAV | Show/hide the drum machine · drums through FX 1 (SHIFT: FX 2) |
+
+The mapping file is generated by `scripts/gen-maschine-mikro-mk2.py`; change
+the script and run it again rather than editing the file.
 
 **Beatport streaming:** sign in under Settings → Beatport (needs a Beatport
 streaming subscription; lossless FLAC needs Professional). The browser's

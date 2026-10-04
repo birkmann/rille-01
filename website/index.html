@@ -41,6 +41,7 @@ try {
       <a href="#sync">Beatgrids</a>
       <a href="#streaming">Streaming</a>
       <a href="#drums">Drums</a>
+      <a href="#mikro">Mikro</a>
       <a href="#controllers">Controllers</a>
       <a href="https://github.com/birkmann/rille-01">Source</a>
       <button class="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="false">
@@ -205,12 +206,82 @@ try {
     <div class="drums-more">
       <p>Three kits come with rille: 909 Core, 808 Boom and Minimal. Make your own from any samples by putting them in a folder, or drop a track from your library onto an instrument.</p>
       <p>Sixteen patterns, swing, accents and live recording. Each instrument has its own tune, decay, level and mute. The drums have their own level, filter, effects and headphone cue.</p>
-      <p>Every button and knob can be mapped to a MIDI controller, with lights for the steps. The drum machine is off until you switch it on in the settings, above or below the decks.</p>
+      <p>Every button and knob can be mapped to a MIDI controller, with lights for the steps. A Maschine Mikro MK2 works without any setup. The drum machine is off until you switch it on in the settings, above or below the decks.</p>
     </div>
     <ul class="tags">
       <li>8 instruments</li><li>16 steps</li><li>16 patterns</li><li>Your own kits</li><li>MIDI mapping</li>
     </ul>
   </div>
+</section>
+
+<section class="wrap section" id="mikro">
+  <div class="mikro-head">
+    <div class="copy">
+      <span class="label">new · maschine mikro mk2</span>
+      <h2>Maschine Mikro MK2</h2>
+    </div>
+    <p class="lead">Plug in a Native Instruments Maschine Mikro MK2 and it plays the drum machine. The pads, buttons, lights and the display are mapped, so there is nothing to set up.</p>
+  </div>
+
+  <figure class="mikro">
+    <div class="mk-body" aria-hidden="true">
+      <div class="mk-left">
+        <div class="mk-keys mk-keys-top"><span class="mk-key">F1</span><span class="mk-key">F2</span><span class="mk-key">F3</span><span class="mk-key lit">CONTROL</span></div>
+        <div class="mk-display"><div class="mk-screen"></div></div>
+        <div class="mk-keys"><span class="mk-key">NAV</span><span class="mk-key">&#9664;</span><span class="mk-key">&#9654;</span><span class="mk-key">MAIN</span></div>
+        <div class="mk-keys"><span class="mk-key mk-group">GROUP</span><span class="mk-key">BROWSE</span><span class="mk-key">SAMPLING</span><span class="mk-key">NOTE REP.</span></div>
+        <div class="mk-keys mk-transport"><span class="mk-key">RESTART</span><span class="mk-key">&#9664;</span><span class="mk-key">&#9654;</span><span class="mk-key">GRID</span></div>
+        <div class="mk-keys"><span class="mk-key mk-play">PLAY</span><span class="mk-key mk-rec">REC</span><span class="mk-key">ERASE</span><span class="mk-key mk-shift">SHIFT</span></div>
+      </div>
+      <div class="mk-mid">
+        <span class="mk-key">SCENE</span><span class="mk-key">PATTERN</span><span class="mk-key">PAD MODE</span><span class="mk-key">VIEW</span>
+        <span class="mk-key">DUPLICATE</span><span class="mk-key">SELECT</span><span class="mk-key">SOLO</span><span class="mk-key">MUTE</span>
+      </div>
+      <div class="mk-pads">
+          <span class="mk-pad" style="--i:0"></span>
+          <span class="mk-pad" style="--i:1"></span>
+          <span class="mk-pad" style="--i:2"></span>
+          <span class="mk-pad" style="--i:3"></span>
+          <span class="mk-pad on acc" style="--i:4"></span>
+          <span class="mk-pad" style="--i:5"></span>
+          <span class="mk-pad" style="--i:6"></span>
+          <span class="mk-pad on" style="--i:7"></span>
+          <span class="mk-pad" style="--i:8"></span>
+          <span class="mk-pad on" style="--i:9"></span>
+          <span class="mk-pad" style="--i:10"></span>
+          <span class="mk-pad" style="--i:11"></span>
+          <span class="mk-pad on acc" style="--i:12"></span>
+          <span class="mk-pad" style="--i:13"></span>
+          <span class="mk-pad" style="--i:14"></span>
+          <span class="mk-pad on" style="--i:15"></span>
+      </div>
+    </div>
+    <figcaption>The snare's steps of the breakbeat pattern on the pads, the playhead running across them. The display is drawn by rille: pattern, tempo, all eight instruments' steps and what the encoder edits.</figcaption>
+  </figure>
+
+  <div class="mikro-more">
+    <p>The 16 pads are the steps of the selected instrument. Hit a pad hard for an accent. PAD MODE turns the top two rows into the eight instruments, played with velocity and recorded live, and the bottom two rows into their mutes.</p>
+    <p>Hold a button and press a pad for everything else: pick a pattern, mute or solo an instrument, set the length, load a kit, or roll an instrument in time. While a button is held, the display shows what the pads do.</p>
+    <p>It works next to your DJ controller and opens the drum machine when it is plugged in. SHIFT and a pad does what is printed on it: undo, redo, nudge, copy, paste and tune.</p>
+  </div>
+
+  <dl class="keys">
+    <div><dt>Pads</dt><dd>Steps 1–16 of the selected instrument; hit hard for an accent</dd></div>
+    <div><dt>PAD MODE</dt><dd>Play the eight instruments A–H and mute them</dd></div>
+    <div><dt>GROUP + pad</dt><dd>Select an instrument</dd></div>
+    <div><dt>MUTE · SOLO + pad</dt><dd>Mute or solo an instrument</dd></div>
+    <div><dt>PATTERN + pad</dt><dd>Next pattern, starting on the next bar</dd></div>
+    <div><dt>NOTE REPEAT + pad</dt><dd>Rolls in time, 1/4 to 1/32</dd></div>
+    <div><dt>GRID + pad</dt><dd>Pattern length</dd></div>
+    <div><dt>SCENE + pad</dt><dd>Load a kit</dd></div>
+    <div><dt>SAMPLING + pad</dt><dd>The track selected in the library as the instrument's sound</dd></div>
+    <div><dt>F1 · F2 · F3</dt><dd>The encoder edits level, tune or decay</dd></div>
+    <div><dt>CONTROL · MAIN</dt><dd>The encoder edits the drums' filter or volume</dd></div>
+    <div><dt>RESTART</dt><dd>Start on the next downbeat, stop at the end of the bar</dd></div>
+    <div><dt>SHIFT + REC</dt><dd>Count-in: record from the next downbeat</dd></div>
+    <div><dt>ERASE + REC</dt><dd>Replace: a new take clears the instrument's old steps</dd></div>
+  </dl>
+  <p class="note">Maschine and Native Instruments are trademarks of their owners; rille is an independent project. On Linux the Mikro needs the same one-time permission setting as the Traktor controllers.</p>
 </section>
 
 <section class="wrap section" id="controllers">
@@ -220,7 +291,7 @@ try {
     <li><span class="hw">Allen &amp; Heath Xone:K2</span><span class="proto">4 decks</span></li>
     <li><span class="hw">Allen &amp; Heath Xone:96</span><span class="proto">hardware mixer</span></li>
     <li><span class="hw">Native Instruments Traktor Kontrol F1</span><span class="proto">remix decks</span></li>
-    <li><span class="hw">Native Instruments Maschine Mikro MK2</span><span class="proto">drum machine</span></li>
+    <li><span class="hw"><a href="#mikro">Native Instruments Maschine Mikro MK2</a></span><span class="proto">drum machine</span></li>
     <li><span class="hw">Native Instruments Traktor Kontrol Z1</span><span class="proto">mixer · sound card</span></li>
     <li><span class="hw">Native Instruments Traktor Kontrol X1 MK2</span><span class="proto">deck control</span></li>
     <li><span class="hw">Native Instruments Traktor Kontrol X1 MK1</span><span class="proto">deck control</span></li>

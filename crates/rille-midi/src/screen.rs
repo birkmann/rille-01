@@ -148,7 +148,7 @@ fn drum(c: &mut Canvas, s: &DrumScreen, values: &dyn ValueSource, modifier: &dyn
     ]
     .into_iter()
     .find(|m| modifier(m));
-    let area = Area { y: 18, h: 38 };
+    let area = Area { y: 17, h: 40 };
     match layer {
         Some("shift") => labels(c, area, &SHIFT_LABELS, &[false; 16]),
         Some(m @ ("erase" | "mute" | "solo" | "group" | "select" | "sampling")) => {
@@ -259,10 +259,15 @@ fn patterns(c: &mut Canvas, a: Area, s: &DrumScreen, copy: bool, beat_on: bool) 
         let lit = current || (s.queued == Some(p as u8) && beat_on);
         if lit {
             c.fill(x, y, w - 2, h - 1, true);
-        } else if s.used & (1 << p) != 0 {
-            c.frame(x, y, w - 2, h - 1);
         }
-        let label = format!("{}{:02}", if copy && p != usize::from(wanted) { '>' } else { 'P' }, p + 1);
+        // P for a pattern with steps, a dot for an empty one; > for where a
+        // copy can go.
+        let mark = match () {
+            _ if copy && p != usize::from(wanted) => '>',
+            _ if s.used & (1 << p) != 0 || current => 'P',
+            _ => '.',
+        };
+        let label = format!("{mark}{:02}", p + 1);
         c.text_color(x + (w - 2 - text_width(&label)) / 2, y + (h - 8) / 2, &label, !lit);
     }
 }

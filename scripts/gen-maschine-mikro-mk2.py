@@ -43,9 +43,9 @@ def pad_number(pos):
 
 
 def pad_input(pos):
-    """The note of the pad at `pos`: the device numbers pads as printed, from
-    0."""
-    return PAD_NOTE + pad_number(pos) - 1
+    """The note of the pad at `pos`: the device numbers pads like their LEDs,
+    top left first (pads 13, 9, 5, 1 down the left are 0, 4, 8, 12)."""
+    return PAD_NOTE + pos
 
 
 # Pad colours (rille_core::remix::led_code): 1 + colour index, + 0x20 bright.

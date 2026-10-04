@@ -55,13 +55,17 @@ def code(color, bright):
 
 WHITE, RED, YELLOW, GREEN, SKY = 0, 1, 4, 6, 9
 
-# What SHIFT + pad does, by printed pad number: target, step (relative) and
-# colour of the pad.
+# What SHIFT + pad does, by printed pad number: target, step (relative, or
+# ("set", value) for a fixed value) and colour of the pad.
 SHIFT = {
     1: ("drum.undo", None, WHITE),
     2: ("drum.redo", None, WHITE),
     3: ("drum.undo", None, WHITE),
     4: ("drum.redo", None, WHITE),
+    # The steps are on the grid already: QUANTIZE straightens the swing,
+    # QUANT 50% sets half of it.
+    5: ("drum.swing", ("set", 0.0), SKY),
+    6: ("drum.swing", ("set", 0.5), SKY),
     7: ("drum.nudge", -1, SKY),
     8: ("drum.nudge", 1, SKY),
     9: ("drum.clear", None, RED),
@@ -148,6 +152,9 @@ HEADER = '''\
 #     GROUP / SELECT    select the instrument
 #     MUTE / SOLO       mute / solo the instrument
 #     ERASE             clear the instrument's steps (SHIFT+ERASE: the pattern)
+#     SAMPLING          load the track selected in the library as the
+#                       instrument's sound (a tap on SAMPLING: drums in the
+#                       headphones)
 #     PATTERN           pattern 1-16, from the next bar while playing
 #                       (tap PATTERN to keep it up, tap again to leave)
 #     DUPLICATE         copy the pattern to 1-16
@@ -157,10 +164,13 @@ HEADER = '''\
 #                       REPEAT to keep it on); the encoder sets the rate
 #     SHIFT             as printed: UNDO, REDO, NUDGE < >, CLEAR (the
 #                       instrument), CLR AUTO (the pattern), COPY, PASTE,
-#                       SEMITONE - +, OCTAVE - + (tune of the instrument)
+#                       SEMITONE - +, OCTAVE - + (tune of the instrument),
+#                       QUANTIZE (straight: no swing), QUANT 50% (half swing)
 #   PLAY                start/stop, in time with the master clock
 #   RESTART             start on the next downbeat / stop at the end of the bar
-#   REC                 live recording
+#   REC                 live recording; SHIFT+REC (COUNT-IN): from the next
+#                       downbeat; ERASE+REC (REPLACE, lit on ERASE): the first
+#                       hit of an instrument clears its old steps
 #   < STEP / STEP >     previous/next pattern
 #   < / > (display)     previous/next instrument
 #   ENCODER             what the lit button chose: F1 level, F2 tune, F3 decay
@@ -171,7 +181,6 @@ HEADER = '''\
 #                       kit or instrument. Push: back to the default value.
 #   VIEW                show/hide the drum machine
 #   NAV                 drums through FX 1 (SHIFT: FX 2)
-#   SAMPLING            drums in the headphones
 #   SHIFT+MUTE          CHOKE: closed hi-hat cuts the open one
 #
 # The display shows pattern, transport, instrument, tempo, all steps with
@@ -202,7 +211,7 @@ def main():
     emit(HEADER)
 
     emit("# --- Modifiers ---------------------------------------------------------\n")
-    for m in ["shift", "erase", "grid", "group", "select", "mute", "solo", "duplicate", "scene", "browse"]:
+    for m in ["shift", "erase", "grid", "group", "select", "mute", "solo", "duplicate", "scene", "browse", "sampling"]:
         inp(f"modifier:{m}", note=B[m])
     for m in ["pattern", "note_repeat"]:
         inp(f"modifier:{m}", note=B[m], latch=True, hold=True)
@@ -227,6 +236,8 @@ def main():
     inp("drum.play", note=B["play"])
     inp("drum.play_bar", note=B["restart"])
     inp("drum.record", note=B["rec"])
+    inp("drum.count_in", note=B["rec"], condition="shift")
+    inp("drum.replace", note=B["rec"], condition="erase")
     inp("drum.clear_pattern", note=B["erase"], condition="shift")
     inp("drum.choke", note=B["mute"], condition="shift")
     inp("drum.pattern_select", note=B["step_left"], step=-1)
@@ -236,7 +247,8 @@ def main():
     inp("drum.show", note=B["view"])
     inp("drum.fx_assign.1", note=B["nav"])
     inp("drum.fx_assign.2", note=B["nav"], condition="shift")
-    inp("drum.pfl", note=B["sampling"])
+    # A tap: drums in the headphones; held with a pad: load a sample.
+    inp("drum.pfl", note=B["sampling"], tap=True)
 
     emit("# --- Encoder: turn ----------------------------------------------------\n")
     enc = {"encoding": "twos_complement"}
@@ -288,6 +300,7 @@ def main():
                 ("mute", "inst_mute"),
                 ("solo", "inst_solo"),
                 ("erase", "inst_clear"),
+                ("sampling", "load_selected"),
             ]:
                 inp(f"drum.{target}.{inst}", note=note, condition=m)
         else:
@@ -302,6 +315,8 @@ def main():
             target, step, _ = shift
             if step is None:
                 inp(target, note=note, condition="shift")
+            elif isinstance(step, tuple):
+                inp(target, note=note, condition="shift", set=step[1])
             else:
                 inp(target, note=note, condition="shift", mode="relative", step=step)
 
@@ -314,7 +329,7 @@ def main():
         if top:
             outp(f"drum.trigger_led.{inst}", 2, n, condition="play", raw=True)
             outp(f"drum.trigger_led.{inst}", 2, n, condition="note_repeat", raw=True)
-            for m in ["group", "select", "erase"]:
+            for m in ["group", "select", "erase", "sampling"]:
                 outp(f"drum.inst_led.{inst}", 2, n, condition=m, raw=True)
             for m in ["mute", "solo"]:
                 outp(f"drum.mute_led.{inst}", 2, n, condition=m, raw=True)
@@ -322,7 +337,7 @@ def main():
             outp(f"drum.mute_led.{inst}", 2, n, condition="play", raw=True)
             outp(f"drum.mute_led.{inst}", 2, n, condition="note_repeat", raw=True)
             # Held instrument layers use the top rows only.
-            for m in ["group", "select", "erase", "mute", "solo"]:
+            for m in ["group", "select", "erase", "sampling", "mute", "solo"]:
                 outp("drum.copy", 2, n, condition=m, off=0)
         outp(f"drum.pattern_led.{n}", 2, n, condition="pattern", raw=True)
         outp(f"drum.pattern_led.{n}", 2, n, condition="duplicate", raw=True)
@@ -358,7 +373,7 @@ def main():
         ("modifier:grid", "grid"),
         ("drum.play", "play"),
         ("drum.record", "rec"),
-        ("modifier:erase", "erase"),
+        ("drum.replace", "erase"),
         ("modifier:shift", "shift"),
         ("modifier:scene", "scene"),
         ("modifier:pattern", "pattern"),
@@ -373,6 +388,9 @@ def main():
     # While SHIFT is held, the buttons with a SHIFT function show its state.
     outp("drum.fx_assign.2", 1, LED["nav"], condition="shift", off=10)
     outp("drum.choke", 1, LED["mute"], condition="shift", off=10)
+    # Held buttons lit while down, over what their LED shows otherwise.
+    outp("modifier:erase", 1, LED["erase"], condition="erase", off=10)
+    outp("modifier:sampling", 1, LED["sampling"], condition="sampling", off=10)
 
     OUT.write_text("\n".join(out).rstrip() + "\n")
     print(f"wrote {OUT}")

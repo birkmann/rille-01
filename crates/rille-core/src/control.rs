@@ -268,6 +268,14 @@ pub enum Control {
     DrumKitLed(u8),
     /// Read-only colour of the selected instrument (bright).
     DrumSelLed,
+    /// Count-in: recording starts on the next downbeat (the drums start
+    /// there too if they were stopped). Again: cancel.
+    DrumCountIn,
+    /// Replace recording (toggles): while recording, the first hit of an
+    /// instrument clears its old steps.
+    DrumReplace,
+    /// Load the track selected in the library as instrument 1..=8's sound.
+    DrumLoadSelected(u8),
 }
 
 impl Control {
@@ -376,6 +384,9 @@ impl Control {
                 | DrumLengthLed(_)
                 | DrumKitLed(_)
                 | DrumSelLed
+                | DrumCountIn
+                | DrumReplace
+                | DrumLoadSelected(_)
         )
     }
 
@@ -523,6 +534,8 @@ impl Control {
             DrumChoke,
             DrumPlayBar,
             DrumSelLed,
+            DrumCountIn,
+            DrumReplace,
         ]);
         for f in [DrumStep, DrumAccent, DrumStepLed] {
             v.extend((1..=STEPS as u8).map(f));
@@ -543,6 +556,7 @@ impl Control {
             DrumRepeat,
             DrumTriggerLed,
             DrumMuteLed,
+            DrumLoadSelected,
         ] {
             v.extend((1..=INSTRUMENTS as u8).map(f));
         }
@@ -694,6 +708,9 @@ impl Control {
             DrumLengthLed(n) => ("length_led", Some(n)),
             DrumKitLed(n) => ("kit_led", Some(n)),
             DrumSelLed => ("sel_led", None),
+            DrumCountIn => ("count_in", None),
+            DrumReplace => ("replace", None),
+            DrumLoadSelected(n) => ("load_selected", Some(n)),
         }
     }
 

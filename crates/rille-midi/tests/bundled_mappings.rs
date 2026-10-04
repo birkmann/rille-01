@@ -123,7 +123,7 @@ fn maschine_mikro_mk2() {
         v
     };
     let hit = |pad| [pads(pad, 3800), pads(pad, 3800), pads(pad, 3800), pads(pad, 0)];
-    let (shift, pad_mode, f1, pattern) = (0, 29, 23, 30);
+    let (shift, erase, rec, sampling, pad_mode, f1, pattern) = (0, 1, 2, 13, 29, 23, 30);
     let mut r = vec![buttons(&[], 0)];
     // Pad 13 (top left): step 1.
     r.extend(hit(0));
@@ -136,6 +136,13 @@ fn maschine_mikro_mk2() {
     r.extend(hit(12));
     // The encoder: the filter; after F1 the selected instrument's level.
     r.extend([buttons(&[], 1), buttons(&[f1], 1), buttons(&[], 1), buttons(&[], 2)]);
+    // SHIFT+REC: count-in; ERASE+REC: replace.
+    r.extend([buttons(&[shift], 2), buttons(&[shift, rec], 2), buttons(&[], 2)]);
+    r.extend([buttons(&[erase], 2), buttons(&[erase, rec], 2), buttons(&[], 2)]);
+    // SAMPLING + pad 13: load into BD; a tap on SAMPLING: headphones.
+    r.push(buttons(&[sampling], 2));
+    r.extend(hit(0));
+    r.extend([buttons(&[], 2), buttons(&[sampling], 2), buttons(&[], 2)]);
     // PATTERN held + pad 16 (top right): pattern 4.
     r.push(buttons(&[pattern], 2));
     r.extend(hit(3));
@@ -148,6 +155,10 @@ fn maschine_mikro_mk2() {
             "drum.undo",
             "drum.filter",
             "drum.sel_level",
+            "drum.count_in",
+            "drum.replace",
+            "drum.load_selected.1",
+            "drum.pfl",
             "drum.pattern.4"
         ]
     );

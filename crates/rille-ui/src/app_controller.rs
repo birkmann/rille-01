@@ -812,6 +812,11 @@ impl qobject::AppController {
                         (rille_core::Control::BrowserToggleNode, ControlValue::Press(true)) => "toggle".into(),
                         // BROWSE + pad on a remix controller: the selected
                         // track into that pad's cell.
+                        // SAMPLING + pad on a drum controller: the selected
+                        // track as that instrument's sound.
+                        (rille_core::Control::DrumLoadSelected(n @ 1..=8), v) if v.is_press() => {
+                            format!("drum:{}", n - 1)
+                        }
                         (rille_core::Control::RemixPadLoad(pad), ControlValue::Press(true)) => {
                             let deck = ev.target.unit;
                             let Some(cell) = app.remix_pad_cell(deck, pad) else { continue };

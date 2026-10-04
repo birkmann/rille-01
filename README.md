@@ -394,8 +394,10 @@ velocity-sensitive instrument pads (A–H as printed) and the bottom two into
 their mutes. Hold a button and press a pad for the rest: GROUP selects, MUTE
 and SOLO mute and solo, ERASE clears, PATTERN picks the pattern (from the
 next bar), DUPLICATE copies it, GRID sets the length, SCENE loads a kit, NOTE
-REPEAT rolls in time, SHIFT does what is printed on the pads (UNDO, NUDGE,
-COPY, SEMITONE …). F1–F3, CONTROL and MAIN choose what the encoder edits; the
+REPEAT rolls in time, SAMPLING loads the track selected in the library as
+the instrument's sound, SHIFT does what is printed on the pads (UNDO, NUDGE,
+COPY, SEMITONE …). SHIFT+REC counts in to the next downbeat; ERASE+REC
+switches on replace recording. F1–F3, CONTROL and MAIN choose what the encoder edits; the
 display shows all eight instruments' steps and the playhead. The full layout
 is at the top of `mappings/native-instruments-maschine-mikro-mk2.toml`.
 The Traktor Kontrol X1 MK1 is not HID: the kernel's snd-usb-caiaq driver

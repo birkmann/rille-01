@@ -239,6 +239,14 @@ pub struct DrumMachine {
     wait_bar: bool,
     start_at: Option<i64>,
     stop_at: Option<i64>,
+    /// Count-in: recording waits for the next downbeat (`count_in` until
+    /// the step lattice is known, then the absolute step).
+    count_in: bool,
+    record_from: Option<i64>,
+    /// Replace recording, and the instruments whose old steps this
+    /// recording already cleared.
+    replace: bool,
+    replaced: u8,
     undo: History,
     redo: History,
     /// Frames rendered, and when and on which pattern the last edit was
@@ -304,6 +312,10 @@ impl DrumMachine {
             wait_bar: false,
             start_at: None,
             stop_at: None,
+            count_in: false,
+            record_from: None,
+            replace: false,
+            replaced: 0,
             undo: History::new(),
             redo: History::new(),
             frames: 0,
@@ -430,7 +442,12 @@ impl DrumMachine {
     }
 
     fn recording(&self) -> bool {
-        self.playing && self.record && self.start_at.is_none() && !self.wait_bar
+        self.playing
+            && self.record
+            && self.start_at.is_none()
+            && !self.wait_bar
+            && !self.count_in
+            && self.record_from.is_none()
     }
 
     /// Writes the step nearest to `pos` (beats from the origin) and keeps
@@ -441,6 +458,10 @@ impl DrumMachine {
         let s = if (step_time(s0 + 1, swing) - pos).abs() < (pos - step_time(s0, swing)).abs() { s0 + 1 } else { s0 };
         self.before_edit(self.current);
         let pat = &mut self.patterns[self.current];
+        if self.replace && self.replaced & (1 << inst) == 0 {
+            self.replaced |= 1 << inst;
+            pat.clear_row(inst);
+        }
         let step = pattern_step(s, pat.length());
         if accent {
             pat.set_accent(inst, step, true);
@@ -592,9 +613,14 @@ impl DrumMachine {
                 Some(Resync::FromStart) => self.next_step = Self::first_step_from(b0 - origin, swing),
                 None => {}
             }
+            let next_bar = (self.next_step + BAR_STEPS - 1).div_euclid(BAR_STEPS) * BAR_STEPS;
             if self.wait_bar {
                 self.wait_bar = false;
-                self.start_at = Some((self.next_step + BAR_STEPS - 1).div_euclid(BAR_STEPS) * BAR_STEPS);
+                self.start_at = Some(next_bar);
+            }
+            if self.count_in {
+                self.count_in = false;
+                self.record_from = Some(self.start_at.unwrap_or(next_bar));
             }
             if resync != Some(Resync::FromEnd) && d > 0.0 {
                 loop {
@@ -608,6 +634,9 @@ impl DrumMachine {
                     }
                     if self.start_at.is_some_and(|s| self.next_step >= s) {
                         self.start_at = None;
+                    }
+                    if self.record_from.is_some_and(|s| self.next_step >= s) {
+                        self.record_from = None;
                     }
                     if t >= b0 - CATCH_UP_BEATS {
                         self.fire_repeats(t, origin, frame, &mut done);
@@ -655,6 +684,8 @@ impl DrumMachine {
         self.wait_bar = false;
         self.start_at = None;
         self.stop_at = None;
+        self.count_in = false;
+        self.record_from = None;
         if let Some(q) = self.queued.take() {
             self.current = q;
             self.edited();
@@ -720,6 +751,36 @@ impl DrumMachine {
             Control::DrumRecord => {
                 if press {
                     self.record = !self.record;
+                    self.replaced = 0;
+                    self.count_in = false;
+                    self.record_from = None;
+                }
+            }
+            Control::DrumCountIn => {
+                if press {
+                    if self.record && (self.count_in || self.record_from.is_some()) {
+                        // Pressed again while counting in: cancel.
+                        self.record = false;
+                        self.count_in = false;
+                        self.record_from = None;
+                        if self.wait_bar || self.start_at.is_some() {
+                            self.stop();
+                        }
+                    } else {
+                        self.record = true;
+                        self.replaced = 0;
+                        self.count_in = true;
+                        if !self.playing {
+                            self.start();
+                            self.wait_bar = true;
+                        }
+                    }
+                }
+            }
+            Control::DrumReplace => {
+                if press {
+                    self.replace = !self.replace;
+                    self.replaced = 0;
                 }
             }
             Control::DrumStep(n) | Control::DrumAccent(n) | Control::DrumCell(n) | Control::DrumCellAccent(n) => {
@@ -928,6 +989,7 @@ impl DrumMachine {
             | Control::DrumLengthLed(_)
             | Control::DrumKitLed(_)
             | Control::DrumSelLed
+            | Control::DrumLoadSelected(_)
             | Control::DrumMeter
             | Control::DrumKitSelect
             | Control::DrumKit(_)
@@ -999,6 +1061,8 @@ impl DrumMachine {
             repeat_rate: self.repeat_rate as u8,
             waiting: self.playing && (self.wait_bar || self.start_at.is_some()),
             stopping: self.stop_at.is_some(),
+            counting_in: self.playing && self.record && (self.count_in || self.record_from.is_some()),
+            replace: self.replace,
             can_undo: self.undo.len > 0,
             can_redo: self.redo.len > 0,
         }
@@ -1332,6 +1396,40 @@ mod tests {
         assert!(m.playing && m.stop_at.is_some());
         run(&mut m, 400, 800, &mut out);
         assert!(!m.playing);
+    }
+
+    #[test]
+    fn count_in_records_from_the_next_downbeat() {
+        let mut m = machine(Pattern::default());
+        let mut out = Vec::new();
+        run(&mut m, 0, 10, &mut out);
+        m.control(Control::DrumCountIn, ControlValue::Press(true));
+        assert!(m.playing && m.record);
+        run(&mut m, 10, 20, &mut out);
+        // During the count-in a hit plays but is not written.
+        m.control(Control::DrumTrigger(1), ControlValue::Press(true));
+        run(&mut m, 20, 30, &mut out);
+        assert!(m.patterns[0].is_empty());
+        // From bar 2 on, hits are recorded.
+        run(&mut m, 30, 16 * SIXTEENTH / N + 10, &mut out);
+        assert!(m.recording());
+        m.control(Control::DrumTrigger(2), ControlValue::Press(true));
+        assert!(m.patterns[0].has_steps(1));
+    }
+
+    #[test]
+    fn replace_clears_an_instruments_old_steps_on_its_first_hit() {
+        let mut m = machine(row(0, "x.x.x.x.x.x.x.x."));
+        m.control(Control::DrumReplace, ControlValue::Press(true));
+        m.control(Control::DrumRecord, ControlValue::Press(true));
+        m.control(Control::DrumPlay, ControlValue::Press(true));
+        let mut out = Vec::new();
+        run(&mut m, 0, 30, &mut out);
+        m.control(Control::DrumTrigger(1), ControlValue::Press(true));
+        assert_eq!(m.patterns[0].steps[0].count_ones(), 1, "only the new hit");
+        run(&mut m, 30, 60, &mut out);
+        m.control(Control::DrumTrigger(1), ControlValue::Press(true));
+        assert_eq!(m.patterns[0].steps[0].count_ones(), 2, "later hits add up");
     }
 
     #[test]

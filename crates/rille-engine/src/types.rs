@@ -169,10 +169,12 @@ pub enum Command {
     },
     /// The drum machine's samples (`None` = silent).
     SetDrumKit(Option<Arc<DrumKit>>),
-    /// Replace drum pattern `index` (`0..16`).
+    /// Replace drum pattern `index` (`0..16`); `undo`: an edit DRUM UNDO
+    /// can take back (a paste, not a restore).
     SetDrumPattern {
         index: u8,
         pattern: rille_core::drums::Pattern,
+        undo: bool,
     },
     /// Restore the drum machine's levels, tuning, pattern and channel.
     SetDrumParams(DrumParams),

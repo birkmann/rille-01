@@ -872,7 +872,7 @@ fn drum_pattern_follows_the_leaders_bars() {
     let mut pattern = rille_core::drums::Pattern::default();
     pattern.set_row_text(0, "X...............");
     assert!(h.send(Command::SetDrumKit(Some(burst_kit()))).is_ok());
-    assert!(h.send(Command::SetDrumPattern { index: 0, pattern }).is_ok());
+    assert!(h.send(Command::SetDrumPattern { index: 0, pattern, undo: false }).is_ok());
     press(&h, 0, Control::Play);
     run(&mut e, 1.3);
     drum(&h, Control::DrumPlay, ControlValue::Press(true));

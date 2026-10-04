@@ -598,7 +598,7 @@ impl Deck {
 
     /// Transport controls. Returns an event to report, if any.
     pub fn control(&mut self, c: Control, v: ControlValue, m: &Modes, ctx: &RenderCtx) -> Option<Event> {
-        let press = matches!(v, ControlValue::Press(true));
+        let press = v.is_press();
         let release = matches!(v, ControlValue::Press(false));
         let (deck, track_id) = (self.index, self.track_id);
         if self.remix.is_some() && self.remix_control(c, v, ctx) {
@@ -845,7 +845,7 @@ impl Deck {
     /// Remix deck transport and slot controls; `false` if `c` is left to
     /// the common deck controls (tempo, keylock, tick…).
     fn remix_control(&mut self, c: Control, v: ControlValue, ctx: &RenderCtx) -> bool {
-        let press = matches!(v, ControlValue::Press(true));
+        let press = v.is_press();
         let beat = self.beat().unwrap_or(0.0);
         let Some(r) = self.remix.as_mut() else { return false };
         let cell = match c {

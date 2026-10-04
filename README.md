@@ -76,7 +76,9 @@ automatically and precisely enough that sync never drifts.**
 - **Controllers:** MIDI mappings (bundled: Pioneer DDJ-400, Hercules DJControl
   Inpulse 200, Allen & Heath Xone:K2 as a 4-deck controller, and a documented
   generic template), the Native Instruments Traktor Kontrol Z1, X1 MK2 and F1
-  (remix decks, RGB pads, segment displays) over HID, the Traktor Kontrol X1
+  (remix decks, RGB pads, segment displays) over HID, the Maschine Mikro MK2
+  for the drum machine (step sequencer and finger drumming on its pressure
+  pads, its display showing the pattern), the Traktor Kontrol X1
   MK1 through the kernel's snd-usb-caiaq driver, MIDI learn, soft
   takeover, jog wheels, LED feedback, hotplug. A HID controller is described
   in its mapping file, so others can be added without changing the code.
@@ -160,7 +162,7 @@ Categories=AudioVideo;Audio;
 EOF
 ```
 
-For the Traktor Kontrol controllers, install the udev rule as described under
+For the Traktor Kontrol and Maschine controllers, install the udev rule as described under
 **Controllers** below. To update, replace the file with the newer AppImage.
 To remove it, see [Uninstalling](#uninstalling).
 
@@ -375,14 +377,27 @@ Xone:K2 on its X:LINK port works through the Xone:96's USB MIDI with the
 K2 mapping included in `mappings/allen-heath-xone-96.toml` (a mapping file
 can pull in another with `include = ["…"]`).
 
-The Traktor Kontrol Z1, X1 MK2 and F1 speak HID rather than MIDI. rille reads them
+The Traktor Kontrol Z1, X1 MK2 and F1 and the Maschine Mikro MK2 speak HID
+rather than MIDI. rille reads them
 directly and presents them as MIDI (`crates/rille-midi/src/hid.rs`), so their
 mapping files, MIDI learn and soft takeover work like any other controller's.
 The report layout of a HID controller is the `[hid]` table of its mapping file
-(byte offsets of knobs, buttons, encoders, touch strip, LEDs, RGB pads and
-segment displays); a mapping with such a table makes rille look for that
-device, so a new HID controller needs a mapping file, not a new build. See the
-three Traktor files in `mappings/` and the field list in `hid.rs`.
+(byte offsets of knobs, buttons, encoders, touch strip, LEDs, RGB pads,
+pressure pads, segment and pixel displays); a mapping with such a table makes
+rille look for that device, so a new HID controller needs a mapping file, not a
+new build. See the files in `mappings/` and the field list in `hid.rs`.
+
+The Maschine Mikro MK2 drives the drum machine and opens it when it connects;
+it works next to any DJ controller. Its pads are the selected instrument's 16
+steps (a hard hit sets an accent); PAD MODE turns the top two rows into
+velocity-sensitive instrument pads (A–H as printed) and the bottom two into
+their mutes. Hold a button and press a pad for the rest: GROUP selects, MUTE
+and SOLO mute and solo, ERASE clears, PATTERN picks the pattern (from the
+next bar), DUPLICATE copies it, GRID sets the length, SCENE loads a kit, NOTE
+REPEAT rolls in time, SHIFT does what is printed on the pads (UNDO, NUDGE,
+COPY, SEMITONE …). F1–F3, CONTROL and MAIN choose what the encoder edits; the
+display shows all eight instruments' steps and the playhead. The full layout
+is at the top of `mappings/native-instruments-maschine-mikro-mk2.toml`.
 The Traktor Kontrol X1 MK1 is not HID: the kernel's snd-usb-caiaq driver
 claims it. rille reads the driver's input device, rebuilds its events into
 reports for the same kind of `[hid]` table (`transport = "caiaq"`, see

@@ -25,6 +25,18 @@ pub const CHOKE: (usize, usize) = (2, 3);
 /// Gain of a step without accent (accented steps play at 1.0).
 pub const NORMAL_GAIN: f32 = 0.7;
 
+/// Note repeat rates in beats: 1/4, 1/8, 1/8 triplet, 1/16, 1/16 triplet,
+/// 1/32.
+pub const REPEAT_RATES: [f64; 6] = [1.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125];
+/// Names of [`REPEAT_RATES`] for displays.
+pub const REPEAT_NAMES: [&str; 6] = ["1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32"];
+/// Rate a fresh machine rolls at (1/16).
+pub const DEFAULT_REPEAT: usize = 3;
+/// Velocity from which a hit plays and records as an accent.
+pub const ACCENT_VELOCITY: f32 = 0.75;
+/// Kits a controller can pick by pad (`drum.kit.N`).
+pub const KIT_PADS: usize = 16;
+
 /// Swing at knob 1.0: off-beat sixteenths are delayed by this many beats
 /// (half a sixteenth, i.e. 75 % swing).
 pub const MAX_SWING_BEATS: f64 = 0.125;
@@ -88,6 +100,26 @@ impl Pattern {
             self.steps[inst] = 0;
             self.accents[inst] = 0;
         }
+    }
+
+    /// Moves instrument `inst`'s steps (and accents) by `by` steps, wrapping
+    /// round the pattern length; steps past the length stay put.
+    pub fn rotate(&mut self, inst: usize, by: i64) {
+        if inst >= INSTRUMENTS {
+            return;
+        }
+        let len = self.length();
+        let rot = |bits: u16| {
+            let mut out = bits & !((1u32 << len) as u16).wrapping_sub(1);
+            for s in 0..len {
+                if bits & (1 << s) != 0 {
+                    out |= 1 << (s as i64 + by).rem_euclid(len as i64);
+                }
+            }
+            out
+        };
+        self.steps[inst] = rot(self.steps[inst]);
+        self.accents[inst] = rot(self.accents[inst]);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -232,6 +264,20 @@ mod tests {
         let mut p = Pattern::default();
         p.set_row_text(0, "x... X");
         assert!(p.is_on(0, 0) && p.is_accent(0, 4) && !p.is_on(0, 5));
+    }
+
+    #[test]
+    fn rotate_wraps_round_the_length() {
+        let mut p = Pattern::default();
+        p.set_row_text(0, "X..x............");
+        p.rotate(0, 1);
+        assert_eq!(p.row_text(0), ".X..x...........");
+        p.rotate(0, -2);
+        assert_eq!(p.row_text(0), "..x............X");
+        p.length = 4;
+        p.set_row_text(1, "x..x....x.......");
+        p.rotate(1, 1);
+        assert_eq!(p.row_text(1), "xx......x.......", "step 9 is past the length");
     }
 
     #[test]

@@ -872,20 +872,21 @@ impl qobject::AppController {
             .zip(NAMES.iter().zip(INST_COLORS))
             .map(|(i, (name, color))| {
                 format!(
-                    r##"{{"name":"{}","color":"#{:06x}","level":{:.4},"tune":{:.4},"decay":{:.4},"muted":{},"loaded":{}}}"##,
+                    r##"{{"name":"{}","color":"#{:06x}","level":{:.4},"tune":{:.4},"decay":{:.4},"muted":{},"soloed":{},"loaded":{}}}"##,
                     name,
                     rille_core::remix::COLORS[usize::from(color)],
                     i.level,
                     i.tune,
                     i.decay,
                     i.muted,
+                    i.soloed,
                     i.loaded
                 )
             })
             .collect();
         let c = &d.channel;
         let json = format!(
-            r#"{{"current":{},"queued":{},"selected":{},"length":{},"swing":{:.4},"rows":[{}],"used":[{}],"inst":[{}],"level":{:.4},"filter":{:.4},"fx":[{},{}],"pfl":{},"kit":{},"factory":{},"kits":{},"clipboard":{}}}"#,
+            r#"{{"current":{},"queued":{},"selected":{},"length":{},"swing":{:.4},"rows":[{}],"used":[{}],"inst":[{}],"level":{:.4},"filter":{:.4},"fx":[{},{}],"pfl":{},"kit":{},"factory":{},"kits":{},"clipboard":{},"undo":{},"redo":{},"waiting":{},"stopping":{},"solo":{}}}"#,
             d.current,
             d.queued.map_or(-1, i32::from),
             d.selected,
@@ -903,6 +904,11 @@ impl qobject::AppController {
             rille_app::drums::kits::is_factory(&kit),
             self.drum_kits_json.as_deref().unwrap_or("[]"),
             app.drum_has_clipboard(),
+            d.can_undo,
+            d.can_redo,
+            d.waiting,
+            d.stopping,
+            d.any_solo(),
         );
         if *self.drums_json() != QString::from(&json) {
             self.as_mut().set_drums_json(QString::from(json));

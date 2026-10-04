@@ -15,7 +15,10 @@
 
 use std::sync::Arc;
 
-use rille_core::drums::{CELLS, CHOKE, INSTRUMENTS, NORMAL_GAIN, PATTERNS, Pattern, STEPS, pattern_step, step_time};
+use rille_core::drums::{
+    ACCENT_VELOCITY, CELLS, CHOKE, DEFAULT_REPEAT, INSTRUMENTS, NORMAL_GAIN, PATTERNS, Pattern, REPEAT_RATES, STEPS,
+    pattern_step, step_time,
+};
 use rille_core::{Control, ControlValue};
 
 use crate::mixer::{Strip, fader_gain};
@@ -28,6 +31,51 @@ const RELEASE_SECS: f32 = 0.005;
 const CATCH_UP_BEATS: f64 = 1.0 / 32.0;
 /// Tune knob range, semitones either way.
 const TUNE_SEMITONES: f64 = 12.0;
+/// Pattern edits kept for undo (and redo).
+const HISTORY: usize = 32;
+/// Edits of one pattern closer together than this are undone together (a
+/// drag across the steps, a knob turned).
+const UNDO_MERGE_SECS: f64 = 0.4;
+/// Steps per bar, where DRUM PLAY BAR starts and stops.
+const BAR_STEPS: i64 = 16;
+
+/// Gain of a hit with velocity `v` (`0..=1`): accented from
+/// [`ACCENT_VELOCITY`], softer hits down to a third of a normal step.
+pub(crate) fn velocity_gain(v: f32) -> f32 {
+    if v >= ACCENT_VELOCITY { 1.0 } else { NORMAL_GAIN * (0.3 + 0.7 * v.max(0.0) / ACCENT_VELOCITY) }
+}
+
+/// Pattern edits, newest last; the oldest go when it is full.
+#[derive(Clone, Copy)]
+struct History {
+    items: [(u8, Pattern); HISTORY],
+    start: usize,
+    len: usize,
+}
+
+impl History {
+    fn new() -> Self {
+        Self { items: [(0, Pattern::default()); HISTORY], start: 0, len: 0 }
+    }
+
+    fn push(&mut self, item: (u8, Pattern)) {
+        if self.len == HISTORY {
+            self.start = (self.start + 1) % HISTORY;
+            self.len -= 1;
+        }
+        self.items[(self.start + self.len) % HISTORY] = item;
+        self.len += 1;
+    }
+
+    fn pop(&mut self) -> Option<(u8, Pattern)> {
+        self.len = self.len.checked_sub(1)?;
+        Some(self.items[(self.start + self.len) % HISTORY])
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+}
 
 /// A set of eight samples, one per instrument. Built on the app side and
 /// sent with `Command::SetDrumKit`.
@@ -165,9 +213,38 @@ pub struct DrumMachine {
     tune: [f32; INSTRUMENTS],
     decay: [f32; INSTRUMENTS],
     muted: [bool; INSTRUMENTS],
+    /// While any instrument is soloed, only soloed ones sound.
+    soloed: [bool; INSTRUMENTS],
+    /// The closed hi-hat cuts the open one.
+    choke: bool,
     hits: [u32; INSTRUMENTS],
-    /// Instruments to play at the start of the next block (triggers).
+    /// Clock beat of each instrument's last audible hit.
+    last_hit: [f64; INSTRUMENTS],
+    /// Instruments to play at the start of the next block (triggers), and
+    /// their gains.
     pending: u8,
+    pending_gain: [f32; INSTRUMENTS],
+    /// Note repeat: instruments held, the rate (index into
+    /// [`REPEAT_RATES`]), the next clock beat on the rate's lattice (`None`:
+    /// find it), and per instrument its gain and the beat it was pressed at
+    /// plus half a repeat (it does not roll before).
+    repeat: u8,
+    repeat_rate: usize,
+    repeat_next: Option<f64>,
+    repeat_gain: [f32; INSTRUMENTS],
+    repeat_after: [f64; INSTRUMENTS],
+    /// DRUM PLAY BAR: started, waiting for the next downbeat (`wait_bar`
+    /// until the step lattice is known, then the absolute step); stopping
+    /// at an absolute step.
+    wait_bar: bool,
+    start_at: Option<i64>,
+    stop_at: Option<i64>,
+    undo: History,
+    redo: History,
+    /// Frames rendered, and when and on which pattern the last edit was
+    /// (edits close together share one undo point).
+    frames: u64,
+    last_edit: Option<(u64, usize)>,
     /// Step each instrument must not play again (it was just recorded and
     /// played live).
     skip: [i64; INSTRUMENTS],
@@ -213,8 +290,24 @@ impl DrumMachine {
             tune: [0.5; INSTRUMENTS],
             decay: [1.0; INSTRUMENTS],
             muted: [false; INSTRUMENTS],
+            soloed: [false; INSTRUMENTS],
+            choke: true,
             hits: [0; INSTRUMENTS],
+            last_hit: [f64::NEG_INFINITY; INSTRUMENTS],
             pending: 0,
+            pending_gain: [1.0; INSTRUMENTS],
+            repeat: 0,
+            repeat_rate: DEFAULT_REPEAT,
+            repeat_next: None,
+            repeat_gain: [1.0; INSTRUMENTS],
+            repeat_after: [0.0; INSTRUMENTS],
+            wait_bar: false,
+            start_at: None,
+            stop_at: None,
+            undo: History::new(),
+            redo: History::new(),
+            frames: 0,
+            last_edit: None,
             skip: [i64::MIN; INSTRUMENTS],
             last_end: 0.0,
             origin: 0.0,
@@ -237,6 +330,36 @@ impl DrumMachine {
 
     fn edited(&mut self) {
         self.edit_rev = self.edit_rev.wrapping_add(1);
+    }
+
+    /// Call before changing pattern `idx`: keeps it for undo, unless the
+    /// last edit was to the same pattern a moment ago.
+    fn before_edit(&mut self, idx: usize) {
+        let merge = (UNDO_MERGE_SECS * self.sr) as u64;
+        let recent = matches!(self.last_edit, Some((t, i)) if i == idx && self.frames.saturating_sub(t) < merge);
+        if !recent {
+            self.undo.push((idx as u8, self.patterns[idx]));
+        }
+        self.last_edit = Some((self.frames, idx));
+        self.redo.clear();
+    }
+
+    /// Undo (`redo` false) or redo the last edit, and show its pattern.
+    fn undo_redo(&mut self, redo: bool) {
+        let (from, to) = if redo { (&mut self.redo, &mut self.undo) } else { (&mut self.undo, &mut self.redo) };
+        let Some((i, p)) = from.pop() else { return };
+        let i = usize::from(i).min(PATTERNS - 1);
+        to.push((i as u8, self.patterns[i]));
+        self.patterns[i] = p;
+        self.last_edit = None;
+        if self.queued.unwrap_or(self.current) != i {
+            self.select_pattern(i);
+        }
+        self.edited();
+    }
+
+    fn audible(&self, inst: usize) -> bool {
+        !self.muted[inst] && (self.soloed[inst] || !self.soloed.contains(&true))
     }
 
     /// Installs `kit`; returns the kit it replaces for the garbage queue (and
@@ -271,9 +394,13 @@ impl DrumMachine {
         }
     }
 
-    pub(crate) fn set_pattern(&mut self, index: usize, pattern: Pattern) {
-        if let Some(p) = self.patterns.get_mut(index) {
-            *p = pattern;
+    pub(crate) fn set_pattern(&mut self, index: usize, pattern: Pattern, undo: bool) {
+        if index < PATTERNS {
+            if undo {
+                self.before_edit(index);
+                self.last_edit = None;
+            }
+            self.patterns[index] = pattern;
             self.edited();
         }
     }
@@ -292,38 +419,53 @@ impl DrumMachine {
         self.edited();
     }
 
-    /// Starts instrument `inst` now (at the start of the next block).
-    fn trigger(&mut self, inst: usize) {
+    /// Starts instrument `inst` now (at the start of the next block) at
+    /// `gain`, and records it while REC is on (`accent`: as an accent).
+    fn trigger(&mut self, inst: usize, gain: f32, accent: bool) {
         self.pending |= 1 << inst;
-        if self.playing && self.record {
-            // Write the step nearest to what is heard now and keep the
-            // sequencer from playing it again right after.
-            let pos = self.last_end - self.origin;
-            let swing = self.patterns[self.current].swing;
-            let s0 = (pos * 4.0).floor() as i64;
-            let s =
-                if (step_time(s0 + 1, swing) - pos).abs() < (pos - step_time(s0, swing)).abs() { s0 + 1 } else { s0 };
-            let pat = &mut self.patterns[self.current];
-            pat.set(inst, pattern_step(s, pat.length()), true);
-            if s >= self.next_step {
-                self.skip[inst] = s;
-            }
-            self.edited();
+        self.pending_gain[inst] = gain;
+        if self.recording() {
+            self.record_hit(inst, self.last_end - self.origin, accent);
         }
+    }
+
+    fn recording(&self) -> bool {
+        self.playing && self.record && self.start_at.is_none() && !self.wait_bar
+    }
+
+    /// Writes the step nearest to `pos` (beats from the origin) and keeps
+    /// the sequencer from playing it again right after.
+    fn record_hit(&mut self, inst: usize, pos: f64, accent: bool) {
+        let swing = self.patterns[self.current].swing;
+        let s0 = (pos * 4.0).floor() as i64;
+        let s = if (step_time(s0 + 1, swing) - pos).abs() < (pos - step_time(s0, swing)).abs() { s0 + 1 } else { s0 };
+        self.before_edit(self.current);
+        let pat = &mut self.patterns[self.current];
+        let step = pattern_step(s, pat.length());
+        if accent {
+            pat.set_accent(inst, step, true);
+        } else {
+            pat.set(inst, step, true);
+        }
+        if s >= self.next_step {
+            self.skip[inst] = s;
+        }
+        self.edited();
     }
 
     /// Starts a hit of `inst` at full level × `gain`.
     fn start_voice(&mut self, inst: usize, gain: f32) {
         self.hits[inst] = self.hits[inst].wrapping_add(1);
-        if self.muted[inst] {
+        if !self.audible(inst) {
             return;
         }
+        self.last_hit[inst] = self.last_end;
         let Some(audio) = self.kit.as_ref().and_then(|k| k.samples[inst].as_ref()) else { return };
         let rate = 2f64.powf((f64::from(self.tune[inst]) - 0.5) * 2.0 * TUNE_SEMITONES / 12.0)
             * f64::from(audio.sample_rate)
             / self.sr;
         let release = self.release_frames();
-        if inst == CHOKE.0 {
+        if self.choke && inst == CHOKE.0 {
             for v in &mut self.voices[CHOKE.1] {
                 v.cut(release);
             }
@@ -409,10 +551,14 @@ impl DrumMachine {
         self.buf[..n].fill([0.0; 2]);
         let (b0, b1) = (self.last_end, clock_end);
         self.last_end = b1;
+        self.frames += n as u64;
         self.origin_request = false;
         // The origin moved (a new downbeat): keep counting on the same lattice.
         if origin != self.origin {
-            self.next_step += ((self.origin - origin) * 4.0).round() as i64;
+            let shift = ((self.origin - origin) * 4.0).round() as i64;
+            self.next_step += shift;
+            self.start_at = self.start_at.map(|s| s + shift);
+            self.stop_at = self.stop_at.map(|s| s + shift);
             self.origin = origin;
         }
         let swing = self.patterns[self.current].swing;
@@ -420,11 +566,21 @@ impl DrumMachine {
         if self.pending != 0 {
             let pending = std::mem::take(&mut self.pending);
             for inst in (0..INSTRUMENTS).filter(|i| pending & (1 << i) != 0) {
-                self.start_voice(inst, 1.0);
+                self.start_voice(inst, self.pending_gain[inst]);
+            }
+        }
+        let d = b1 - b0;
+        let bpf = d / n.max(1) as f64;
+        // The frame of clock beat `t` in this block.
+        let frame = move |t: f64| (((t - b0) / bpf - 1e-6).ceil().max(0.0) as usize).min(n.max(1) - 1);
+        if self.repeat != 0 && d > 0.0 {
+            let rate = REPEAT_RATES[self.repeat_rate];
+            // Find the rate's lattice afresh after a jump of the clock.
+            if self.repeat_next.is_none_or(|t| t < b0 - rate || t > b1 + rate) {
+                self.repeat_next = Some(origin + ((b0 - origin) / rate - 1e-9).ceil() * rate);
             }
         }
         if self.playing {
-            let d = b1 - b0;
             let nominal = bpm.max(1.0) / 60.0 * n as f64 / self.sr;
             let resync = match self.resync.take() {
                 Some(r) => Some(r),
@@ -436,29 +592,85 @@ impl DrumMachine {
                 Some(Resync::FromStart) => self.next_step = Self::first_step_from(b0 - origin, swing),
                 None => {}
             }
+            if self.wait_bar {
+                self.wait_bar = false;
+                self.start_at = Some((self.next_step + BAR_STEPS - 1).div_euclid(BAR_STEPS) * BAR_STEPS);
+            }
             if resync != Some(Resync::FromEnd) && d > 0.0 {
-                let bpf = d / n as f64;
                 loop {
                     let t = step_time(self.next_step, self.patterns[self.current].swing) + origin;
                     if t >= b1 {
                         break;
                     }
+                    if self.stop_at.is_some_and(|s| self.next_step >= s) {
+                        self.stop();
+                        break;
+                    }
+                    if self.start_at.is_some_and(|s| self.next_step >= s) {
+                        self.start_at = None;
+                    }
                     if t >= b0 - CATCH_UP_BEATS {
-                        let at = (((t - b0) / bpf - 1e-6).ceil().max(0.0) as usize).min(n - 1);
+                        self.fire_repeats(t, origin, frame, &mut done);
+                        let at = frame(t);
                         self.render_voices(done, at);
                         done = at;
-                        self.fire_step(self.next_step);
+                        if self.start_at.is_none() {
+                            self.fire_step(self.next_step);
+                        }
                     }
                     self.next_step += 1;
                 }
             }
         }
+        if d > 0.0 {
+            self.fire_repeats(b1, origin, frame, &mut done);
+        }
         self.render_voices(done, n);
+    }
+
+    /// Plays the note repeats due before clock beat `until`, rendering the
+    /// voices up to each.
+    fn fire_repeats(&mut self, until: f64, origin: f64, frame: impl Fn(f64) -> usize, done: &mut usize) {
+        while self.repeat != 0 {
+            let Some(t) = self.repeat_next.filter(|&t| t < until) else { return };
+            let at = frame(t);
+            self.render_voices(*done, at);
+            *done = at;
+            let held = self.repeat;
+            for inst in (0..INSTRUMENTS).filter(|i| held & (1 << i) != 0) {
+                if t > self.repeat_after[inst] {
+                    let gain = self.repeat_gain[inst];
+                    self.start_voice(inst, gain);
+                    if self.recording() {
+                        self.record_hit(inst, t - origin, gain >= 1.0);
+                    }
+                }
+            }
+            self.repeat_next = Some(t + REPEAT_RATES[self.repeat_rate]);
+        }
+    }
+
+    fn stop(&mut self) {
+        self.playing = false;
+        self.wait_bar = false;
+        self.start_at = None;
+        self.stop_at = None;
+        if let Some(q) = self.queued.take() {
+            self.current = q;
+            self.edited();
+        }
+    }
+
+    fn start(&mut self) {
+        self.playing = true;
+        self.resync = Some(Resync::FromStart);
+        self.origin_request = true;
+        self.skip = [i64::MIN; INSTRUMENTS];
     }
 
     /// Drum controls; `false` if `c` is not one the engine handles.
     pub(crate) fn control(&mut self, c: Control, v: ControlValue) -> bool {
-        let press = matches!(v, ControlValue::Press(true));
+        let press = v.is_press();
         let abs = match v {
             ControlValue::Absolute(x) => Some(x.clamp(0.0, 1.0)),
             _ => None,
@@ -467,25 +679,41 @@ impl DrumMachine {
             ControlValue::Delta(d) => d.round() as i64,
             _ => 0,
         };
+        // A hit's velocity; a plain press plays at full level.
+        let (gain, accent) = match v {
+            ControlValue::Hit(vel) => (velocity_gain(vel), vel >= ACCENT_VELOCITY),
+            _ => (1.0, false),
+        };
         let idx = |n: u8, max: usize| usize::from(n).checked_sub(1).filter(|&i| i < max);
         // Toggle on press, set on an absolute value.
         let switch = |on: bool| match v {
-            ControlValue::Press(true) => Some(!on),
+            ControlValue::Press(true) | ControlValue::Hit(_) => Some(!on),
             ControlValue::Absolute(x) => Some(x >= 0.5),
             _ => None,
         };
         let sel = self.selected;
+        let cur = self.current;
         match c {
             Control::DrumPlay => {
                 if press {
-                    self.playing = !self.playing;
                     if self.playing {
-                        self.resync = Some(Resync::FromStart);
-                        self.origin_request = true;
-                        self.skip = [i64::MIN; INSTRUMENTS];
-                    } else if let Some(q) = self.queued.take() {
-                        self.current = q;
-                        self.edited();
+                        self.stop();
+                    } else {
+                        self.start();
+                    }
+                }
+            }
+            Control::DrumPlayBar => {
+                if press {
+                    if !self.playing {
+                        self.start();
+                        self.wait_bar = true;
+                    } else if self.wait_bar || self.start_at.is_some() {
+                        self.stop();
+                    } else if self.stop_at.is_some() {
+                        self.stop_at = None;
+                    } else {
+                        self.stop_at = Some((self.next_step + BAR_STEPS - 1).div_euclid(BAR_STEPS) * BAR_STEPS);
                     }
                 }
             }
@@ -505,15 +733,23 @@ impl DrumMachine {
                         None => return true,
                     },
                 };
-                let accent = matches!(c, Control::DrumAccent(_) | Control::DrumCellAccent(_));
-                let pat = &mut self.patterns[self.current];
-                if accent {
-                    if let Some(on) = switch(pat.is_accent(inst, step)) {
-                        pat.set_accent(inst, step, on);
-                        self.edited();
-                    }
-                } else if let Some(on) = switch(pat.is_on(inst, step)) {
+                let accent_control = matches!(c, Control::DrumAccent(_) | Control::DrumCellAccent(_));
+                let (on, acc) = (self.patterns[cur].is_on(inst, step), self.patterns[cur].is_accent(inst, step));
+                // A step pad hit hard sets an accent; otherwise steps toggle.
+                let change = match v {
+                    ControlValue::Hit(_) if !accent_control => Some(match (on, accent, acc) {
+                        (false, hard, _) => (true, hard),
+                        (true, true, false) => (true, true),
+                        _ => (false, false),
+                    }),
+                    _ if accent_control => switch(acc).map(|a| (on || a, a)),
+                    _ => switch(on).map(|o| (o, acc && o)),
+                };
+                if let Some((on, acc)) = change {
+                    self.before_edit(cur);
+                    let pat = &mut self.patterns[cur];
                     pat.set(inst, step, on);
+                    pat.set_accent(inst, step, acc && on);
                     self.edited();
                 }
             }
@@ -525,7 +761,29 @@ impl DrumMachine {
             }
             Control::DrumTrigger(n) => {
                 if let (true, Some(i)) = (press, idx(n, INSTRUMENTS)) {
-                    self.trigger(i);
+                    self.trigger(i, gain, accent);
+                }
+            }
+            Control::DrumRepeat(n) => {
+                if let Some(i) = idx(n, INSTRUMENTS) {
+                    if press {
+                        if self.repeat == 0 {
+                            self.repeat_next = None;
+                        }
+                        self.repeat |= 1 << i;
+                        self.repeat_gain[i] = gain;
+                        self.repeat_after[i] = self.last_end + REPEAT_RATES[self.repeat_rate] * 0.5;
+                        self.trigger(i, gain, accent);
+                    } else if v == ControlValue::Press(false) {
+                        self.repeat &= !(1 << i);
+                    }
+                }
+            }
+            Control::DrumRepeatRate => {
+                if steps != 0 {
+                    self.repeat_rate =
+                        (self.repeat_rate as i64 + steps).clamp(0, REPEAT_RATES.len() as i64 - 1) as usize;
+                    self.repeat_next = None;
                 }
             }
             Control::DrumInstSelect => {
@@ -537,6 +795,20 @@ impl DrumMachine {
             Control::DrumInstMute(n) => {
                 if let (true, Some(i)) = (press, idx(n, INSTRUMENTS)) {
                     self.muted[i] = !self.muted[i];
+                    self.edited();
+                }
+            }
+            Control::DrumInstSolo(n) => {
+                if let (true, Some(i)) = (press, idx(n, INSTRUMENTS)) {
+                    self.soloed[i] = !self.soloed[i];
+                }
+            }
+            Control::DrumInstClear(n) => {
+                if let (true, Some(i)) = (press, idx(n, INSTRUMENTS))
+                    && self.patterns[cur].has_steps(i)
+                {
+                    self.before_edit(cur);
+                    self.patterns[cur].clear_row(i);
                     self.edited();
                 }
             }
@@ -555,36 +827,73 @@ impl DrumMachine {
                     self.select_pattern(i);
                 }
             }
+            Control::DrumPatternCopy(n) => {
+                if let (true, Some(i)) = (press, idx(n, PATTERNS))
+                    && i != cur
+                {
+                    self.before_edit(i);
+                    self.patterns[i] = self.patterns[cur];
+                    self.select_pattern(i);
+                    self.edited();
+                }
+            }
             Control::DrumPatternSelect => {
                 if steps != 0 {
-                    let from = self.queued.unwrap_or(self.current) as i64;
+                    let from = self.queued.unwrap_or(cur) as i64;
                     self.select_pattern((from + steps).clamp(0, PATTERNS as i64 - 1) as usize);
                 }
             }
-            Control::DrumLength => {
-                if steps != 0 {
-                    let pat = &mut self.patterns[self.current];
-                    pat.length = (i64::from(pat.length) + steps).clamp(1, STEPS as i64) as u8;
+            Control::DrumLength | Control::DrumLengthSet(_) => {
+                let length = match c {
+                    Control::DrumLengthSet(n) if press => idx(n, STEPS).map(|s| s as i64 + 1),
+                    Control::DrumLength if steps != 0 => Some(i64::from(self.patterns[cur].length) + steps),
+                    _ => None,
+                };
+                if let Some(l) = length.map(|l| l.clamp(1, STEPS as i64) as u8)
+                    && l != self.patterns[cur].length
+                {
+                    self.before_edit(cur);
+                    self.patterns[cur].length = l;
                     self.edited();
                 }
             }
             Control::DrumSwing => {
                 if let Some(x) = abs {
-                    self.patterns[self.current].swing = x;
+                    self.before_edit(cur);
+                    self.patterns[cur].swing = x;
+                    self.edited();
+                }
+            }
+            Control::DrumNudge => {
+                if steps != 0 && self.patterns[cur].has_steps(sel) {
+                    self.before_edit(cur);
+                    self.patterns[cur].rotate(sel, steps);
                     self.edited();
                 }
             }
             Control::DrumClear => {
-                if press {
-                    self.patterns[self.current].clear_row(sel);
+                if press && self.patterns[cur].has_steps(sel) {
+                    self.before_edit(cur);
+                    self.patterns[cur].clear_row(sel);
                     self.edited();
                 }
             }
             Control::DrumClearPattern => {
-                if press {
-                    let length = self.patterns[self.current].length;
-                    self.patterns[self.current] = Pattern { length, ..Pattern::default() };
+                if press && !self.patterns[cur].is_empty() {
+                    self.before_edit(cur);
+                    let length = self.patterns[cur].length;
+                    self.patterns[cur] = Pattern { length, ..Pattern::default() };
                     self.edited();
+                }
+            }
+            Control::DrumUndo | Control::DrumRedo => {
+                if press {
+                    self.undo_redo(c == Control::DrumRedo);
+                }
+            }
+            Control::DrumChoke => {
+                if press {
+                    self.choke = !self.choke;
                 }
             }
             Control::DrumLevel => {
@@ -613,8 +922,17 @@ impl DrumMachine {
             // Read-only, or handled by the app.
             Control::DrumStepLed(_)
             | Control::DrumInstLed(_)
+            | Control::DrumPatternLed(_)
+            | Control::DrumTriggerLed(_)
+            | Control::DrumMuteLed(_)
+            | Control::DrumLengthLed(_)
+            | Control::DrumKitLed(_)
+            | Control::DrumSelLed
             | Control::DrumMeter
             | Control::DrumKitSelect
+            | Control::DrumKit(_)
+            | Control::DrumCopy
+            | Control::DrumPaste
             | Control::DrumShow => {}
             _ => return false,
         }
@@ -643,7 +961,7 @@ impl DrumMachine {
 
     pub(crate) fn state(&self, clock_beat: f64, origin: f64) -> crate::snapshot::DrumState {
         let pat = &self.patterns[self.current];
-        let step = self.playing.then(|| {
+        let step = (self.playing && !self.wait_bar && self.start_at.is_none()).then(|| {
             let s = ((clock_beat - origin) * 4.0).floor() as i64;
             pattern_step(s, pat.length()) as u8
         });
@@ -662,6 +980,8 @@ impl DrumMachine {
                 muted: self.muted[i],
                 loaded: self.kit.as_ref().is_some_and(|k| k.samples[i].is_some()),
                 hits: self.hits[i],
+                soloed: self.soloed[i],
+                last_hit: self.last_hit[i],
             }),
             channel: crate::snapshot::ChannelState {
                 gain: self.strip.gain,
@@ -674,6 +994,13 @@ impl DrumMachine {
                 meter: self.strip.meter.peak(),
             },
             edit_rev: self.edit_rev,
+            choke: self.choke,
+            repeat: self.repeat,
+            repeat_rate: self.repeat_rate as u8,
+            waiting: self.playing && (self.wait_bar || self.start_at.is_some()),
+            stopping: self.stop_at.is_some(),
+            can_undo: self.undo.len > 0,
+            can_redo: self.redo.len > 0,
         }
     }
 }
@@ -884,6 +1211,127 @@ mod tests {
         }
         assert!(m.patterns[0].is_on(1, 4), "step 5 written");
         assert_eq!(hits(&out).len(), 1, "played live once, not again on the step");
+    }
+
+    /// Renders blocks `from..to` of a clock running from beat 0 at 120 BPM.
+    fn run(m: &mut DrumMachine, from: usize, to: usize, out: &mut Vec<f32>) {
+        let bpf = 2.0 / f64::from(SR);
+        for k in from..to {
+            m.render(N, bpf * ((k + 1) * N) as f64, 0.0, 120.0);
+            out.extend(m.buf[..N].iter().map(|f| f[0]));
+        }
+    }
+
+    #[test]
+    fn hard_step_hits_set_accents() {
+        let mut m = machine(Pattern::default());
+        m.control(Control::DrumStep(1), ControlValue::Hit(0.3));
+        assert!(m.patterns[0].is_on(0, 0) && !m.patterns[0].is_accent(0, 0), "soft: on");
+        m.control(Control::DrumStep(1), ControlValue::Hit(0.9));
+        assert!(m.patterns[0].is_accent(0, 0), "hard on a step: accent");
+        m.control(Control::DrumStep(1), ControlValue::Hit(0.9));
+        assert!(!m.patterns[0].is_on(0, 0), "hard on an accent: off");
+        m.control(Control::DrumStep(2), ControlValue::Hit(1.0));
+        assert!(m.patterns[0].is_accent(0, 1), "hard on an empty step: accent");
+    }
+
+    #[test]
+    fn velocity_sets_the_level_and_records_accents() {
+        let mut m = machine(Pattern::default());
+        m.control(Control::DrumRecord, ControlValue::Press(true));
+        m.control(Control::DrumPlay, ControlValue::Press(true));
+        let mut out = Vec::new();
+        run(&mut m, 0, 10, &mut out);
+        m.control(Control::DrumTrigger(1), ControlValue::Hit(0.2));
+        m.control(Control::DrumTrigger(2), ControlValue::Hit(1.0));
+        out.clear();
+        run(&mut m, 10, 11, &mut out);
+        assert!((out[0] - (0.1 * velocity_gain(0.2) + 0.2)).abs() < 1e-6, "{}", out[0]);
+        assert!(velocity_gain(0.2) < NORMAL_GAIN);
+        assert!(m.patterns[0].is_on(0, 0) && !m.patterns[0].is_accent(0, 0));
+        assert!(m.patterns[0].is_accent(1, 0));
+    }
+
+    #[test]
+    fn solo_silences_the_others() {
+        let mut m = machine(Pattern::default());
+        m.control(Control::DrumInstSolo(2), ControlValue::Press(true));
+        m.control(Control::DrumTrigger(1), ControlValue::Press(true));
+        m.control(Control::DrumTrigger(2), ControlValue::Press(true));
+        let mut out = Vec::new();
+        run(&mut m, 0, 1, &mut out);
+        assert!((out[0] - 0.2).abs() < 1e-6, "only the soloed one: {}", out[0]);
+        m.control(Control::DrumInstSolo(2), ControlValue::Press(true));
+        assert!(m.audible(0));
+    }
+
+    #[test]
+    fn undo_and_redo_edits() {
+        let mut m = machine(Pattern::default());
+        let mut out = Vec::new();
+        // A drag across three steps is one edit.
+        for s in 1..=3 {
+            m.control(Control::DrumStep(s), ControlValue::Press(true));
+        }
+        run(&mut m, 0, 100, &mut out); // half a second later
+        m.control(Control::DrumInstClear(1), ControlValue::Press(true));
+        assert!(!m.patterns[0].has_steps(0));
+        m.control(Control::DrumUndo, ControlValue::Press(true));
+        assert_eq!(m.patterns[0].row_text(0), "xxx.............");
+        m.control(Control::DrumUndo, ControlValue::Press(true));
+        assert!(m.patterns[0].is_empty());
+        m.control(Control::DrumUndo, ControlValue::Press(true));
+        m.control(Control::DrumRedo, ControlValue::Press(true));
+        assert_eq!(m.patterns[0].row_text(0), "xxx.............");
+        // A new edit forgets what could be redone.
+        m.control(Control::DrumNudge, ControlValue::Delta(1.0));
+        assert_eq!(m.patterns[0].row_text(0), ".xxx............");
+        m.control(Control::DrumRedo, ControlValue::Press(true));
+        assert_eq!(m.patterns[0].row_text(0), ".xxx............");
+    }
+
+    #[test]
+    fn length_set_and_pattern_copy() {
+        let mut m = machine(row(0, "x...x..."));
+        m.control(Control::DrumLengthSet(8), ControlValue::Press(true));
+        assert_eq!(m.patterns[0].length, 8);
+        m.control(Control::DrumPatternCopy(5), ControlValue::Press(true));
+        assert_eq!(m.current, 4);
+        assert_eq!(m.patterns[4], m.patterns[0]);
+    }
+
+    #[test]
+    fn note_repeat_rolls_on_the_clock() {
+        let mut m = machine(Pattern::default());
+        let mut out = Vec::new();
+        run(&mut m, 0, 10, &mut out);
+        out.clear();
+        // 1/16 at 120 BPM: a hit every 6000 frames on the clock's lattice.
+        m.control(Control::DrumRepeat(1), ControlValue::Press(true));
+        run(&mut m, 10, 120, &mut out);
+        m.control(Control::DrumRepeat(1), ControlValue::Press(false));
+        run(&mut m, 120, 200, &mut out);
+        let at: Vec<usize> = hits(&out).iter().map(|h| h.0 + 10 * N).collect();
+        assert_eq!(at[0], 10 * N, "the press plays at once");
+        assert_eq!(&at[1..4], &[SIXTEENTH, 2 * SIXTEENTH, 3 * SIXTEENTH]);
+        assert!(at.iter().all(|&f| f < 120 * N + N), "stops when let go: {at:?}");
+    }
+
+    #[test]
+    fn play_bar_waits_for_the_downbeat() {
+        let mut m = machine(row(0, "x..............."));
+        let mut out = Vec::new();
+        run(&mut m, 0, 10, &mut out);
+        m.control(Control::DrumPlayBar, ControlValue::Press(true));
+        out.clear();
+        run(&mut m, 10, 400, &mut out);
+        let h = hits(&out);
+        assert_eq!(h[0].0 + 10 * N, 16 * SIXTEENTH, "starts on bar 2: {h:?}");
+        // Stopping waits for the end of the bar.
+        m.control(Control::DrumPlayBar, ControlValue::Press(true));
+        assert!(m.playing && m.stop_at.is_some());
+        run(&mut m, 400, 800, &mut out);
+        assert!(!m.playing);
     }
 
     #[test]

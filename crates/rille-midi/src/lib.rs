@@ -14,6 +14,7 @@ pub mod hid;
 pub mod learn;
 pub mod mapping;
 pub mod message;
+pub mod screen;
 pub mod store;
 
 pub use device::{MidiError, MidiEvent, MidiManager, port_base_name};

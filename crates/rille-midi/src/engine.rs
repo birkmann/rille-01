@@ -3,7 +3,7 @@
 //! Pure and allocation-free per message: the caller owns the output vector
 //! and passes the time, so everything here is unit-testable without devices.
 
-use crate::mapping::{InputBinding, InputMode, InputTarget, Mapping, MidiSpec};
+use crate::mapping::{HOLD_TIME, InputBinding, InputMode, InputTarget, Mapping, MidiSpec};
 use crate::message::MidiMsg;
 use rille_core::{ControlEvent, ControlKind, ControlTarget, ControlValue};
 use std::collections::HashMap;
@@ -18,6 +18,10 @@ pub trait ValueSource {
     /// Phase within the current master beat, `0..1`.
     fn beat_phase(&self) -> f64 {
         0.0
+    }
+    /// The drum machine for controller screens, see [`crate::screen`].
+    fn drum_screen(&self) -> Option<crate::screen::DrumScreen> {
+        None
     }
 }
 
@@ -90,6 +94,8 @@ enum Half {
 struct Slot {
     /// Button: a press was sent and its release is outstanding.
     pressed: bool,
+    /// A `hold` modifier this press latched on, and when.
+    held_since: Option<Instant>,
     // 14-bit CC
     msb: u8,
     lsb: u8,
@@ -99,6 +105,8 @@ struct Slot {
     engaged: bool,
     last_hw: Option<f32>,
     sent: Recent,
+    /// Relative input on a discrete control: the part of a step not sent yet.
+    rest: f32,
 }
 
 impl Slot {
@@ -131,7 +139,8 @@ impl Slot {
 /// Decoded input for one binding.
 #[derive(Clone, Copy, Debug)]
 enum Input {
-    Note(bool),
+    /// Down or up, with the velocity.
+    Note(bool, u8),
     Cc(u8),
     Half(Half, u8),
     Bend(u16),
@@ -150,8 +159,11 @@ pub struct MappingEngine {
     index: HashMap<u32, Vec<(usize, Option<Half>)>>,
     slots: Vec<Slot>,
     modifiers: Vec<(String, bool)>,
-    /// Modifiers toggled per press (`latch`) rather than held.
+    /// Modifiers toggled per press (`latch`, without `hold`) rather than
+    /// held.
     latched: Vec<String>,
+    /// Latched modifiers in a group: (modifier, group, on by default).
+    groups: Vec<(String, String, bool)>,
     /// Modifiers a conditional binding was used with since a `tap` button
     /// holding them went down.
     used: Vec<String>,
@@ -181,13 +193,42 @@ impl MappingEngine {
         let latched = mapping
             .inputs
             .iter()
-            .filter(|b| b.latch)
+            .filter(|b| b.latch && !b.hold)
             .filter_map(|b| match &b.target {
                 InputTarget::Modifier(m) => Some(m.clone()),
                 _ => None,
             })
             .collect();
-        Self { mapping, index, slots, modifiers: Vec::new(), latched, used: Vec::new(), next_layout: false }
+        let mut groups: Vec<(String, String, bool)> = Vec::new();
+        for b in &mapping.inputs {
+            if let (InputTarget::Modifier(m), Some(g)) = (&b.target, &b.group) {
+                match groups.iter_mut().find(|(n, _, _)| n == m) {
+                    Some(e) => e.2 |= b.default_on,
+                    None => groups.push((m.clone(), g.clone(), b.default_on)),
+                }
+            }
+        }
+        let mut engine = Self {
+            mapping,
+            index,
+            slots,
+            modifiers: Vec::new(),
+            latched,
+            groups,
+            used: Vec::new(),
+            next_layout: false,
+        };
+        engine.set_defaults();
+        engine
+    }
+
+    /// Switches on the modifiers that are on by default.
+    fn set_defaults(&mut self) {
+        for (m, _, on) in &self.groups {
+            if *on && !self.modifiers.iter().any(|(n, _)| n == m) {
+                self.modifiers.push((m.clone(), true));
+            }
+        }
     }
 
     pub fn mapping(&self) -> &Mapping {
@@ -216,6 +257,7 @@ impl MappingEngine {
     pub fn reset(&mut self) {
         self.slots.iter_mut().for_each(|s| *s = Slot::default());
         self.modifiers.clear();
+        self.set_defaults();
     }
 
     /// Handles one raw MIDI message received at `t`, appending events to `out`.
@@ -229,8 +271,8 @@ impl MappingEngine {
     pub fn handle(&mut self, raw: &[u8], t: Instant, values: &dyn ValueSource, out: &mut Vec<ControlEvent>) {
         self.flush(t, values, out);
         let (k, input) = match MidiMsg::parse(raw) {
-            MidiMsg::NoteOn { ch, note, .. } => (key(NOTE, ch, note), Input::Note(true)),
-            MidiMsg::NoteOff { ch, note, .. } => (key(NOTE, ch, note), Input::Note(false)),
+            MidiMsg::NoteOn { ch, note, vel } => (key(NOTE, ch, note), Input::Note(true, vel)),
+            MidiMsg::NoteOff { ch, note, .. } => (key(NOTE, ch, note), Input::Note(false, 0)),
             MidiMsg::Cc { ch, num, val } => (key(CC, ch, num), Input::Cc(val)),
             MidiMsg::PitchBend { ch, val14 } => (key(BEND, ch, 0), Input::Bend(val14)),
             MidiMsg::Other => return,
@@ -256,7 +298,8 @@ impl MappingEngine {
             let b = &inputs[i];
             let outranked = if b.condition.is_some() { held_match && on_latch(b) } else { conditioned_match };
             let active = condition_holds(&self.modifiers, b) && !outranked;
-            if let Some(c) = b.condition.as_ref().filter(|c| c.value && active && !matches!(input, Input::Note(false)))
+            if let Some(c) =
+                b.condition.as_ref().filter(|c| c.value && active && !matches!(input, Input::Note(false, _)))
                 && !self.used.contains(&c.modifier)
             {
                 self.used.push(c.modifier.clone());
@@ -267,6 +310,7 @@ impl MappingEngine {
             };
             let mut st = State {
                 modifiers: &mut self.modifiers,
+                groups: &self.groups,
                 next_layout: &mut self.next_layout,
                 used: &mut self.used,
                 here: &here,
@@ -290,8 +334,17 @@ impl MappingEngine {
                 let v = slot.value14();
                 let next_layout = &mut self.next_layout;
                 let used = &mut self.used;
-                State { modifiers: &mut self.modifiers, next_layout, used, here: &[], slot, values, out }
-                    .absolute(b, v, active);
+                State {
+                    modifiers: &mut self.modifiers,
+                    groups: &self.groups,
+                    next_layout,
+                    used,
+                    here: &[],
+                    slot,
+                    values,
+                    out,
+                }
+                .absolute(b, v, active);
             }
         }
     }
@@ -303,6 +356,7 @@ fn condition_holds(modifiers: &[(String, bool)], b: &InputBinding) -> bool {
 
 struct State<'a> {
     modifiers: &'a mut Vec<(String, bool)>,
+    groups: &'a [(String, String, bool)],
     next_layout: &'a mut bool,
     used: &'a mut Vec<String>,
     /// Modifiers held by the message being handled.
@@ -315,26 +369,27 @@ struct State<'a> {
 impl State<'_> {
     fn apply(&mut self, b: &InputBinding, input: Input, active: bool, t: Instant) {
         match b.mode() {
-            InputMode::Button => {
-                let down = match input {
-                    Input::Note(down) => down,
-                    Input::Cc(v) => v > 0,
+            InputMode::Button | InputMode::Velocity => {
+                let (down, vel) = match input {
+                    Input::Note(down, vel) => (down, vel),
+                    Input::Cc(v) => (v > 0, v),
                     _ => return,
                 };
+                let hit = (b.mode() == InputMode::Velocity).then(|| f32::from(vel.min(127)) / 127.0);
                 if down && active && !self.slot.pressed {
                     self.slot.pressed = true;
                     if b.tap {
                         self.used.retain(|m| !self.here.contains(m));
                     } else {
-                        self.press(b, true);
+                        self.press(b, true, hit, t);
                     }
                 } else if !down && self.slot.pressed {
                     self.slot.pressed = false;
                     if !b.tap {
-                        self.press(b, false);
+                        self.press(b, false, None, t);
                     } else if !self.used.iter().any(|m| self.here.contains(m)) {
-                        self.press(b, true);
-                        self.press(b, false);
+                        self.press(b, true, None, t);
+                        self.press(b, false, None, t);
                     }
                 }
             }
@@ -342,11 +397,11 @@ impl State<'_> {
                 Input::Cc(v) => self.absolute(b, f32::from(v) / 127.0, active),
                 Input::Bend(v) => self.absolute(b, f32::from(v) / 16383.0, active),
                 Input::Half(half, v) => self.half(b, half, v, t, active),
-                Input::Note(_) => {}
+                Input::Note(..) => {}
             },
             InputMode::Relative | InputMode::Jog => {
                 let ticks = match input {
-                    Input::Note(true) => 1,
+                    Input::Note(true, _) => 1,
                     Input::Cc(v) => b.encoding().decode(v),
                     Input::Bend(v) => i32::from(v) - 8192,
                     _ => 0,
@@ -358,24 +413,61 @@ impl State<'_> {
         }
     }
 
-    fn press(&mut self, b: &InputBinding, down: bool) {
+    /// A button going down or up; `hit`: its velocity (velocity mode).
+    fn press(&mut self, b: &InputBinding, down: bool, hit: Option<f32>, t: Instant) {
         match &b.target {
             InputTarget::Control(target) => {
-                self.out.push(ControlEvent { target: *target, value: ControlValue::Press(down) });
+                let value = match (hit, b.set) {
+                    (_, Some(v)) if down => ControlValue::Absolute(v),
+                    (_, Some(_)) => return,
+                    (Some(v), _) if down => ControlValue::Hit(v),
+                    _ => ControlValue::Press(down),
+                };
+                self.out.push(ControlEvent { target: *target, value });
             }
             InputTarget::Modifier(name) => {
-                let i = self.modifiers.iter().position(|(n, _)| n == name).unwrap_or_else(|| {
-                    self.modifiers.push((name.clone(), false));
-                    self.modifiers.len() - 1
-                });
-                let on = &mut self.modifiers[i].1;
+                let was = self.modifier(name);
                 if !b.latch {
-                    *on = down;
+                    self.set_modifier(name, down);
+                } else if let Some(group) = &b.group {
+                    if down {
+                        let default = self.groups.iter().find(|(_, g, on)| g == group && *on).map(|e| e.0.clone());
+                        let next = match default {
+                            Some(d) if was => d,
+                            None if was => String::new(),
+                            _ => name.clone(),
+                        };
+                        for (m, _, _) in self.groups.iter().filter(|e| &e.1 == group) {
+                            let on = *m == next;
+                            if let Some(e) = self.modifiers.iter_mut().find(|(n, _)| n == m) {
+                                e.1 = on;
+                            } else {
+                                self.modifiers.push((m.clone(), on));
+                            }
+                        }
+                    }
                 } else if down {
-                    *on = !*on;
+                    self.set_modifier(name, !was);
+                    self.slot.held_since = (b.hold && !was).then_some(t);
+                } else if let Some(since) = self.slot.held_since.take()
+                    && t.saturating_duration_since(since) >= HOLD_TIME
+                {
+                    // Held for a while: it was only meant while down.
+                    self.set_modifier(name, false);
                 }
             }
             InputTarget::NextDeckLayout => *self.next_layout |= down,
+        }
+    }
+
+    fn modifier(&self, name: &str) -> bool {
+        self.modifiers.iter().any(|(n, v)| n == name && *v)
+    }
+
+    fn set_modifier(&mut self, name: &str, on: bool) {
+        match self.modifiers.iter_mut().find(|(n, _)| n == name) {
+            Some(e) => e.1 = on,
+            None => self.modifiers.push((name.to_owned(), on)),
         }
     }
 
@@ -441,7 +533,17 @@ impl State<'_> {
                 self.slot.sent.push(v);
                 ControlValue::Absolute(v)
             }
-            _ => ControlValue::Delta(sign * ticks * b.step()),
+            // Steps of a discrete control (a pattern, a list entry) are
+            // whole: smaller steps add up until they make one.
+            _ => {
+                let d = sign * ticks * b.step() + self.slot.rest;
+                let whole = d.trunc();
+                self.slot.rest = d - whole;
+                if whole == 0.0 {
+                    return;
+                }
+                ControlValue::Delta(whole)
+            }
         };
         self.out.push(ControlEvent { target, value });
     }
@@ -520,6 +622,113 @@ mod tests {
         // Switches that send 1 for on (Akai AMX crossfader reverse).
         assert_eq!(r.values(&[0xb0, 12, 1]), [ControlValue::Press(true)]);
         assert_eq!(r.values(&[0xb0, 12, 0]), [ControlValue::Press(false)]);
+    }
+
+    #[test]
+    fn velocity_pads_hit_with_their_velocity() {
+        let pad =
+            InputBinding::new(ControlTarget::drum(Control::DrumTrigger(1)), note(1, 40)).with_mode(InputMode::Velocity);
+        let mut r = Rig::new(vec![pad]);
+        assert_eq!(r.values(&[0x90, 40, 127]), [ControlValue::Hit(1.0)]);
+        assert_eq!(r.values(&[0x80, 40, 0]), [ControlValue::Press(false)]);
+        let soft = r.values(&[0x90, 40, 32]);
+        assert!(matches!(soft[..], [ControlValue::Hit(v)] if (v - 32.0 / 127.0).abs() < 1e-6));
+        let mut bad = InputBinding::new(ControlTarget::drum(Control::DrumTrigger(1)), cc(1, 40));
+        bad.mode = Some(InputMode::Velocity);
+        assert!(bad.validate().is_err(), "velocity needs a note");
+    }
+
+    #[test]
+    fn small_steps_on_discrete_controls_add_up() {
+        let mut b = InputBinding::new(ControlTarget::drum(Control::DrumPatternSelect), cc(1, 64));
+        b.step = Some(0.25);
+        let mut r = Rig::new(vec![b]);
+        assert_eq!(r.values(&[0xb0, 64, 1]), []);
+        assert_eq!(r.values(&[0xb0, 64, 2]), []);
+        assert_eq!(r.values(&[0xb0, 64, 1]), [ControlValue::Delta(1.0)]);
+        assert_eq!(r.values(&[0xb0, 64, 127]), []);
+    }
+
+    #[test]
+    fn set_buttons_reset_a_continuous_control() {
+        let mut b = InputBinding::new(ControlTarget::drum(Control::DrumFilter), note(1, 11));
+        b.set = Some(0.5);
+        let mut r = Rig::new(vec![b]);
+        assert_eq!(r.values(&[0x90, 11, 127]), [ControlValue::Absolute(0.5)]);
+        assert_eq!(r.values(&[0x80, 11, 0]), []);
+    }
+
+    #[test]
+    fn hold_modifiers_latch_on_a_tap_and_hold_while_down() {
+        let mut pattern = InputBinding::new(InputTarget::Modifier("pattern".into()), note(1, 30));
+        pattern.latch = true;
+        pattern.hold = true;
+        let mut r = Rig::new(vec![pattern]);
+        r.send(&[0x90, 30, 127]);
+        r.send(&[0x80, 30, 0]);
+        assert!(r.engine.modifier("pattern"), "a tap latches");
+        r.send(&[0x90, 30, 127]);
+        r.send(&[0x80, 30, 0]);
+        assert!(!r.engine.modifier("pattern"), "another tap unlatches");
+        r.send(&[0x90, 30, 127]);
+        assert!(r.engine.modifier("pattern"));
+        r.t += HOLD_TIME;
+        r.send(&[0x80, 30, 0]);
+        assert!(!r.engine.modifier("pattern"), "held: only while down");
+    }
+
+    #[test]
+    fn groups_keep_one_modifier_on_and_return_to_the_default() {
+        let latch = |name: &str, n: u8, default: bool| {
+            let mut b = InputBinding::new(InputTarget::Modifier(name.into()), note(1, n));
+            b.latch = true;
+            b.group = Some("enc".into());
+            b.default_on = default;
+            b
+        };
+        let mut r = Rig::new(vec![latch("filter", 1, true), latch("level", 2, false), latch("tune", 3, false)]);
+        let on = |r: &Rig| ["filter", "level", "tune"].map(|m| r.engine.modifier(m));
+        assert_eq!(on(&r), [true, false, false], "the default is on from the start");
+        let tap = |r: &mut Rig, n: u8| {
+            r.send(&[0x90, n, 127]);
+            r.send(&[0x80, n, 0]);
+        };
+        tap(&mut r, 2);
+        assert_eq!(on(&r), [false, true, false]);
+        tap(&mut r, 3);
+        assert_eq!(on(&r), [false, false, true]);
+        tap(&mut r, 3);
+        assert_eq!(on(&r), [true, false, false], "again: back to the default");
+        tap(&mut r, 1);
+        assert_eq!(on(&r), [true, false, false], "the default stays on");
+        r.engine.reset();
+        assert_eq!(on(&r), [true, false, false]);
+    }
+
+    #[test]
+    fn held_layers_outrank_latched_modes() {
+        let mut play = InputBinding::new(InputTarget::Modifier("play".into()), note(1, 29));
+        play.latch = true;
+        let mut pattern = InputBinding::new(InputTarget::Modifier("pattern".into()), note(1, 30));
+        pattern.latch = true;
+        pattern.hold = true;
+        let step = InputBinding::new(ControlTarget::drum(Control::DrumStep(1)), note(1, 40));
+        let mut trigger = InputBinding::new(ControlTarget::drum(Control::DrumTrigger(1)), note(1, 40));
+        trigger.condition = Some(Condition { modifier: "play".into(), value: true });
+        let mut pat = InputBinding::new(ControlTarget::drum(Control::DrumPattern(1)), note(1, 40));
+        pat.condition = Some(Condition { modifier: "pattern".into(), value: true });
+        let mut r = Rig::new(vec![play, pattern, step, trigger, pat]);
+        let hit = |r: &mut Rig| {
+            let t = r.send(&[0x90, 40, 127]);
+            r.send(&[0x80, 40, 0]);
+            t.iter().map(|e| e.target.control).collect::<Vec<_>>()
+        };
+        assert_eq!(hit(&mut r), [Control::DrumStep(1)]);
+        r.send(&[0x90, 29, 127]);
+        r.send(&[0x80, 29, 0]);
+        assert_eq!(hit(&mut r), [Control::DrumTrigger(1)]);
+        r.send(&[0x90, 30, 127]);
+        assert_eq!(hit(&mut r), [Control::DrumPattern(1)], "PATTERN (hold) outranks the latched PLAY mode");
     }
 
     #[test]

@@ -10,6 +10,7 @@ use crate::engine::{MappingEngine, ValueSource};
 use crate::feedback::FeedbackState;
 use crate::hid::{self, HidLayout, HidLink};
 use crate::mapping::Mapping;
+use crate::screen;
 use crate::store::MappingStore;
 use crossbeam_channel::Sender;
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
@@ -23,6 +24,8 @@ use std::time::{Duration, Instant};
 /// How long a HID controller's displays show its decks after it connects or
 /// changes deck layout.
 const LAYOUT_FLASH: Duration = Duration::from_millis(1500);
+/// How long a pixel display greets after connecting.
+const GREETING: Duration = Duration::from_millis(1200);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MidiEvent {
@@ -92,6 +95,8 @@ struct Device {
     /// Display messages that override the feedback until the instant, see
     /// [`deck_letters`].
     flash: Option<(Instant, Vec<[u8; 3]>)>,
+    /// When it connected (a pixel display greets for a moment).
+    since: Instant,
 }
 
 impl Device {
@@ -115,10 +120,36 @@ impl Device {
 
     fn lights_off(&mut self) {
         let mut msgs = Vec::new();
+        let mut blank = None;
         if let Some(e) = lock(&self.engine).as_ref() {
             FeedbackState::all_off(e.mapping(), &mut msgs);
+            blank = e.mapping().hid.as_ref().and_then(|h| h.bitmap.as_ref()).map(|b| vec![0; b.frame_len()]);
         }
         self.send(&msgs);
+        if let (Link::Hid(h), Some(frame)) = (&self.link, blank) {
+            h.show(&frame);
+        }
+    }
+
+    /// The frame for the pixel display of a HID controller whose mapping has
+    /// one.
+    fn screen_frame(&self, engine: &MappingEngine, values: &dyn ValueSource) -> Option<Vec<u8>> {
+        if !matches!(self.link, Link::Hid(_)) {
+            return None;
+        }
+        let b = engine.mapping().hid.as_ref()?.bitmap.as_ref()?;
+        let frame = if self.since.elapsed() < GREETING {
+            screen::message(b.width, b.height, &["RILLE", "", &engine.mapping().name])
+        } else {
+            match values.drum_screen() {
+                Some(s) => {
+                    let beat_on = values.beat_phase().rem_euclid(1.0) < 0.5;
+                    screen::render(b.screen, b.width, b.height, &s, values, &|m| engine.modifier(m), beat_on)
+                }
+                None => screen::message(b.width, b.height, &["RILLE"]),
+            }
+        };
+        Some(frame)
     }
 }
 
@@ -247,6 +278,7 @@ impl MidiManager {
             seen_subscribed: false,
             feedback: FeedbackState::new(),
             flash,
+            since: Instant::now(),
         };
         self.devices.push(device);
         let _ = self.tx.send(MidiEvent::Connected { port: port.to_owned(), mapping: mapping_name });
@@ -389,9 +421,15 @@ impl MidiManager {
                 d.flash = None;
                 d.feedback.reset();
             }
+            let mut frame = None;
             if let Some(e) = lock(&d.engine).as_mut() {
                 e.flush(now, values, &mut self.events);
                 d.feedback.collect_with_modifiers(e.mapping(), values, &|m| e.modifier(m), &mut self.buf);
+                frame = d.screen_frame(e, values);
+            }
+            // Outside the engine's lock: the controls keep working meanwhile.
+            if let (Link::Hid(h), Some(f)) = (&d.link, &frame) {
+                h.show(f);
             }
             if let Some((_, msgs)) = &d.flash {
                 self.buf.extend_from_slice(msgs);

@@ -33,6 +33,8 @@ pub enum ScreenKind {
 pub struct DrumScreen {
     pub playing: bool,
     pub record: bool,
+    /// REC waits for the downbeat.
+    pub counting_in: bool,
     /// Waiting for the downbeat to start; stopping at the end of the bar.
     pub waiting: bool,
     pub stopping: bool,
@@ -65,8 +67,8 @@ const FULL_NAMES: [&str; INSTRUMENTS] =
 /// What SHIFT + pad does, top-left pad first (the labels printed on the
 /// pads).
 const SHIFT_LABELS: [&str; 16] = [
-    "SEMI-", "SEMI+", "OCT-", "OCT+", "CLEAR", "CLR P", "COPY", "PASTE", "", "", "NUDG<", "NUDG>", "UNDO", "REDO",
-    "UNDO", "REDO",
+    "SEMI-", "SEMI+", "OCT-", "OCT+", "CLEAR", "CLR P", "COPY", "PASTE", "STRT", "SWG50", "NUDG<", "NUDG>", "UNDO",
+    "REDO", "UNDO", "REDO",
 ];
 
 /// Draws `kind` for `s` on a `width` × `height` display; `beat_on`: the
@@ -116,7 +118,7 @@ fn drum(c: &mut Canvas, s: &DrumScreen, values: &dyn ValueSource, modifier: &dyn
         c.glyph(x, 0, transport);
     }
     x += 10;
-    if s.record {
+    if s.record && (!s.counting_in || beat_on) {
         c.fill(x - 1, 0, text_width("REC") + 1, 8, true);
         c.text_color(x, 0, "REC", false);
     }

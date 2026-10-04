@@ -180,6 +180,9 @@ pub struct DrumState {
     /// the end of the bar.
     pub waiting: bool,
     pub stopping: bool,
+    /// REC is on and waiting for the downbeat; replace recording.
+    pub counting_in: bool,
+    pub replace: bool,
     pub can_undo: bool,
     pub can_redo: bool,
 }
@@ -215,6 +218,8 @@ impl Default for DrumState {
             repeat_rate: rille_core::drums::DEFAULT_REPEAT as u8,
             waiting: false,
             stopping: false,
+            counting_in: false,
+            replace: false,
             can_undo: false,
             can_redo: false,
         }

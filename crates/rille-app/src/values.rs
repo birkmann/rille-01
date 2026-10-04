@@ -185,6 +185,7 @@ impl ValueSource for SnapshotValues {
         Some(DrumScreen {
             playing: d.playing,
             record: d.record,
+            counting_in: d.counting_in,
             waiting: d.waiting,
             stopping: d.stopping,
             pattern: d.current,
@@ -217,7 +218,15 @@ fn drum_value(c: Control, d: &DrumState, clock_beat: f64) -> f32 {
     let playhead = |s: usize| d.step == Some(s as u8);
     match c {
         Control::DrumPlay => b(d.playing),
-        Control::DrumRecord => b(d.record),
+        // Blinking during the count-in.
+        Control::DrumRecord | Control::DrumCountIn => {
+            if d.counting_in {
+                b(beat_phase < 0.5)
+            } else {
+                b(d.record)
+            }
+        }
+        Control::DrumReplace => b(d.replace),
         // A running light: the playhead inverts the step under it.
         Control::DrumStep(n) => idx(n, STEPS).map_or(0.0, |s| b(pat.is_on(sel, s) != playhead(s))),
         Control::DrumAccent(n) => idx(n, STEPS).map_or(0.0, |s| b(pat.is_accent(sel, s))),

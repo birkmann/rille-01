@@ -24,6 +24,9 @@
 #     GROUP / SELECT    select the instrument
 #     MUTE / SOLO       mute / solo the instrument
 #     ERASE             clear the instrument's steps (SHIFT+ERASE: the pattern)
+#     SAMPLING          load the track selected in the library as the
+#                       instrument's sound (a tap on SAMPLING: drums in the
+#                       headphones)
 #     PATTERN           pattern 1-16, from the next bar while playing
 #                       (tap PATTERN to keep it up, tap again to leave)
 #     DUPLICATE         copy the pattern to 1-16
@@ -33,10 +36,13 @@
 #                       REPEAT to keep it on); the encoder sets the rate
 #     SHIFT             as printed: UNDO, REDO, NUDGE < >, CLEAR (the
 #                       instrument), CLR AUTO (the pattern), COPY, PASTE,
-#                       SEMITONE - +, OCTAVE - + (tune of the instrument)
+#                       SEMITONE - +, OCTAVE - + (tune of the instrument),
+#                       QUANTIZE (straight: no swing), QUANT 50% (half swing)
 #   PLAY                start/stop, in time with the master clock
 #   RESTART             start on the next downbeat / stop at the end of the bar
-#   REC                 live recording
+#   REC                 live recording; SHIFT+REC (COUNT-IN): from the next
+#                       downbeat; ERASE+REC (REPLACE, lit on ERASE): the first
+#                       hit of an instrument clears its old steps
 #   < STEP / STEP >     previous/next pattern
 #   < / > (display)     previous/next instrument
 #   ENCODER             what the lit button chose: F1 level, F2 tune, F3 decay
@@ -47,7 +53,6 @@
 #                       kit or instrument. Push: back to the default value.
 #   VIEW                show/hide the drum machine
 #   NAV                 drums through FX 1 (SHIFT: FX 2)
-#   SAMPLING            drums in the headphones
 #   SHIFT+MUTE          CHOKE: closed hi-hat cuts the open one
 #
 # The display shows pattern, transport, instrument, tempo, all steps with
@@ -113,6 +118,10 @@ midi = { type = "note", channel = 1, number = 31 }
 [[input]]
 target = "modifier:browse"
 midi = { type = "note", channel = 1, number = 14 }
+
+[[input]]
+target = "modifier:sampling"
+midi = { type = "note", channel = 1, number = 13 }
 
 [[input]]
 target = "modifier:pattern"
@@ -193,6 +202,16 @@ target = "drum.record"
 midi = { type = "note", channel = 1, number = 2 }
 
 [[input]]
+target = "drum.count_in"
+midi = { type = "note", channel = 1, number = 2 }
+condition = { modifier = "shift" }
+
+[[input]]
+target = "drum.replace"
+midi = { type = "note", channel = 1, number = 2 }
+condition = { modifier = "erase" }
+
+[[input]]
 target = "drum.clear_pattern"
 midi = { type = "note", channel = 1, number = 1 }
 condition = { modifier = "shift" }
@@ -238,6 +257,7 @@ condition = { modifier = "shift" }
 [[input]]
 target = "drum.pfl"
 midi = { type = "note", channel = 1, number = 13 }
+tap = true
 
 # --- Encoder: turn ----------------------------------------------------
 
@@ -427,6 +447,11 @@ midi = { type = "note", channel = 1, number = 64 }
 condition = { modifier = "erase" }
 
 [[input]]
+target = "drum.load_selected.1"
+midi = { type = "note", channel = 1, number = 64 }
+condition = { modifier = "sampling" }
+
+[[input]]
 target = "drum.pattern.1"
 midi = { type = "note", channel = 1, number = 64 }
 condition = { modifier = "pattern" }
@@ -495,6 +520,11 @@ condition = { modifier = "solo" }
 target = "drum.inst_clear.2"
 midi = { type = "note", channel = 1, number = 65 }
 condition = { modifier = "erase" }
+
+[[input]]
+target = "drum.load_selected.2"
+midi = { type = "note", channel = 1, number = 65 }
+condition = { modifier = "sampling" }
 
 [[input]]
 target = "drum.pattern.2"
@@ -567,6 +597,11 @@ midi = { type = "note", channel = 1, number = 66 }
 condition = { modifier = "erase" }
 
 [[input]]
+target = "drum.load_selected.3"
+midi = { type = "note", channel = 1, number = 66 }
+condition = { modifier = "sampling" }
+
+[[input]]
 target = "drum.pattern.3"
 midi = { type = "note", channel = 1, number = 66 }
 condition = { modifier = "pattern" }
@@ -635,6 +670,11 @@ condition = { modifier = "solo" }
 target = "drum.inst_clear.4"
 midi = { type = "note", channel = 1, number = 67 }
 condition = { modifier = "erase" }
+
+[[input]]
+target = "drum.load_selected.4"
+midi = { type = "note", channel = 1, number = 67 }
+condition = { modifier = "sampling" }
 
 [[input]]
 target = "drum.pattern.4"
@@ -707,6 +747,11 @@ midi = { type = "note", channel = 1, number = 68 }
 condition = { modifier = "erase" }
 
 [[input]]
+target = "drum.load_selected.5"
+midi = { type = "note", channel = 1, number = 68 }
+condition = { modifier = "sampling" }
+
+[[input]]
 target = "drum.pattern.5"
 midi = { type = "note", channel = 1, number = 68 }
 condition = { modifier = "pattern" }
@@ -773,6 +818,11 @@ condition = { modifier = "solo" }
 target = "drum.inst_clear.6"
 midi = { type = "note", channel = 1, number = 69 }
 condition = { modifier = "erase" }
+
+[[input]]
+target = "drum.load_selected.6"
+midi = { type = "note", channel = 1, number = 69 }
+condition = { modifier = "sampling" }
 
 [[input]]
 target = "drum.pattern.6"
@@ -843,6 +893,11 @@ midi = { type = "note", channel = 1, number = 70 }
 condition = { modifier = "erase" }
 
 [[input]]
+target = "drum.load_selected.7"
+midi = { type = "note", channel = 1, number = 70 }
+condition = { modifier = "sampling" }
+
+[[input]]
 target = "drum.pattern.7"
 midi = { type = "note", channel = 1, number = 70 }
 condition = { modifier = "pattern" }
@@ -911,6 +966,11 @@ midi = { type = "note", channel = 1, number = 71 }
 condition = { modifier = "erase" }
 
 [[input]]
+target = "drum.load_selected.8"
+midi = { type = "note", channel = 1, number = 71 }
+condition = { modifier = "sampling" }
+
+[[input]]
 target = "drum.pattern.8"
 midi = { type = "note", channel = 1, number = 71 }
 condition = { modifier = "pattern" }
@@ -971,6 +1031,12 @@ target = "drum.kit.9"
 midi = { type = "note", channel = 1, number = 72 }
 condition = { modifier = "scene" }
 
+[[input]]
+target = "drum.swing"
+midi = { type = "note", channel = 1, number = 72 }
+set = 0.0
+condition = { modifier = "shift" }
+
 # Pad 6 (position 10)
 [[input]]
 target = "drum.step.10"
@@ -1006,6 +1072,12 @@ condition = { modifier = "grid" }
 target = "drum.kit.10"
 midi = { type = "note", channel = 1, number = 73 }
 condition = { modifier = "scene" }
+
+[[input]]
+target = "drum.swing"
+midi = { type = "note", channel = 1, number = 73 }
+set = 0.5
+condition = { modifier = "shift" }
 
 # Pad 7 (position 11)
 [[input]]
@@ -1295,6 +1367,12 @@ raw = true
 condition = { modifier = "erase" }
 
 [[output]]
+source = "drum.inst_led.1"
+midi = { type = "note", channel = 2, number = 1 }
+raw = true
+condition = { modifier = "sampling" }
+
+[[output]]
 source = "drum.mute_led.1"
 midi = { type = "note", channel = 2, number = 1 }
 raw = true
@@ -1370,6 +1448,12 @@ source = "drum.inst_led.2"
 midi = { type = "note", channel = 2, number = 2 }
 raw = true
 condition = { modifier = "erase" }
+
+[[output]]
+source = "drum.inst_led.2"
+midi = { type = "note", channel = 2, number = 2 }
+raw = true
+condition = { modifier = "sampling" }
 
 [[output]]
 source = "drum.mute_led.2"
@@ -1449,6 +1533,12 @@ raw = true
 condition = { modifier = "erase" }
 
 [[output]]
+source = "drum.inst_led.3"
+midi = { type = "note", channel = 2, number = 3 }
+raw = true
+condition = { modifier = "sampling" }
+
+[[output]]
 source = "drum.mute_led.3"
 midi = { type = "note", channel = 2, number = 3 }
 raw = true
@@ -1524,6 +1614,12 @@ source = "drum.inst_led.4"
 midi = { type = "note", channel = 2, number = 4 }
 raw = true
 condition = { modifier = "erase" }
+
+[[output]]
+source = "drum.inst_led.4"
+midi = { type = "note", channel = 2, number = 4 }
+raw = true
+condition = { modifier = "sampling" }
 
 [[output]]
 source = "drum.mute_led.4"
@@ -1603,6 +1699,12 @@ raw = true
 condition = { modifier = "erase" }
 
 [[output]]
+source = "drum.inst_led.5"
+midi = { type = "note", channel = 2, number = 5 }
+raw = true
+condition = { modifier = "sampling" }
+
+[[output]]
 source = "drum.mute_led.5"
 midi = { type = "note", channel = 2, number = 5 }
 raw = true
@@ -1678,6 +1780,12 @@ source = "drum.inst_led.6"
 midi = { type = "note", channel = 2, number = 6 }
 raw = true
 condition = { modifier = "erase" }
+
+[[output]]
+source = "drum.inst_led.6"
+midi = { type = "note", channel = 2, number = 6 }
+raw = true
+condition = { modifier = "sampling" }
 
 [[output]]
 source = "drum.mute_led.6"
@@ -1757,6 +1865,12 @@ raw = true
 condition = { modifier = "erase" }
 
 [[output]]
+source = "drum.inst_led.7"
+midi = { type = "note", channel = 2, number = 7 }
+raw = true
+condition = { modifier = "sampling" }
+
+[[output]]
 source = "drum.mute_led.7"
 midi = { type = "note", channel = 2, number = 7 }
 raw = true
@@ -1832,6 +1946,12 @@ source = "drum.inst_led.8"
 midi = { type = "note", channel = 2, number = 8 }
 raw = true
 condition = { modifier = "erase" }
+
+[[output]]
+source = "drum.inst_led.8"
+midi = { type = "note", channel = 2, number = 8 }
+raw = true
+condition = { modifier = "sampling" }
 
 [[output]]
 source = "drum.mute_led.8"
@@ -1914,6 +2034,12 @@ condition = { modifier = "erase" }
 source = "drum.copy"
 midi = { type = "note", channel = 2, number = 9 }
 off = 0
+condition = { modifier = "sampling" }
+
+[[output]]
+source = "drum.copy"
+midi = { type = "note", channel = 2, number = 9 }
+off = 0
 condition = { modifier = "mute" }
 
 [[output]]
@@ -1949,7 +2075,7 @@ condition = { modifier = "scene" }
 [[output]]
 source = "drum.copy"
 midi = { type = "note", channel = 2, number = 9 }
-off = 0
+off = 10
 condition = { modifier = "shift" }
 
 [[output]]
@@ -1991,6 +2117,12 @@ condition = { modifier = "erase" }
 source = "drum.copy"
 midi = { type = "note", channel = 2, number = 10 }
 off = 0
+condition = { modifier = "sampling" }
+
+[[output]]
+source = "drum.copy"
+midi = { type = "note", channel = 2, number = 10 }
+off = 0
 condition = { modifier = "mute" }
 
 [[output]]
@@ -2026,7 +2158,7 @@ condition = { modifier = "scene" }
 [[output]]
 source = "drum.copy"
 midi = { type = "note", channel = 2, number = 10 }
-off = 0
+off = 10
 condition = { modifier = "shift" }
 
 [[output]]
@@ -2063,6 +2195,12 @@ source = "drum.copy"
 midi = { type = "note", channel = 2, number = 11 }
 off = 0
 condition = { modifier = "erase" }
+
+[[output]]
+source = "drum.copy"
+midi = { type = "note", channel = 2, number = 11 }
+off = 0
+condition = { modifier = "sampling" }
 
 [[output]]
 source = "drum.copy"
@@ -2145,6 +2283,12 @@ condition = { modifier = "erase" }
 source = "drum.copy"
 midi = { type = "note", channel = 2, number = 12 }
 off = 0
+condition = { modifier = "sampling" }
+
+[[output]]
+source = "drum.copy"
+midi = { type = "note", channel = 2, number = 12 }
+off = 0
 condition = { modifier = "mute" }
 
 [[output]]
@@ -2217,6 +2361,12 @@ source = "drum.copy"
 midi = { type = "note", channel = 2, number = 13 }
 off = 0
 condition = { modifier = "erase" }
+
+[[output]]
+source = "drum.copy"
+midi = { type = "note", channel = 2, number = 13 }
+off = 0
+condition = { modifier = "sampling" }
 
 [[output]]
 source = "drum.copy"
@@ -2300,6 +2450,12 @@ condition = { modifier = "erase" }
 source = "drum.copy"
 midi = { type = "note", channel = 2, number = 14 }
 off = 0
+condition = { modifier = "sampling" }
+
+[[output]]
+source = "drum.copy"
+midi = { type = "note", channel = 2, number = 14 }
+off = 0
 condition = { modifier = "mute" }
 
 [[output]]
@@ -2378,6 +2534,12 @@ condition = { modifier = "erase" }
 source = "drum.copy"
 midi = { type = "note", channel = 2, number = 15 }
 off = 0
+condition = { modifier = "sampling" }
+
+[[output]]
+source = "drum.copy"
+midi = { type = "note", channel = 2, number = 15 }
+off = 0
 condition = { modifier = "mute" }
 
 [[output]]
@@ -2451,6 +2613,12 @@ source = "drum.copy"
 midi = { type = "note", channel = 2, number = 16 }
 off = 0
 condition = { modifier = "erase" }
+
+[[output]]
+source = "drum.copy"
+midi = { type = "note", channel = 2, number = 16 }
+off = 0
+condition = { modifier = "sampling" }
 
 [[output]]
 source = "drum.copy"
@@ -2588,7 +2756,7 @@ midi = { type = "note", channel = 1, number = 20 }
 off = 10
 
 [[output]]
-source = "modifier:erase"
+source = "drum.replace"
 midi = { type = "note", channel = 1, number = 21 }
 off = 10
 
@@ -2648,3 +2816,15 @@ source = "drum.choke"
 midi = { type = "note", channel = 1, number = 30 }
 off = 10
 condition = { modifier = "shift" }
+
+[[output]]
+source = "modifier:erase"
+midi = { type = "note", channel = 1, number = 21 }
+off = 10
+condition = { modifier = "erase" }
+
+[[output]]
+source = "modifier:sampling"
+midi = { type = "note", channel = 1, number = 13 }
+off = 10
+condition = { modifier = "sampling" }

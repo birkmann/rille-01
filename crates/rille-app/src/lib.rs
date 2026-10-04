@@ -566,6 +566,8 @@ impl App {
             Control::DrumPaste if ev.value.is_press() => self.drum_paste_pattern(),
             // Cell edits need the app (files, the other decks' audio).
             Control::RemixPadLoad(_) => self.notify(UiEvent::Browser(ev)),
+            // The browser knows the selected track.
+            Control::DrumLoadSelected(_) => self.notify(UiEvent::Browser(ev)),
             Control::RemixPadDelete(pad) | Control::RemixPadCapture(pad) | Control::RemixPadType(pad) => {
                 let deck = ev.target.unit;
                 if ev.value.is_press()

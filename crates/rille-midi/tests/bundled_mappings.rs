@@ -112,7 +112,8 @@ fn maschine_mikro_mk2() {
         bits.iter().for_each(|&b| v[1 + usize::from(b / 8)] |= 1 << (b % 8));
         v
     };
-    // Pad report: 32 values, pad number in the top 4 bits.
+    // Pad report: 32 values, the pad in the top 4 bits (0 = top left, row
+    // by row, like the LEDs).
     let pads = |pad: u16, pressure: u16| {
         let mut v = vec![0x20];
         for k in 0..32u16 {
@@ -125,19 +126,19 @@ fn maschine_mikro_mk2() {
     let (shift, pad_mode, f1, pattern) = (0, 29, 23, 30);
     let mut r = vec![buttons(&[], 0)];
     // Pad 13 (top left): step 1.
-    r.extend(hit(12));
+    r.extend(hit(0));
     // PAD MODE: pad 13 plays BD, pad 1 (bottom left) mutes CP.
     r.extend([buttons(&[pad_mode], 0), buttons(&[], 0)]);
-    r.extend(hit(12));
     r.extend(hit(0));
+    r.extend(hit(12));
     // SHIFT + pad 1: UNDO, as printed.
     r.push(buttons(&[shift], 0));
-    r.extend(hit(0));
+    r.extend(hit(12));
     // The encoder: the filter; after F1 the selected instrument's level.
     r.extend([buttons(&[], 1), buttons(&[f1], 1), buttons(&[], 1), buttons(&[], 2)]);
     // PATTERN held + pad 16 (top right): pattern 4.
     r.push(buttons(&[pattern], 2));
-    r.extend(hit(15));
+    r.extend(hit(3));
     assert_eq!(
         hid_targets(m, &r),
         [

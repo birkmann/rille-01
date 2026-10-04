@@ -74,12 +74,24 @@ Item {
     ]
     // Shown columns in order: [{ key, width }], saved in the settings.
     property var layout: []
+    // Phone width: the source tree folds away above the tracks (`sourcesOpen`
+    // shows it instead of them) and the table shows a fixed set of columns.
+    readonly property bool narrow: width < 700
+    property bool sourcesOpen: false
+    readonly property var narrowLayout: [
+        { key: "cover", width: 38 }, { key: "title", width: 110 }, { key: "artist", width: 80 },
+        { key: "bpm", width: 56 }, { key: "key", width: 44 }
+    ]
+    readonly property var activeLayout: narrow ? narrowLayout : layout
+    // Toolbar buttons without their labels when the track list is narrow.
+    readonly property bool iconsOnly: width < 1000
     // Row size: 0 compact, 1 medium, 2 large (rows and cover art grow).
     property int rowSize: 0
     readonly property var rowHeights: [30, 44, 68]
     readonly property var coverSizes: [26, 40, 64]
-    readonly property int rowHeight: rowHeights[rowSize] || 30
-    readonly property int coverSize: coverSizes[rowSize] || 26
+    // Touch: at least the medium size.
+    readonly property int rowHeight: Math.max(Theme.mobile ? 44 : 0, rowHeights[rowSize] || 30)
+    readonly property int coverSize: Math.max(Theme.mobile ? 40 : 0, coverSizes[rowSize] || 26)
     property real viewWidth: 800
     // Width of the source tree; drag the gap next to it, saved in the settings.
     property real sidebarWidth: 250
@@ -92,12 +104,12 @@ Item {
         var out = []
         var fixed = 0
         var flex = 0
-        for (var i = 0; i < layout.length; i++) {
-            var def = columnDef(layout[i].key)
+        for (var i = 0; i < activeLayout.length; i++) {
+            var def = columnDef(activeLayout[i].key)
             if (!def)
                 continue
             var c = Object.assign({}, def)
-            c.width = setWidth(layout[i])
+            c.width = setWidth(activeLayout[i])
             if (c.flex)
                 flex += c.width
             else
@@ -274,6 +286,7 @@ Item {
             return
         }
         sourceRow = row
+        sourcesOpen = false
         sourceTitle = kind === 3 ? tree.pathTextAt(row) : (kind === kindBeatportSearch ? "Beatport" : tree.labelAt(row))
         tracks.sourceKind = kind
         tracks.sourceId = tree.idAt(row)
@@ -390,44 +403,67 @@ Item {
         anchors.fill: parent
         spacing: Theme.gap
 
-        RowLayout {
+        // Side by side; narrow: the search (and the tree, when open) above
+        // the tracks.
+        GridLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 0
+            rowSpacing: Theme.gap
+            columnSpacing: 0
 
             // --- Source tree ------------------------------------------------
             Panel {
-                Layout.preferredWidth: Math.max(browser.sidebarMin, Math.min(browser.sidebarMax, browser.sidebarWidth))
-                Layout.fillHeight: true
+                Layout.row: 0
+                Layout.column: 0
+                Layout.preferredWidth: browser.narrow ? -1 : Math.max(browser.sidebarMin, Math.min(browser.sidebarMax, browser.sidebarWidth))
+                Layout.fillWidth: browser.narrow
+                Layout.fillHeight: !browser.narrow || browser.sourcesOpen
+                Layout.preferredHeight: browser.narrow && !browser.sourcesOpen ? search.implicitHeight + 8 : -1
 
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 4
                     spacing: 4
 
-                    SearchField {
-                        id: search
+                    RowLayout {
                         Layout.fillWidth: true
-                        placeholderText: browser.beatportSearch ? "Search Beatport or paste a link" : "Search"
-                        onTextEdited: searchDelay.restart()
-                        onAccepted: {
-                            searchDelay.stop()
-                            searchDelay.triggered()
+                        spacing: 4
+                        DjButton {
+                            visible: browser.narrow
+                            icon: browser.sourcesOpen ? "chevron-up" : "library"
+                            implicitWidth: 40
+                            implicitHeight: search.implicitHeight
+                            lit: browser.sourcesOpen
+                            litColor: Theme.sync
+                            tip: browser.sourcesOpen ? "Back to the tracks" : "Collection, playlists, folders"
+                            onClicked: browser.sourcesOpen = !browser.sourcesOpen
                         }
-                        Keys.onDownPressed: list.forceActiveFocus()
-                        Timer {
-                            id: searchDelay
-                            // Each Beatport search asks the server: wait for a pause in typing.
-                            interval: browser.beatportSearch ? 450 : 150
-                            onTriggered: {
-                                tracks.search = search.text
-                                tracks.refresh()
+                        SearchField {
+                            id: search
+                            Layout.fillWidth: true
+                            placeholderText: browser.beatportSearch ? "Search Beatport or paste a link" : "Search"
+                            onTextEdited: searchDelay.restart()
+                            onAccepted: {
+                                searchDelay.stop()
+                                searchDelay.triggered()
+                            }
+                            Keys.onDownPressed: list.forceActiveFocus()
+                            Timer {
+                                id: searchDelay
+                                // Each Beatport search asks the server: wait for a pause in typing.
+                                interval: browser.beatportSearch ? 450 : 150
+                                onTriggered: {
+                                    tracks.search = search.text
+                                    tracks.refresh()
+                                }
                             }
                         }
+
                     }
 
                     ListView {
                         id: treeView
+                        visible: !browser.narrow || browser.sourcesOpen
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         clip: true
@@ -524,6 +560,7 @@ Item {
                     }
 
                     RowLayout {
+                        visible: !browser.narrow || browser.sourcesOpen
                         Layout.fillWidth: true
                         spacing: 4
                         TextField {
@@ -555,6 +592,9 @@ Item {
 
             // Drag to resize the source tree; double-click for the default width.
             Item {
+                visible: !browser.narrow
+                Layout.row: 0
+                Layout.column: 1
                 Layout.preferredWidth: Theme.gap
                 Layout.fillHeight: true
                 Rectangle {
@@ -593,6 +633,9 @@ Item {
 
             // --- Tracks -------------------------------------------------------
             Panel {
+                visible: !(browser.narrow && browser.sourcesOpen)
+                Layout.row: browser.narrow ? 1 : 0
+                Layout.column: browser.narrow ? 0 : 2
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
@@ -619,6 +662,7 @@ Item {
                             font.bold: true
                         }
                         UiText {
+                            visible: !browser.narrow
                             Layout.maximumWidth: 420
                             text: tracks.summary
                             color: Theme.textDim
@@ -636,7 +680,7 @@ Item {
                             visible: browser.beatportMode && AppController.beatportAccount.length > 0
                             enabled: browser.toDownload > 0
                             icon: "import"
-                            text: browser.toDownload === 0 ? "ALL OFFLINE" : (tracks.selectedCount > 0 ? "DOWNLOAD " + browser.toDownload : "DOWNLOAD ALL " + browser.toDownload)
+                            text: browser.iconsOnly ? "" : browser.toDownload === 0 ? "ALL OFFLINE" : (tracks.selectedCount > 0 ? "DOWNLOAD " + browser.toDownload : "DOWNLOAD ALL " + browser.toDownload)
                             tip: "Download for offline use: the tracks stay on this computer and play without a connection"
                             onClicked: tracks.downloadBeatport()
                         }
@@ -649,6 +693,7 @@ Item {
                             onRightClicked: browser.setRowSize((browser.rowSize + 2) % 3)
                         }
                         DjButton {
+                            visible: !browser.narrow
                             icon: "columns"
                             text: "COLUMNS"
                             onClicked: columnMenu.popup()
@@ -656,7 +701,7 @@ Item {
                         DjButton {
                             visible: browser.folderMode
                             icon: "import"
-                            text: tracks.selectedCount > 0 ? "IMPORT SELECTED" : "IMPORT"
+                            text: browser.iconsOnly ? "" : (tracks.selectedCount > 0 ? "IMPORT SELECTED" : "IMPORT")
                             enabled: tracks.newCount > 0
                             tip: "Add the tracks to the collection without analyzing them"
                             onClicked: tracks.selectedCount > 0 ? tracks.importSelected(false) : AppController.importFolder(tracks.sourceId, false, false)
@@ -664,14 +709,14 @@ Item {
                         DjButton {
                             visible: browser.folderMode
                             icon: "analyze"
-                            text: "IMPORT + ANALYZE"
+                            text: browser.iconsOnly ? "" : "IMPORT + ANALYZE"
                             tip: "Add the tracks to the collection and analyze beatgrid, key and loudness"
                             onClicked: tracks.selectedCount > 0 ? tracks.analyzeSelected(false) : AppController.analyzeFolder(tracks.sourceId, false, false)
                         }
                         DjButton {
                             visible: browser.folderMode && browser.sourceRow >= 0 && !tree.isMusicFolder(browser.sourceRow)
                             icon: "music"
-                            text: "ADD AS MUSIC FOLDER"
+                            text: browser.iconsOnly ? "" : "ADD AS MUSIC FOLDER"
                             tip: "Add this folder to the music folders: its tracks join the collection and new ones are picked up on every scan"
                             onClicked: AppController.addMusicFolderToken(tracks.sourceId)
                         }
@@ -685,7 +730,7 @@ Item {
                         DjButton {
                             visible: !browser.folderMode && !browser.beatportRemote && tracks.selectedCount > 0
                             icon: "analyze"
-                            text: "ANALYZE " + tracks.selectedCount
+                            text: browser.iconsOnly ? String(tracks.selectedCount) : "ANALYZE " + tracks.selectedCount
                             onClicked: tracks.analyzeSelected(false)
                         }
                     }
@@ -723,10 +768,20 @@ Item {
                             sortKey: tracks.sortKey
                             descending: tracks.descending
                             onSortRequested: key => tracks.sortBy(key)
-                            onResized: (i, w) => browser.resizeColumn(i, w)
+                            // The narrow table's columns are fixed.
+                            onResized: (i, w) => {
+                                if (!browser.narrow)
+                                    browser.resizeColumn(i, w)
+                            }
                             onResizeFinished: browser.saveLayout()
-                            onMoved: (from, to) => browser.moveColumn(from, to)
-                            onChooserRequested: columnMenu.popup()
+                            onMoved: (from, to) => {
+                                if (!browser.narrow)
+                                    browser.moveColumn(from, to)
+                            }
+                            onChooserRequested: {
+                                if (!browser.narrow)
+                                    columnMenu.popup()
+                            }
                         }
                         Keys.onPressed: event => {
                             if (event.key === Qt.Key_Left && (event.modifiers & Qt.ShiftModifier)) {
@@ -779,6 +834,7 @@ Item {
         Panel {
             Layout.fillWidth: true
             Layout.preferredHeight: 26
+            clip: true
             RowLayout {
                 anchors.fill: parent
                 anchors.leftMargin: 8
@@ -796,7 +852,7 @@ Item {
                         font.bold: true
                     }
                     Rectangle {
-                        implicitWidth: 140
+                        implicitWidth: browser.narrow ? 60 : 140
                         implicitHeight: 6
                         radius: 3
                         color: Theme.control
@@ -808,10 +864,12 @@ Item {
                         }
                     }
                     UiText {
+                        visible: !browser.narrow
                         text: AppController.analysisTime
                         font.pixelSize: Theme.fontSmall
                     }
                     UiText {
+                        visible: !browser.narrow
                         Layout.maximumWidth: 320
                         text: AppController.analysisCurrent
                         color: Theme.textDim

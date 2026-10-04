@@ -90,6 +90,11 @@ Rectangle {
             else if (mouse.button === Qt.LeftButton)
                 AppController.press("drum.inst." + (tab.inst + 1), false)
         }
+        // Touch: press and hold for the menu.
+        onPressAndHold: mouse => {
+            if (Theme.mobile && mouse.button === Qt.LeftButton)
+                tab.menuRequested()
+        }
         onDoubleClicked: mouse => {
             if (mouse.button === Qt.LeftButton) {
                 AppController.press("drum.trigger." + (tab.inst + 1), true)

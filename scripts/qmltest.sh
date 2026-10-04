@@ -9,7 +9,8 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/rille/ui"
 q=crates/rille-ui/qml
-cp "$q/Theme.qml" "$q/controls/UiText.qml" "$q/controls/Icon.qml" "$q/browser/TrackHeader.qml" "$tmp/rille/ui/"
+cp "$q/Theme.qml" "$q/controls/UiText.qml" "$q/controls/Icon.qml" "$q/browser/TrackHeader.qml" \
+    "$q/mobile/MobileTabBar.qml" "$tmp/rille/ui/"
 # Theme.qml loads the bundled fonts relative to itself (../assets/fonts).
 mkdir -p "$tmp/rille/assets"
 cp -r crates/rille-ui/assets/fonts "$tmp/rille/assets/"
@@ -19,6 +20,7 @@ singleton Theme 1.0 Theme.qml
 UiText 1.0 UiText.qml
 Icon 1.0 Icon.qml
 TrackHeader 1.0 TrackHeader.qml
+MobileTabBar 1.0 MobileTabBar.qml
 QMLDIR
 
 runner="${QMLTESTRUNNER:-/usr/lib/qt6/bin/qmltestrunner}"

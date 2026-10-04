@@ -44,8 +44,21 @@ QtObject {
     readonly property int gap: 4
     readonly property int radius: 3
     readonly property int radiusLarge: 8
+
+    // Mobile layout (phones, narrow windows): one view at a time behind a
+    // tab bar, larger touch targets. Main.qml sets it from the window size.
+    property bool mobile: false
+    // Smallest window that still fits the desktop layout.
+    readonly property int desktopMinWidth: 1000
+    readonly property int desktopMinHeight: 620
+    function isMobileSize(w: real, h: real): bool {
+        return w < desktopMinWidth || h < desktopMinHeight
+    }
+    readonly property int tabBarHeight: 48
+    readonly property int miniStripHeight: 44
+
     // The top part has a fixed size; the browser gets the rest of the window.
-    readonly property int headerHeight: 34
+    readonly property int headerHeight: mobile ? 40 : 34
     readonly property int topRowHeight: 78
     readonly property int deckRowHeight: 336
     // 4 decks: two compact decks stacked per side; the row grows with the

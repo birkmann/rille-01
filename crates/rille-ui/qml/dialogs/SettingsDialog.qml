@@ -10,8 +10,9 @@ Popup {
     id: dialog
     modal: true
     focus: true
-    width: Math.min(860, parent ? parent.width - 80 : 860)
-    height: Math.min(600, parent ? parent.height - 80 : 600)
+    // Nearly the whole window on a phone.
+    width: !parent ? 860 : (parent.width < 700 ? parent.width - 16 : Math.min(860, parent.width - 80))
+    height: !parent ? 600 : (parent.height < 700 || parent.width < 700 ? parent.height - 16 : Math.min(600, parent.height - 80))
     anchors.centerIn: Overlay.overlay
     padding: 0
 
@@ -19,6 +20,9 @@ Popup {
     property var devices: []
     property var midi: ({ ports: [], connected: [], mappings: [] })
     property int page: 0
+    // Narrow: the sections as icons only, smaller margins.
+    readonly property bool narrow: width < 640
+    readonly property int pageMargin: narrow ? 10 : 20
     readonly property var pages: [
         { name: "Audio", icon: "headphones" },
         { name: "Decks & Analysis", icon: "analyze" },
@@ -66,18 +70,19 @@ Popup {
         // --- Navigation ---------------------------------------------------
         Rectangle {
             Layout.fillHeight: true
-            Layout.preferredWidth: 210
+            Layout.preferredWidth: dialog.narrow ? 52 : 210
             color: Theme.bg
             radius: 6
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 12
+                anchors.margins: dialog.narrow ? 6 : 12
                 spacing: 4
                 RowLayout {
                     Layout.bottomMargin: 14
                     spacing: 8
+                    Layout.leftMargin: dialog.narrow ? 10 : 0
                     Icon { name: "sliders"; size: 18; color: Theme.textDim }
-                    UiText { text: "Settings"; font.pixelSize: Theme.fontLarge + 2; font.bold: true }
+                    UiText { visible: !dialog.narrow; text: "Settings"; font.pixelSize: Theme.fontLarge + 2; font.bold: true }
                 }
                 Repeater {
                     model: dialog.pages
@@ -96,16 +101,17 @@ Popup {
                             x: 12
                             spacing: 10
                             Icon { anchors.verticalCenter: parent.verticalCenter; name: nav.modelData.icon; size: 16; color: nav.current ? Theme.sync : Theme.textDim }
-                            UiText { text: nav.modelData.name; color: nav.current ? Theme.text : Theme.textDim; font.bold: nav.current }
+                            UiText { visible: !dialog.narrow; text: nav.modelData.name; color: nav.current ? Theme.text : Theme.textDim; font.bold: nav.current }
                         }
                         MouseArea { id: navArea; anchors.fill: parent; hoverEnabled: true; onClicked: dialog.page = nav.index }
                     }
                 }
                 Item { Layout.fillHeight: true }
                 Row {
+                    Layout.leftMargin: dialog.narrow ? 13 : 0
                     spacing: 7
                     BrandMark { size: 14; anchors.verticalCenter: parent.verticalCenter }
-                    UiText { text: "rille " + AppController.version(); color: Theme.textFaint; font.family: Theme.fontMono; font.pixelSize: Theme.fontSmall }
+                    UiText { visible: !dialog.narrow; text: "rille " + AppController.version(); color: Theme.textFaint; font.family: Theme.fontMono; font.pixelSize: Theme.fontSmall }
                 }
             }
         }
@@ -119,7 +125,7 @@ Popup {
             RowLayout {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 52
-                Layout.leftMargin: 20
+                Layout.leftMargin: dialog.pageMargin
                 Layout.rightMargin: 10
                 UiText { Layout.fillWidth: true; text: dialog.pages[dialog.page].name; font.pixelSize: Theme.fontLarge + 2; font.bold: true }
                 Rectangle {
@@ -145,8 +151,8 @@ Popup {
                     boundsBehavior: Flickable.StopAtBounds
                     ColumnLayout {
                         id: audioPage
-                        x: 20; y: 20
-                        width: parent.width - 40
+                        x: dialog.pageMargin; y: dialog.pageMargin
+                        width: parent.width - 2 * dialog.pageMargin
                         spacing: 14
                         SettingsSection {
                             title: "Output"
@@ -154,7 +160,7 @@ Popup {
                                 label: "Output device"
                                 hint: "Where the master (and headphone) mix plays."
                                 StyledCombo {
-                                    width: 300
+                                    width: Math.min(300, audioPage.width - 28)
                                     model: ["System default"].concat(dialog.devices)
                                     currentIndex: dialog.s.audio_device ? Math.max(0, dialog.devices.indexOf(dialog.s.audio_device) + 1) : 0
                                     onActivated: idx => dialog.set("audio_device", idx === 0 ? "" : dialog.devices[idx - 1])
@@ -237,8 +243,8 @@ Popup {
                     ScrollBar.vertical: StyledScrollBar {}
                     ColumnLayout {
                         id: decksPage
-                        x: 20; y: 20
-                        width: parent.width - 40
+                        x: dialog.pageMargin; y: dialog.pageMargin
+                        width: parent.width - 2 * dialog.pageMargin
                         spacing: 14
                         SettingsSection {
                             title: "Decks"
@@ -448,8 +454,8 @@ Popup {
                     ScrollBar.vertical: StyledScrollBar {}
                     ColumnLayout {
                         id: wavePage
-                        x: 20; y: 20
-                        width: parent.width - 40
+                        x: dialog.pageMargin; y: dialog.pageMargin
+                        width: parent.width - 2 * dialog.pageMargin
                         spacing: 14
                         SettingsSection {
                             title: "Look"
@@ -518,8 +524,8 @@ Popup {
                     ScrollBar.vertical: StyledScrollBar {}
                     ColumnLayout {
                         id: libraryPage
-                        x: 20; y: 20
-                        width: parent.width - 40
+                        x: dialog.pageMargin; y: dialog.pageMargin
+                        width: parent.width - 2 * dialog.pageMargin
                         spacing: 14
                         SettingsSection {
                             title: "Music folders"
@@ -592,8 +598,8 @@ Popup {
                     ScrollBar.vertical: StyledScrollBar {}
                     ColumnLayout {
                         id: controllerPage
-                        x: 20; y: 20
-                        width: parent.width - 40
+                        x: dialog.pageMargin; y: dialog.pageMargin
+                        width: parent.width - 2 * dialog.pageMargin
                         spacing: 14
                         SettingsSection {
                             title: "Connected controllers"
@@ -641,7 +647,7 @@ Popup {
                                             Rectangle { implicitWidth: 8; implicitHeight: 8; radius: 4; color: portRow.current.length ? Theme.play : Theme.textFaint }
                                             UiText { Layout.fillWidth: true; text: portRow.modelData; elide: Text.ElideRight; font.bold: true }
                                             StyledCombo {
-                                                Layout.preferredWidth: 280
+                                                Layout.preferredWidth: dialog.narrow ? 140 : 280
                                                 model: ["No mapping"].concat(dialog.midi.mappings)
                                                 currentIndex: portRow.current.length ? Math.max(0, dialog.midi.mappings.indexOf(portRow.current) + 1) : 0
                                                 onActivated: idx => AppController.setPortMapping(portRow.modelData, idx === 0 ? "" : dialog.midi.mappings[idx - 1])
@@ -735,8 +741,8 @@ Popup {
                     ColumnLayout {
                         id: beatportPage
                         readonly property bool signedIn: AppController.beatportAccount.length > 0
-                        x: 20; y: 20
-                        width: parent.width - 40
+                        x: dialog.pageMargin; y: dialog.pageMargin
+                        width: parent.width - 2 * dialog.pageMargin
                         spacing: 14
                         SettingsSection {
                             title: "Account"
@@ -758,7 +764,8 @@ Popup {
                                 spacing: 6
                                 TextField {
                                     id: bpUser
-                                    Layout.preferredWidth: 220
+                                    Layout.fillWidth: dialog.narrow
+                                    Layout.preferredWidth: dialog.narrow ? 1 : 220
                                     implicitHeight: 28
                                     placeholderText: "Email or username"
                                     placeholderTextColor: Theme.textFaint
@@ -769,7 +776,8 @@ Popup {
                                 }
                                 TextField {
                                     id: bpPassword
-                                    Layout.preferredWidth: 180
+                                    Layout.fillWidth: dialog.narrow
+                                    Layout.preferredWidth: dialog.narrow ? 1 : 180
                                     implicitHeight: 28
                                     placeholderText: "Password"
                                     placeholderTextColor: Theme.textFaint

@@ -8,6 +8,10 @@ import rille.ui
 Rectangle {
     id: header
     property bool maximized: false
+    /// Mobile layout: lights and level only, the buttons in a menu.
+    property bool compact: false
+    // The main level, if turned on and there is room for it.
+    readonly property bool showMeter: AppController.headerMeter && !compact && width >= 1100
     signal settingsRequested()
     signal aboutRequested()
     signal fullscreenRequested()
@@ -34,8 +38,8 @@ Rectangle {
     RowLayout {
         anchors.fill: parent
         anchors.leftMargin: 10
-        anchors.rightMargin: 8
-        spacing: 12
+        anchors.rightMargin: header.compact ? 4 : 8
+        spacing: header.compact ? 10 : 12
 
         // The lockup; opens About.
         Item {
@@ -48,7 +52,7 @@ Rectangle {
                 id: lockup
                 spacing: 7
                 BrandMark { size: 20; anchors.verticalCenter: parent.verticalCenter }
-                Wordmark { size: 19; anchors.verticalCenter: parent.verticalCenter; anchors.verticalCenterOffset: -1 }
+                Wordmark { visible: !header.compact; size: 19; anchors.verticalCenter: parent.verticalCenter; anchors.verticalCenterOffset: -1 }
             }
             MouseArea {
                 id: logoArea
@@ -59,7 +63,7 @@ Rectangle {
             }
             Tip { text: "About rille"; below: true; visible: logoArea.containsMouse }
         }
-        Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 18; color: Theme.border }
+        Rectangle { visible: !header.compact; Layout.preferredWidth: 1; Layout.preferredHeight: 18; color: Theme.border }
         // Audio and MIDI status lights.
         Row {
             spacing: 8
@@ -76,7 +80,7 @@ Rectangle {
                     HoverHandler { id: ledHover }
                     Tip { text: led.modelData.tip; below: true; visible: ledHover.hovered }
                     Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: led.modelData.ok ? Theme.play : Theme.textFaint }
-                    UiText { text: led.modelData.name; color: Theme.textDim; font.pixelSize: Theme.fontTiny; font.bold: true }
+                    UiText { visible: !header.compact; text: led.modelData.name; color: Theme.textDim; font.pixelSize: Theme.fontTiny; font.bold: true }
                 }
             }
         }
@@ -86,9 +90,9 @@ Rectangle {
             HoverHandler { id: cpuHover }
             Tip { text: "Audio CPU load: red means dropouts are close; a larger buffer (Settings) helps. Dropouts so far are counted next to it."; below: true; visible: cpuHover.hovered }
             Layout.alignment: Qt.AlignVCenter
-            UiText { text: "CPU"; color: Theme.textDim; font.pixelSize: Theme.fontTiny; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+            UiText { visible: !header.compact; text: "CPU"; color: Theme.textDim; font.pixelSize: Theme.fontTiny; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
             Rectangle {
-                width: 46; height: 6; radius: 2; color: Theme.control
+                width: header.compact ? 28 : 46; height: 6; radius: 2; color: Theme.control
                 anchors.verticalCenter: parent.verticalCenter
                 Rectangle {
                     width: parent.width * Math.min(1, AppController.cpuLoad)
@@ -98,7 +102,7 @@ Rectangle {
             }
             UiText {
                 visible: AppController.xruns > 0
-                text: AppController.xruns + (AppController.xruns === 1 ? " DROPOUT" : " DROPOUTS")
+                text: AppController.xruns + (header.compact ? "" : (AppController.xruns === 1 ? " DROPOUT" : " DROPOUTS"))
                 color: Theme.danger; font.pixelSize: Theme.fontTiny; font.bold: true
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -138,16 +142,16 @@ Rectangle {
             }
             UiText {
                 anchors.verticalCenter: parent.verticalCenter
-                text: battery.percent + "%" + (battery.minutes >= 0 ? "  " + Math.floor(battery.minutes / 60) + ":" + String(battery.minutes % 60).padStart(2, "0") : "")
+                text: battery.percent + "%" + (battery.minutes >= 0 && !header.compact ? "  " + Math.floor(battery.minutes / 60) + ":" + String(battery.minutes % 60).padStart(2, "0") : "")
                 color: battery.tint
                 font.pixelSize: Theme.fontSmall
                 font.bold: true
             }
         }
         // Main level, horizontal (off by default: Settings → Audio).
-        UiText { visible: AppController.headerMeter; text: "MAIN"; color: Theme.textDim; font.pixelSize: Theme.fontTiny; font.bold: true }
+        UiText { visible: header.showMeter; text: "MAIN"; color: Theme.textDim; font.pixelSize: Theme.fontTiny; font.bold: true }
         Column {
-            visible: AppController.headerMeter
+            visible: header.showMeter
             spacing: 2
             HoverHandler { id: mainHover }
             Tip { text: "Main output level, left and right"; below: true; visible: mainHover.hovered }
@@ -167,13 +171,14 @@ Rectangle {
             }
         }
         UiText {
-            visible: AppController.headerMeter && AppController.limiterReduction > 0.5
+            visible: header.showMeter && AppController.limiterReduction > 0.5
             text: "LIM −" + AppController.limiterReduction.toFixed(1)
             color: Theme.warn
             font.pixelSize: Theme.fontTiny
         }
         UiText {
             id: clock
+            visible: !header.compact || header.width > 520
             color: Theme.text
             font.family: Theme.fontMono
             font.pixelSize: Theme.fontNormal
@@ -185,7 +190,7 @@ Rectangle {
         }
         UiText {
             Layout.fillWidth: true
-            text: AppController.learning ? AppController.learnText : AppController.audioText
+            text: AppController.learning ? AppController.learnText : (header.compact ? "" : AppController.audioText)
             color: AppController.learning ? Theme.warn : Theme.textFaint
             font.pixelSize: Theme.fontSmall
             elide: Text.ElideRight
@@ -193,7 +198,7 @@ Rectangle {
         }
         DjButton {
             icon: "dot"
-            text: AppController.recording ? "REC " + AppController.recordingTime : "REC"
+            text: AppController.recording ? (header.compact ? "" : "REC ") + AppController.recordingTime : (header.compact ? "" : "REC")
             target: "global.record"
             lit: AppController.recording
             litColor: Theme.danger
@@ -203,6 +208,7 @@ Rectangle {
             tipBelow: true
         }
         DjButton {
+            visible: !header.compact
             icon: "drums"
             text: "DRUMS"
             lit: AppController.drumsVisible
@@ -224,6 +230,7 @@ Rectangle {
             }
         }
         DjButton {
+            visible: !header.compact
             icon: "midi"
             text: "LEARN"
             lit: AppController.learning
@@ -233,23 +240,36 @@ Rectangle {
             onClicked: AppController.setLearn(!AppController.learning)
         }
         DjButton {
+            visible: !header.compact
             icon: "sliders"
             text: "SETTINGS"
             onClicked: header.settingsRequested()
         }
         DjButton {
+            visible: !header.compact
             icon: "maximize"
             implicitWidth: 30
             tip: "Fullscreen"
             tipBelow: true
             onClicked: header.fullscreenRequested()
         }
-        Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 18; color: Theme.border }
-        DjButton { flat: true; icon: "minus"; implicitWidth: 32; tip: "Minimize"; tipBelow: true; onClicked: header.minimizeRequested() }
-        DjButton { flat: true; icon: header.maximized ? "restore" : "square"; implicitWidth: 32; tip: header.maximized ? "Restore" : "Maximize"; tipBelow: true; onClicked: header.maximizeRequested() }
+        // Compact: everything else in a menu.
+        DjButton {
+            id: moreButton
+            visible: header.compact
+            icon: "more"
+            implicitWidth: 40
+            implicitHeight: 34
+            lit: AppController.learning
+            litColor: Theme.warn
+            onClicked: moreMenu.popup(moreButton, 0, moreButton.height + 4)
+        }
+        Rectangle { visible: !header.compact; Layout.preferredWidth: 1; Layout.preferredHeight: 18; color: Theme.border }
+        DjButton { visible: !header.compact; flat: true; icon: "minus"; implicitWidth: 32; tip: "Minimize"; tipBelow: true; onClicked: header.minimizeRequested() }
+        DjButton { visible: !header.compact; flat: true; icon: header.maximized ? "restore" : "square"; implicitWidth: 32; tip: header.maximized ? "Restore" : "Maximize"; tipBelow: true; onClicked: header.maximizeRequested() }
         Rectangle {
-            implicitWidth: 34
-            implicitHeight: 28
+            implicitWidth: header.compact ? 40 : 34
+            implicitHeight: header.compact ? 34 : 28
             radius: Theme.radius
             color: closeArea.containsMouse ? Theme.danger : "transparent"
             Icon { anchors.centerIn: parent; name: "x"; size: 15; color: closeArea.containsMouse ? Theme.brandPaper : Theme.text }
@@ -260,5 +280,17 @@ Rectangle {
                 onClicked: header.closeRequested()
             }
         }
+    }
+
+    StyledMenu {
+        id: moreMenu
+        StyledMenuItem { iconName: "sliders"; text: "Settings"; onTriggered: header.settingsRequested() }
+        StyledMenuItem { iconName: "midi"; text: "MIDI learn"; marked: AppController.learning; onTriggered: AppController.setLearn(!AppController.learning) }
+        StyledMenuSeparator {}
+        StyledMenuItem { iconName: "maximize"; text: "Fullscreen"; onTriggered: header.fullscreenRequested() }
+        StyledMenuItem { iconName: "minus"; text: "Minimize"; onTriggered: header.minimizeRequested() }
+        StyledMenuItem { iconName: header.maximized ? "restore" : "square"; text: header.maximized ? "Restore" : "Maximize"; onTriggered: header.maximizeRequested() }
+        StyledMenuSeparator {}
+        StyledMenuItem { iconName: "music"; text: "About rille"; onTriggered: header.aboutRequested() }
     }
 }

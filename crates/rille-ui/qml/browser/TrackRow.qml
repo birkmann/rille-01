@@ -43,8 +43,21 @@ Rectangle {
         id: dragArea
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton | Qt.RightButton
-        drag.target: dragProxy
-        onPressed: mouse => row.pressedRow(row.index, mouse.modifiers, mouse.button)
+        // Touch (mobile layout): swiping scrolls the list, so no dragging,
+        // a tap selects and press-and-hold opens the menu.
+        drag.target: Theme.mobile ? null : dragProxy
+        onPressed: mouse => {
+            if (!Theme.mobile || mouse.button === Qt.RightButton)
+                row.pressedRow(row.index, mouse.modifiers, mouse.button)
+        }
+        onClicked: mouse => {
+            if (Theme.mobile && mouse.button === Qt.LeftButton)
+                row.pressedRow(row.index, mouse.modifiers, mouse.button)
+        }
+        onPressAndHold: mouse => {
+            if (Theme.mobile)
+                row.pressedRow(row.index, 0, Qt.RightButton)
+        }
         onDoubleClicked: row.loadRow(row.index, 0)
     }
     Item { id: dragProxy }
@@ -115,11 +128,14 @@ Rectangle {
                 anchors.rightMargin: 4
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 2
-                visible: rowHover.hovered
-                DjButton { text: "A"; implicitWidth: 24; implicitHeight: 20; onClicked: row.loadRow(row.index, 0) }
-                DjButton { text: "B"; implicitWidth: 24; implicitHeight: 20; onClicked: row.loadRow(row.index, 1) }
-                DjButton { visible: AppController.deckCount === 4; text: "C"; implicitWidth: 24; implicitHeight: 20; onClicked: row.loadRow(row.index, 2) }
-                DjButton { visible: AppController.deckCount === 4; text: "D"; implicitWidth: 24; implicitHeight: 20; onClicked: row.loadRow(row.index, 3) }
+                // Touch: on the selected row.
+                visible: rowHover.hovered || (Theme.mobile && row.model.selected)
+                readonly property int buttonWidth: Theme.mobile ? 32 : 24
+                readonly property int buttonHeight: Theme.mobile ? 28 : 20
+                DjButton { text: "A"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 0) }
+                DjButton { text: "B"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 1) }
+                DjButton { visible: AppController.deckCount === 4; text: "C"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 2) }
+                DjButton { visible: AppController.deckCount === 4; text: "D"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 3) }
             }
         }
     }

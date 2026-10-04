@@ -62,8 +62,10 @@ Rectangle {
     // Narrow decks (small windows) hide the less important buttons.
     readonly property bool roomy: width > 600
     readonly property bool medium: width > 530
-    readonly property int transportHeight: compact ? 28 : 34
-    readonly property bool showHotcues: !compact || height >= 240
+    // Phone width: only the essentials.
+    readonly property bool narrow: width < 440
+    readonly property int transportHeight: compact ? 28 : (Theme.mobile ? 40 : 34)
+    readonly property bool showHotcues: !compact || height >= (Theme.mobile ? 280 : 240)
     border.color: dropArea.containsDrag ? Theme.sync : Theme.panelEdge
 
     DropArea {
@@ -94,6 +96,7 @@ Rectangle {
             Layout.preferredHeight: deck.compact ? 40 : 50
             spacing: 8
             Rectangle {
+                visible: !deck.narrow
                 Layout.preferredWidth: deck.compact ? 40 : 50
                 Layout.preferredHeight: deck.compact ? 40 : 50
                 color: Theme.control
@@ -299,11 +302,12 @@ Rectangle {
             }
             DjButton { visible: deck.medium; icon: "chevrons-left"; target: deck.t("beatjump_back"); implicitWidth: 28; implicitHeight: 24; tip: "Beat jump back by the loop size" }
             DjButton { visible: deck.medium; icon: "chevrons-right"; target: deck.t("beatjump_forward"); implicitWidth: 28; implicitHeight: 24; tip: "Beat jump forward by the loop size" }
-            DjButton { icon: "lock"; text: "KEY"; target: deck.t("keylock"); lit: deck.dc.keylock; litColor: Theme.sync; implicitHeight: 24; tip: "Keylock: the pitch stays the same when the tempo changes" }
-            DjButton { icon: "metronome"; target: deck.t("tick"); lit: deck.dc.tick; litColor: Theme.warn; implicitWidth: 28; implicitHeight: 24; tip: "Metronome: click on the beatgrid's beats, to check the grid by ear" }
+            DjButton { icon: "lock"; text: deck.narrow ? "" : "KEY"; target: deck.t("keylock"); lit: deck.dc.keylock; litColor: Theme.sync; implicitHeight: 24; tip: "Keylock: the pitch stays the same when the tempo changes" }
+            DjButton { visible: !deck.narrow; icon: "metronome"; target: deck.t("tick"); lit: deck.dc.tick; litColor: Theme.warn; implicitWidth: 28; implicitHeight: 24; tip: "Metronome: click on the beatgrid's beats, to check the grid by ear" }
             DjButton { visible: deck.roomy; implicitHeight: 24; icon: "zoom-out"; implicitWidth: 30; tip: "Zoom the waveform out (or mouse wheel on it)"; onClicked: wave.seconds = Math.min(32, wave.seconds * 1.25) }
             DjButton { visible: deck.roomy; implicitHeight: 24; icon: "zoom-in"; implicitWidth: 28; tip: "Zoom the waveform in (or mouse wheel on it)"; onClicked: wave.seconds = Math.max(2, wave.seconds * 0.8) }
             DjButton {
+                visible: !deck.narrow || deck.stemsShown
                 implicitHeight: 24
                 text: "STEMS"
                 lit: deck.stemsShown
@@ -568,25 +572,25 @@ Rectangle {
                 implicitHeight: deck.transportHeight
                 tip: "Play / pause"
             }
-            DjButton { flat: true; icon: "skip-back"; target: deck.t("jump_start"); implicitWidth: 40; implicitHeight: deck.transportHeight; tip: "Back to the start of the track (Shift+CUE key); a stopped deck stays stopped" }
+            DjButton { visible: !deck.narrow; flat: true; icon: "skip-back"; target: deck.t("jump_start"); implicitWidth: 40; implicitHeight: deck.transportHeight; tip: "Back to the start of the track (Shift+CUE key); a stopped deck stays stopped" }
             DjButton { flat: true; text: "CUE"; target: deck.t("cue"); lit: deck.dc.cueHeld; implicitHeight: deck.transportHeight; fontSize: Theme.fontLarge; tip: "Cue: while stopped, set the cue point and play while held; while playing, back to the cue point" }
-            DjButton { flat: true; text: "CUP"; target: deck.t("cup"); implicitHeight: deck.transportHeight; fontSize: Theme.fontLarge; tip: "Cue-play: back to the cue point, plays on release" }
+            DjButton { visible: !deck.narrow; flat: true; text: "CUP"; target: deck.t("cup"); implicitHeight: deck.transportHeight; fontSize: Theme.fontLarge; tip: "Cue-play: back to the cue point, plays on release" }
             DjButton { visible: deck.medium; flat: true; text: "FLX"; target: deck.t("flux"); lit: deck.dc.flux; litColor: Theme.sync; implicitHeight: deck.transportHeight; fontSize: Theme.fontLarge; tip: "Flux: after a loop, jump or reverse, play on from where the track would be now" }
             DjButton { visible: deck.medium; flat: true; text: "REV"; target: deck.t("reverse"); lit: deck.dc.reverse; litColor: Theme.danger; implicitHeight: deck.transportHeight; fontSize: Theme.fontLarge; tip: "Reverse: play backwards" }
             Item { Layout.fillWidth: true }
-            LoopSelector { dc: deck.dc; implicitHeight: deck.transportHeight }
+            LoopSelector { dc: deck.dc; implicitHeight: deck.transportHeight; implicitWidth: deck.narrow ? 120 : 150 }
             DjButton { flat: true; text: "IN"; target: deck.t("loop_in"); implicitHeight: deck.transportHeight; fontSize: Theme.fontLarge; tip: "Loop in: set the loop start here" }
             DjButton { flat: true; text: "OUT"; target: deck.t("loop_out"); implicitHeight: deck.transportHeight; fontSize: Theme.fontLarge; tip: "Loop out: set the loop end here and start the loop" }
             DjButton { visible: deck.roomy; flat: true; icon: "loop"; lit: deck.dc.loopActive; litColor: Theme.sync; implicitHeight: deck.transportHeight; tip: "Loop on / off"; onClicked: deck.tap("loop_toggle") }
         }
 
         // --- Grid editor -----------------------------------------------------
-        RowLayout {
+        // Wraps onto a second line on narrow decks.
+        Flow {
             Layout.fillWidth: true
             visible: deck.gridEditing
-            Layout.preferredHeight: 26
             spacing: 3
-            UiText { text: "GRID"; color: Theme.warn; font.pixelSize: Theme.fontSmall; font.bold: true }
+            UiText { height: 26; verticalAlignment: Text.AlignVCenter; text: "GRID"; color: Theme.warn; font.pixelSize: Theme.fontSmall; font.bold: true }
             DjButton { implicitHeight: 26; icon: "chevrons-left"; tip: "Move the grid 10 ms earlier"; onClicked: AppController.gridEdit(deck.dc.deck, "move", -10) }
             DjButton { implicitHeight: 26; icon: "chevron-left"; tip: "Move the grid 1 ms earlier"; onClicked: AppController.gridEdit(deck.dc.deck, "move", -1) }
             DjButton { implicitHeight: 26; icon: "chevron-right"; tip: "Move the grid 1 ms later"; onClicked: AppController.gridEdit(deck.dc.deck, "move", 1) }
@@ -599,7 +603,6 @@ Rectangle {
             DjButton { implicitHeight: 26; text: "TAP"; tip: "Tap along with the beat; four or more taps set the BPM"; onClicked: AppController.gridEdit(deck.dc.deck, "tap", 0) }
             DjButton { implicitHeight: 26; icon: "lock"; lit: deck.dc.gridLocked; litColor: Theme.warn; tip: "Lock the grid: re-analysis will not change it"; onClicked: AppController.gridEdit(deck.dc.deck, "lock", deck.dc.gridLocked ? 0 : 1) }
             DjButton { implicitHeight: 26; icon: "refresh"; text: "RESET"; tip: "Back to the analyzed grid"; onClicked: AppController.gridEdit(deck.dc.deck, "reset", 0) }
-            Item { Layout.fillWidth: true }
         }
 
         // --- Stems (in place of the hotcues while STEMS is on) ---------------
@@ -678,7 +681,7 @@ Rectangle {
                         return null
                     }
                     Layout.fillWidth: true
-                    implicitHeight: 26
+                    implicitHeight: Theme.mobile ? 32 : 26
                     text: (index + 1) + (cue && cue.loop ? " ↻" : "")
                     fontSize: Theme.fontNormal
                     target: deck.t("hotcue." + (index + 1))

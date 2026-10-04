@@ -48,6 +48,7 @@
     <binary>rille</binary>
   </provides>
   <releases>
+    <release version="0.1.4" date="2026-10-04"/>
     <release version="0.1.3" date="2026-10-03"/>
     <release version="0.1.2" date="2026-10-02"/>
     <release version="0.1.1" date="2026-10-02"/>

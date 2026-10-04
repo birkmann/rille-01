@@ -13,6 +13,8 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1210", TAG+="ua
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1220", TAG+="uaccess"
 # Native Instruments Traktor Kontrol F1
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1120", TAG+="uaccess"
+# Native Instruments Maschine Mikro MK2
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="1200", TAG+="uaccess"
 # Native Instruments Traktor Kontrol X1 MK1: not HID; rille reads the input
 # device of the kernel's snd-usb-caiaq driver (its LEDs need no rule).
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="17cc", ATTRS{idProduct}=="2305", TAG+="uaccess"

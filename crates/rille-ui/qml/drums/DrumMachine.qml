@@ -26,6 +26,7 @@ Rectangle {
     // Mobile landscape: the steps beside the transport, sound, channel and
     // kit in a second row.
     readonly property bool twoRows: Theme.mobile && !narrow
+    readonly property bool oneRow: !narrow && !twoRows
     // Wide screens: the layout stops growing here and sits in the middle,
     // so the steps keep their shape instead of stretching across the panel.
     readonly property int maxContentWidth: 1400
@@ -36,6 +37,11 @@ Rectangle {
     }
     function instColor(i) {
         return drums.inst[i] ? drums.inst[i].color : Theme.sync
+    }
+    // Muted, or silent while another instrument is soloed.
+    function silent(i) {
+        var s = drums.inst[i]
+        return !!s && (s.muted || (!!drums.st.solo && !s.soloed))
     }
     function tap(target) {
         AppController.press(target, true)
@@ -137,6 +143,22 @@ Rectangle {
         }
     }
 
+    // Heading of a section of controls.
+    component SectionTitle: UiText {
+        font.pixelSize: Theme.fontTiny
+        font.bold: true
+        font.letterSpacing: 0.5
+    }
+    // Hairline before a section; only when everything is in one row.
+    component SectionRule: Rectangle {
+        visible: drums.oneRow
+        Layout.fillHeight: true
+        Layout.topMargin: 4
+        Layout.bottomMargin: 4
+        implicitWidth: 1
+        color: Theme.border
+    }
+
     // One row; narrow: transport, steps, sound and channel, kit below
     // each other (cells apart from the wide layout's, so they never clash).
     GridLayout {
@@ -163,7 +185,8 @@ Rectangle {
                 DjButton {
                     icon: AppController.drumsPlaying ? "pause" : "play"
                     target: "drum.play"
-                    lit: AppController.drumsPlaying
+                    // Blinking while it waits for the bar to start or stop.
+                    lit: AppController.drumsPlaying && (!(drums.st.waiting || drums.st.stopping) || drums.beatOn)
                     litColor: Theme.play
                     implicitWidth: 52
                     implicitHeight: 30
@@ -222,6 +245,24 @@ Rectangle {
                     implicitWidth: 22
                     implicitHeight: 26
                     onClicked: AppController.nudge("drum.pattern_select", 1)
+                }
+                DjButton {
+                    flat: true
+                    icon: "undo"
+                    implicitWidth: 22
+                    implicitHeight: 26
+                    enabled: !!drums.st.undo
+                    target: "drum.undo"
+                    tip: "Undo the last pattern edit"
+                }
+                DjButton {
+                    flat: true
+                    icon: "redo"
+                    implicitWidth: 22
+                    implicitHeight: 26
+                    enabled: !!drums.st.redo
+                    target: "drum.redo"
+                    tip: "Redo"
                 }
             }
         }
@@ -311,7 +352,7 @@ Rectangle {
                         tint: drums.instColor(index)
                         selected: drums.sel === index
                         used: ((drums.st.rows || [])[index] || ".").replace(/\./g, "").length > 0
-                        muted: drums.inst[index] ? drums.inst[index].muted : false
+                        muted: drums.silent(index)
                         loaded: drums.inst[index] ? drums.inst[index].loaded : true
                         hits: drums.hits[index] || ""
                         onMenuRequested: instMenu.openFor(index)
@@ -330,7 +371,7 @@ Rectangle {
                     // Four rows: name and mute of each.
                     Rectangle {
                         visible: drums.four
-                        Layout.preferredWidth: 58
+                        Layout.preferredWidth: 80
                         Layout.fillHeight: true
                         radius: 3
                         color: drums.sel === seqRow.instIndex ? Qt.darker(drums.instColor(seqRow.instIndex), 2.8) : "transparent"
@@ -360,6 +401,16 @@ Rectangle {
                                 litColor: Theme.warn
                                 tip: "Mute " + drums.fullNames[seqRow.instIndex]
                             }
+                            DjButton {
+                                text: "S"
+                                implicitWidth: 22
+                                implicitHeight: 20
+                                fontSize: Theme.fontTiny
+                                target: "drum.inst_solo." + (seqRow.instIndex + 1)
+                                lit: drums.inst[seqRow.instIndex] ? drums.inst[seqRow.instIndex].soloed : false
+                                litColor: Theme.sync
+                                tip: "Solo " + drums.fullNames[seqRow.instIndex] + ": only soloed instruments play"
+                            }
                         }
                     }
                     StepRow {
@@ -373,134 +424,173 @@ Rectangle {
         }
 
         // --- The selected instrument's sound -------------------------------
-        ColumnLayout {
+        RowLayout {
             Layout.row: drums.narrow ? 2 : (drums.twoRows ? 1 : 0)
             Layout.column: drums.narrow || drums.twoRows ? 0 : 4
             Layout.alignment: Qt.AlignVCenter
             Layout.fillWidth: false
-            Layout.fillHeight: false
-            spacing: 0
-            RowLayout {
-                spacing: 4
-                UiText {
-                    text: drums.fullNames[drums.sel] || ""
-                    color: drums.instColor(drums.sel)
-                    font.pixelSize: Theme.fontTiny
-                    font.bold: true
-                }
-                Item { Layout.fillWidth: true }
-                DjButton {
-                    text: "M"
-                    implicitWidth: 22
-                    implicitHeight: 18
-                    fontSize: Theme.fontTiny
-                    target: "drum.inst_mute." + (drums.sel + 1)
-                    lit: drums.inst[drums.sel] ? drums.inst[drums.sel].muted : false
-                    litColor: Theme.warn
-                    tip: "Mute the selected instrument"
-                }
-            }
-            RowLayout {
+            Layout.fillHeight: drums.oneRow
+            spacing: 8
+            SectionRule {}
+            ColumnLayout {
+                Layout.alignment: Qt.AlignVCenter
                 spacing: 0
-                Knob {
-                    label: "TUNE"
-                    size: 30
-                    bipolar: true
-                    color: drums.instColor(drums.sel)
-                    value: drums.inst[drums.sel] ? drums.inst[drums.sel].tune : 0.5
-                    target: "drum.sel_tune"
-                    format: v => {
-                        var st = Math.round((v - 0.5) * 24)
-                        return (st > 0 ? "+" : "") + st + " st"
+                RowLayout {
+                    Layout.preferredHeight: 20
+                    spacing: 4
+                    SectionTitle {
+                        text: (drums.fullNames[drums.sel] || "").toUpperCase()
+                        color: drums.instColor(drums.sel)
                     }
-                    tip: "Pitch of the selected instrument, ±12 semitones"
+                    Item { Layout.fillWidth: true }
+                    DjButton {
+                        text: "M"
+                        implicitWidth: 22
+                        implicitHeight: 18
+                        fontSize: Theme.fontTiny
+                        target: "drum.inst_mute." + (drums.sel + 1)
+                        lit: drums.inst[drums.sel] ? drums.inst[drums.sel].muted : false
+                        litColor: Theme.warn
+                        tip: "Mute the selected instrument"
+                    }
+                    DjButton {
+                        text: "S"
+                        implicitWidth: 22
+                        implicitHeight: 18
+                        fontSize: Theme.fontTiny
+                        target: "drum.inst_solo." + (drums.sel + 1)
+                        lit: drums.inst[drums.sel] ? drums.inst[drums.sel].soloed : false
+                        litColor: Theme.sync
+                        tip: "Solo the selected instrument: only soloed instruments play"
+                    }
                 }
-                Knob {
-                    label: "DECAY"
-                    size: 30
-                    defaultValue: 1
-                    color: drums.instColor(drums.sel)
-                    value: drums.inst[drums.sel] ? drums.inst[drums.sel].decay : 1
-                    target: "drum.sel_decay"
-                    format: v => v >= 0.999 ? "FULL" : Math.round(v * 100) + "%"
-                    tip: "Length of the selected instrument's sound: right = the whole sample, left = short"
-                }
-                Knob {
-                    label: "LEVEL"
-                    size: 30
-                    defaultValue: 1
-                    color: drums.instColor(drums.sel)
-                    value: drums.inst[drums.sel] ? drums.inst[drums.sel].level : 1
-                    target: "drum.sel_level"
-                    tip: "Level of the selected instrument"
+                RowLayout {
+                    spacing: 0
+                    Knob {
+                        label: "TUNE"
+                        size: 30
+                        bipolar: true
+                        color: drums.instColor(drums.sel)
+                        value: drums.inst[drums.sel] ? drums.inst[drums.sel].tune : 0.5
+                        target: "drum.sel_tune"
+                        format: v => {
+                            var st = Math.round((v - 0.5) * 24)
+                            return (st > 0 ? "+" : "") + st + " st"
+                        }
+                        tip: "Pitch of the selected instrument, ±12 semitones"
+                    }
+                    Knob {
+                        label: "DECAY"
+                        size: 30
+                        defaultValue: 1
+                        color: drums.instColor(drums.sel)
+                        value: drums.inst[drums.sel] ? drums.inst[drums.sel].decay : 1
+                        target: "drum.sel_decay"
+                        format: v => v >= 0.999 ? "FULL" : Math.round(v * 100) + "%"
+                        tip: "Length of the selected instrument's sound: right = the whole sample, left = short"
+                    }
+                    Knob {
+                        label: "LEVEL"
+                        size: 30
+                        defaultValue: 1
+                        color: drums.instColor(drums.sel)
+                        value: drums.inst[drums.sel] ? drums.inst[drums.sel].level : 1
+                        target: "drum.sel_level"
+                        format: v => Math.round(v * 100) + "%"
+                        tip: "Level of the selected instrument within the kit"
+                    }
                 }
             }
         }
 
-        // --- The drums' channel ---------------------------------------------
+        // --- The drums' channel: filter, FX, cue and the volume fader --------
         RowLayout {
             Layout.row: drums.narrow ? 2 : (drums.twoRows ? 1 : 0)
             Layout.column: drums.narrow || drums.twoRows ? 1 : 5
             Layout.columnSpan: drums.narrow || drums.twoRows ? 2 : 1
             Layout.alignment: Qt.AlignVCenter
-            Layout.preferredHeight: 70
+            Layout.preferredHeight: drums.oneRow ? -1 : 70
             Layout.fillWidth: false
-            Layout.fillHeight: false
-            spacing: 2
-            Knob {
-                label: "FILTER"
-                size: 30
-                bipolar: true
-                color: Theme.warn
-                value: drums.st.filter !== undefined ? drums.st.filter : 0.5
-                target: "drum.filter"
-                format: Theme.filterText
-                tip: "Filter on the drums: left = low-pass, right = high-pass"
-            }
-            Knob {
-                label: "LEVEL"
-                size: 30
-                defaultValue: 0.8
-                value: drums.st.level !== undefined ? drums.st.level : 0.8
-                target: "drum.level"
-                tip: "Drum level in the main mix (not on the crossfader)"
-            }
+            Layout.fillHeight: drums.oneRow
+            spacing: 8
+            SectionRule {}
             ColumnLayout {
+                Layout.alignment: Qt.AlignVCenter
+                spacing: 0
+                RowLayout {
+                    Layout.preferredHeight: 20
+                    spacing: 4
+                    SectionTitle {
+                        text: "OUTPUT"
+                        color: Theme.textDim
+                    }
+                    Item { Layout.fillWidth: true }
+                    DjButton {
+                        icon: "headphones"
+                        implicitWidth: 30
+                        implicitHeight: 18
+                        target: "drum.pfl"
+                        lit: !!drums.st.pfl
+                        litColor: Theme.sync
+                        tip: "Drums in the headphones"
+                    }
+                }
+                RowLayout {
+                    spacing: 4
+                    Knob {
+                        label: "FILTER"
+                        size: 30
+                        bipolar: true
+                        color: Theme.warn
+                        value: drums.st.filter !== undefined ? drums.st.filter : 0.5
+                        target: "drum.filter"
+                        format: Theme.filterText
+                        tip: "Filter on the drums: left = low-pass, right = high-pass"
+                    }
+                    ColumnLayout {
+                        Layout.alignment: Qt.AlignTop
+                        spacing: 2
+                        DjButton {
+                            text: "FX1"
+                            implicitWidth: 38
+                            implicitHeight: 20
+                            fontSize: Theme.fontTiny
+                            target: "drum.fx_assign.1"
+                            lit: drums.st.fx ? drums.st.fx[0] : false
+                            litColor: Theme.fx
+                            tip: "Send the drums through FX unit 1"
+                        }
+                        DjButton {
+                            text: "FX2"
+                            implicitWidth: 38
+                            implicitHeight: 20
+                            fontSize: Theme.fontTiny
+                            target: "drum.fx_assign.2"
+                            lit: drums.st.fx ? drums.st.fx[1] : false
+                            litColor: Theme.fx
+                            tip: "Send the drums through FX unit 2"
+                        }
+                    }
+                }
+            }
+            // The drums' volume in the main mix: a fader beside the meter,
+            // like a mixer channel.
+            Fader {
                 Layout.fillHeight: true
-                spacing: 2
-                DjButton {
-                    text: "FX1"
-                    implicitWidth: 38
-                    implicitHeight: 20
-                    fontSize: Theme.fontTiny
-                    target: "drum.fx_assign.1"
-                    lit: drums.st.fx ? drums.st.fx[0] : false
-                    litColor: Theme.fx
-                    tip: "Send the drums through FX unit 1"
-                }
-                DjButton {
-                    text: "FX2"
-                    implicitWidth: 38
-                    implicitHeight: 20
-                    fontSize: Theme.fontTiny
-                    target: "drum.fx_assign.2"
-                    lit: drums.st.fx ? drums.st.fx[1] : false
-                    litColor: Theme.fx
-                    tip: "Send the drums through FX unit 2"
-                }
-                DjButton {
-                    icon: "headphones"
-                    implicitWidth: 38
-                    implicitHeight: 20
-                    target: "drum.pfl"
-                    lit: !!drums.st.pfl
-                    litColor: Theme.sync
-                    tip: "Drums in the headphones"
-                }
+                Layout.preferredWidth: 26
+                ticks: 6
+                value: drums.st.level !== undefined ? drums.st.level : 0.8
+                defaultValue: 0.8
+                target: "drum.level"
+                color: Theme.text
+                tip: "Drum volume in the main mix (not on the crossfader): " + Math.round((drums.st.level !== undefined ? drums.st.level : 0.8) * 100) + "%"
             }
             VuMeter {
                 Layout.fillHeight: true
                 Layout.preferredWidth: 5
+                Layout.leftMargin: -5
+                Layout.topMargin: 4
+                Layout.bottomMargin: 4
                 level: AppController.drumsMeter
                 segments: 14
             }
@@ -514,59 +604,65 @@ Rectangle {
         }
 
         // --- Kit ---------------------------------------------------------------
-        ColumnLayout {
+        RowLayout {
             Layout.row: drums.narrow ? 3 : (drums.twoRows ? 1 : 0)
             Layout.column: drums.narrow ? 0 : (drums.twoRows ? 3 : 6)
             Layout.columnSpan: drums.narrow ? 3 : 1
             Layout.alignment: drums.twoRows ? Qt.AlignVCenter | Qt.AlignRight : Qt.AlignVCenter
             Layout.fillWidth: drums.narrow
-            Layout.fillHeight: false
-            Layout.preferredWidth: drums.narrow ? -1 : 150
-            spacing: 4
-            StyledCombo {
-                id: kitCombo
-                Layout.fillWidth: true
-                readonly property var kits: drums.st.kits || []
-                model: kits.map(k => k.name)
-                currentIndex: kits.findIndex(k => k.name === drums.st.kit)
-                onActivated: idx => AppController.selectDrumKit(kits[idx].name)
-            }
-            RowLayout {
-                spacing: 3
-                DjButton {
-                    icon: "list"
-                    implicitWidth: 30
-                    implicitHeight: 24
-                    tip: "Kit, sounds and patterns"
-                    onClicked: kitMenu.popup()
+            Layout.fillHeight: drums.oneRow
+            spacing: 8
+            SectionRule {}
+            ColumnLayout {
+                Layout.alignment: Qt.AlignVCenter
+                Layout.fillWidth: drums.narrow
+                Layout.preferredWidth: drums.narrow ? -1 : 150
+                spacing: 4
+                StyledCombo {
+                    id: kitCombo
+                    Layout.fillWidth: true
+                    readonly property var kits: drums.st.kits || []
+                    model: kits.map(k => k.name)
+                    currentIndex: kits.findIndex(k => k.name === drums.st.kit)
+                    onActivated: idx => AppController.selectDrumKit(kits[idx].name)
                 }
-                Item { Layout.fillWidth: true }
-                DjButton {
-                    text: "1"
-                    implicitWidth: 26
-                    implicitHeight: 24
-                    lit: !drums.four
-                    litColor: Theme.textDim
-                    tip: "One sequencer row: the selected instrument"
-                    onClicked: AppController.setSetting("drums_rows", "1")
+                RowLayout {
+                    spacing: 3
+                    DjButton {
+                        icon: "list"
+                        implicitWidth: 30
+                        implicitHeight: 24
+                        tip: "Kit, sounds and patterns"
+                        onClicked: kitMenu.popup()
+                    }
+                    Item { Layout.fillWidth: true }
+                    DjButton {
+                        text: "1"
+                        implicitWidth: 26
+                        implicitHeight: 24
+                        lit: !drums.four
+                        litColor: Theme.textDim
+                        tip: "One sequencer row: the selected instrument"
+                        onClicked: AppController.setSetting("drums_rows", "1")
+                    }
+                    DjButton {
+                        text: "4"
+                        implicitWidth: 26
+                        implicitHeight: 24
+                        lit: drums.four
+                        litColor: Theme.textDim
+                        tip: "Four sequencer rows"
+                        onClicked: AppController.setSetting("drums_rows", "4")
+                    }
                 }
-                DjButton {
-                    text: "4"
-                    implicitWidth: 26
-                    implicitHeight: 24
-                    lit: drums.four
-                    litColor: Theme.textDim
-                    tip: "Four sequencer rows"
-                    onClicked: AppController.setSetting("drums_rows", "4")
+                UiText {
+                    Layout.fillWidth: true
+                    visible: drums.external
+                    text: "Not on the hardware mixer"
+                    color: Theme.warn
+                    font.pixelSize: Theme.fontTiny
+                    elide: Text.ElideRight
                 }
-            }
-            UiText {
-                Layout.fillWidth: true
-                visible: drums.external
-                text: "Not on the hardware mixer"
-                color: Theme.warn
-                font.pixelSize: Theme.fontTiny
-                elide: Text.ElideRight
             }
         }
     }

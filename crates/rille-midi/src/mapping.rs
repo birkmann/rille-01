@@ -151,6 +151,9 @@ pub enum InputMode {
     Relative,
     /// Jog wheel → `Delta` in revolutions (`ticks / ticks_per_rev`).
     Jog,
+    /// Pressure-sensitive pad (a note) → [`rille_core::ControlValue::Hit`]
+    /// with the note's velocity, and `Press(false)` when let go.
+    Velocity,
 }
 
 /// How a relative CC encodes signed ticks in its 7-bit value.
@@ -246,7 +249,27 @@ pub struct InputBinding {
     /// meanwhile (SYNC held + encoder changes the tempo, a tap syncs).
     #[serde(default, skip_serializing_if = "is_false")]
     pub tap: bool,
+    /// Latched modifiers only: a press held longer than [`HOLD_TIME`] holds
+    /// the modifier only while down (tap to latch, hold for a moment). For
+    /// precedence it counts as held, so it outranks latched modes.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hold: bool,
+    /// Latched modifiers only: at most one modifier of a group is on.
+    /// Pressing the one that is on goes back to the group's `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// Latched modifiers in a group: on from the start (a mode the group
+    /// returns to).
+    #[serde(default, rename = "default", skip_serializing_if = "is_false")]
+    pub default_on: bool,
+    /// Button inputs on a continuous control: a press sets it to this value
+    /// (an encoder push that resets the knob).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set: Option<f32>,
 }
+
+/// See [`InputBinding::hold`].
+pub const HOLD_TIME: std::time::Duration = std::time::Duration::from_millis(350);
 
 impl InputBinding {
     pub fn new(target: impl Into<InputTarget>, midi: MidiSpec) -> Self {
@@ -264,6 +287,10 @@ impl InputBinding {
             condition: None,
             latch: false,
             tap: false,
+            hold: false,
+            group: None,
+            default_on: false,
+            set: None,
         }
     }
 
@@ -275,6 +302,9 @@ impl InputBinding {
     /// Explicit mode, else: modifiers and buttons → button, continuous →
     /// absolute, `jog` → jog, other relative controls → relative.
     pub fn mode(&self) -> InputMode {
+        if self.set.is_some() && self.mode.is_none() {
+            return InputMode::Button;
+        }
         self.mode.unwrap_or(match &self.target {
             InputTarget::Modifier(_) | InputTarget::NextDeckLayout => InputMode::Button,
             InputTarget::Control(t) if t.control == Control::Jog => InputMode::Jog,
@@ -312,16 +342,19 @@ impl InputBinding {
             (InputMode::Absolute, m) => !matches!(m, MidiSpec::Note { .. }),
             (InputMode::Relative, m) => !matches!(m, MidiSpec::Cc14 { .. }),
             (InputMode::Jog, m) => matches!(m, MidiSpec::Cc { .. } | MidiSpec::PitchBend { .. }),
+            (InputMode::Velocity, m) => matches!(m, MidiSpec::Note { .. }),
             _ => false,
         };
         if !midi_ok {
             return Err(format!("{mode:?} mode cannot use {:?} messages", self.midi));
         }
         let target_ok = match mode {
+            InputMode::Button if self.set.is_some() => kind == Some(ControlKind::Continuous),
             InputMode::Button => matches!(kind, None | Some(ControlKind::Button)),
             InputMode::Absolute => kind == Some(ControlKind::Continuous),
             InputMode::Relative => matches!(kind, Some(ControlKind::Relative | ControlKind::Continuous)),
             InputMode::Jog => kind == Some(ControlKind::Relative),
+            InputMode::Velocity => kind == Some(ControlKind::Button),
         };
         if !target_ok {
             return Err(format!("{mode:?} mode does not fit target {}", self.target));
@@ -341,6 +374,18 @@ impl InputBinding {
         }
         if self.tap && (mode != InputMode::Button || self.target.control().is_none()) {
             return Err("tap is for button inputs on a control only".into());
+        }
+        if (self.hold || self.group.is_some() || self.default_on) && !self.latch {
+            return Err("hold, group and default are for latched modifiers only".into());
+        }
+        if self.hold && self.group.is_some() {
+            return Err("a latched modifier in a group cannot hold".into());
+        }
+        if self.default_on && self.group.is_none() {
+            return Err("default needs a group".into());
+        }
+        if self.set.is_some_and(|v| !v.is_finite()) {
+            return Err("set must be a number".into());
         }
         Ok(())
     }

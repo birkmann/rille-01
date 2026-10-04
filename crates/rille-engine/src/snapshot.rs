@@ -148,6 +148,9 @@ pub struct DrumInstState {
     pub loaded: bool,
     /// Hits since start (wraps); a change means it just played.
     pub hits: u32,
+    pub soloed: bool,
+    /// Clock beat of its last audible hit.
+    pub last_hit: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -167,6 +170,31 @@ pub struct DrumState {
     pub channel: ChannelState,
     /// Changes with every edit worth saving.
     pub edit_rev: u32,
+    /// The closed hi-hat cuts the open one.
+    pub choke: bool,
+    /// Note repeat: instruments held (bit per instrument) and the rate
+    /// (index into `rille_core::drums::REPEAT_RATES`).
+    pub repeat: u8,
+    pub repeat_rate: u8,
+    /// Started with DRUM PLAY BAR and waiting for the downbeat; stopping at
+    /// the end of the bar.
+    pub waiting: bool,
+    pub stopping: bool,
+    pub can_undo: bool,
+    pub can_redo: bool,
+}
+
+impl DrumInstState {
+    /// Not muted, and not silenced by another instrument's solo.
+    pub fn audible(&self, any_solo: bool) -> bool {
+        !self.muted && (self.soloed || !any_solo)
+    }
+}
+
+impl DrumState {
+    pub fn any_solo(&self) -> bool {
+        self.inst.iter().any(|i| i.soloed)
+    }
 }
 
 impl Default for DrumState {
@@ -182,6 +210,13 @@ impl Default for DrumState {
             inst: [DrumInstState::default(); INSTRUMENTS],
             channel: ChannelState::default(),
             edit_rev: 0,
+            choke: true,
+            repeat: 0,
+            repeat_rate: rille_core::drums::DEFAULT_REPEAT as u8,
+            waiting: false,
+            stopping: false,
+            can_undo: false,
+            can_redo: false,
         }
     }
 }

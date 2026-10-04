@@ -41,10 +41,25 @@ impl FeedbackState {
         }
         let beat_on = values.beat_phase().rem_euclid(1.0) < 0.5;
         let holds = |o: &OutputBinding| o.condition.as_ref().is_some_and(|c| modifier(&c.modifier) == c.value);
-        // Messages taken over by a conditional output whose modifier holds.
-        let taken: Vec<MidiSpec> = mapping.outputs.iter().filter(|o| holds(o)).map(|o| o.midi).collect();
+        // As for inputs, a held modifier outranks a latched mode.
+        let on_latch = |o: &OutputBinding| {
+            o.condition.as_ref().is_some_and(|c| {
+                mapping
+                    .inputs
+                    .iter()
+                    .any(|b| b.latch && !b.hold && matches!(&b.target, InputTarget::Modifier(m) if *m == c.modifier))
+            })
+        };
+        // Messages taken over by a conditional output whose modifier holds,
+        // and by one on a held modifier.
+        let taken: Vec<(MidiSpec, bool)> =
+            mapping.outputs.iter().filter(|o| holds(o)).map(|o| (o.midi, !on_latch(o))).collect();
         for (o, last) in mapping.outputs.iter().zip(&mut self.last) {
-            let active = if o.condition.is_some() { holds(o) } else { !taken.contains(&o.midi) };
+            let active = if o.condition.is_some() {
+                holds(o) && !(on_latch(o) && taken.iter().any(|&(m, held)| held && m == o.midi))
+            } else {
+                !taken.iter().any(|&(m, _)| m == o.midi)
+            };
             if !active {
                 // Sent again in full when it comes back.
                 *last = None;

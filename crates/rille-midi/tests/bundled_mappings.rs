@@ -66,7 +66,16 @@ fn all_bundled_mappings_load() {
     // One HID layout per device, from the mapping files; each mapping's
     // device pattern matches the port name its layout gives.
     let hid: Vec<String> = store.hid_layouts().iter().map(|l| l.name.clone()).collect();
-    assert_eq!(hid, ["Traktor Kontrol F1", "Traktor Kontrol X1 MK1", "Traktor Kontrol X1 MK2", "Traktor Kontrol Z1"]);
+    assert_eq!(
+        hid,
+        [
+            "Maschine Mikro MK2",
+            "Traktor Kontrol F1",
+            "Traktor Kontrol X1 MK1",
+            "Traktor Kontrol X1 MK2",
+            "Traktor Kontrol Z1"
+        ]
+    );
     for l in store.hid_layouts() {
         let m = store.find(&format!("{} HID (SERIAL)", l.name)).unwrap();
         assert_eq!(m.hid.as_ref().map(|h| &h.name), Some(&l.name));
@@ -89,6 +98,77 @@ fn hid_targets(m: &Mapping, reports: &[Vec<u8>]) -> Vec<String> {
     }
     let pressed_or_moved = |e: &&ControlEvent| !matches!(e.value, ControlValue::Press(false));
     out.iter().filter(pressed_or_moved).map(|e| e.target.to_string()).collect()
+}
+
+#[test]
+fn maschine_mikro_mk2() {
+    use rille_core::remix::led_code;
+    use rille_core::{Control, ControlTarget};
+    let store = MappingStore::load(&[bundled_dir()]);
+    let m = store.find("Maschine Mikro MK2 HID (B1E971E8)").unwrap();
+    // Button report: bit b of bytes 1-4 is button b; byte 5 the encoder.
+    let buttons = |bits: &[u8], enc: u8| {
+        let mut v = vec![0x01, 0, 0, 0, 0, enc];
+        bits.iter().for_each(|&b| v[1 + usize::from(b / 8)] |= 1 << (b % 8));
+        v
+    };
+    // Pad report: 32 values, pad number in the top 4 bits.
+    let pads = |pad: u16, pressure: u16| {
+        let mut v = vec![0x20];
+        for k in 0..32u16 {
+            let p = k % 16;
+            v.extend_from_slice(&(p << 12 | if p == pad { pressure } else { 0 }).to_le_bytes());
+        }
+        v
+    };
+    let hit = |pad| [pads(pad, 3800), pads(pad, 3800), pads(pad, 3800), pads(pad, 0)];
+    let (shift, pad_mode, f1, pattern) = (0, 29, 23, 30);
+    let mut r = vec![buttons(&[], 0)];
+    // Pad 13 (top left): step 1.
+    r.extend(hit(12));
+    // PAD MODE: pad 13 plays BD, pad 1 (bottom left) mutes CP.
+    r.extend([buttons(&[pad_mode], 0), buttons(&[], 0)]);
+    r.extend(hit(12));
+    r.extend(hit(0));
+    // SHIFT + pad 1: UNDO, as printed.
+    r.push(buttons(&[shift], 0));
+    r.extend(hit(0));
+    // The encoder: the filter; after F1 the selected instrument's level.
+    r.extend([buttons(&[], 1), buttons(&[f1], 1), buttons(&[], 1), buttons(&[], 2)]);
+    // PATTERN held + pad 16 (top right): pattern 4.
+    r.push(buttons(&[pattern], 2));
+    r.extend(hit(15));
+    assert_eq!(
+        hid_targets(m, &r),
+        [
+            "drum.step.1",
+            "drum.trigger.1",
+            "drum.inst_mute.5",
+            "drum.undo",
+            "drum.filter",
+            "drum.sel_level",
+            "drum.pattern.4"
+        ]
+    );
+
+    // LEDs: step 1 bright red, GROUP in the selected instrument's colour.
+    let mut values = ValueMap::default();
+    let code = led_code(1, true);
+    values.set(ControlTarget::drum(Control::DrumStepLed(1)), f32::from(code));
+    values.set(ControlTarget::drum(Control::DrumSelLed), f32::from(code));
+    let (mut fb, mut msgs) = (rille_midi::FeedbackState::new(), Vec::new());
+    fb.collect(m, &values, &mut msgs);
+    let mut hid = rille_midi::hid::HidTranslator::new(std::sync::Arc::new(m.hid.clone().unwrap()));
+    msgs.iter().for_each(|msg| hid.output(*msg));
+    let mut out = Vec::new();
+    hid.flush(|report| out.push(report.to_vec()));
+    let leds = &out[0];
+    assert_eq!(leds.len(), 79);
+    assert!(leds[31] > 3 * leds[32] && leds[31] > 3 * leds[33], "pad 13 red: {:?}", &leds[31..34]);
+    assert_eq!(&leds[9..12], &leds[31..34], "GROUP lit like the pad");
+    assert!(leds[34..79].iter().all(|&b| b == 0), "other pads off");
+    assert_eq!(leds[19], 10, "PLAY dim while stopped");
+    assert_eq!(out.len(), 1 + 4, "LEDs and the display's four chunks");
 }
 
 #[test]
@@ -289,6 +369,7 @@ fn events(m: &Mapping, msgs: &[[u8; 3]]) -> Vec<String> {
             ControlValue::Press(p) => format!("{}={}", e.target, if p { "down" } else { "up" }),
             ControlValue::Absolute(v) => format!("{}={v:.3}", e.target),
             ControlValue::Delta(d) => format!("{}={d:+.3}", e.target),
+            ControlValue::Hit(v) => format!("{}=hit {v:.2}", e.target),
         })
         .collect()
 }

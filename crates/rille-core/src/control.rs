@@ -225,6 +225,49 @@ pub enum Control {
     DrumMeter,
     /// Show or hide the drum machine panel.
     DrumShow,
+    /// Solo instrument 1..=8 (toggles); while any is soloed, only soloed
+    /// instruments sound.
+    DrumInstSolo(u8),
+    /// Clear instrument 1..=8's steps in the current pattern.
+    DrumInstClear(u8),
+    /// Held: rolls instrument 1..=8 at the repeat rate, in time with the
+    /// clock (and records it while REC is on).
+    DrumRepeat(u8),
+    /// Note repeat rate (relative), see `rille_core::drums::REPEAT_RATES`.
+    DrumRepeatRate,
+    /// Pattern length 1..=16 steps.
+    DrumLengthSet(u8),
+    /// Copy the current pattern to pattern 1..=16 and switch to it.
+    DrumPatternCopy(u8),
+    /// Move the selected instrument's steps by whole steps (relative, +1 =
+    /// one step later), wrapping round the pattern length.
+    DrumNudge,
+    /// Undo or redo the last pattern edit.
+    DrumUndo,
+    DrumRedo,
+    /// Copy the current pattern; paste it over the current pattern.
+    DrumCopy,
+    DrumPaste,
+    /// Closed hi-hat cuts the open one (toggles).
+    DrumChoke,
+    /// Stopped: start on the next downbeat. Playing: stop at the end of the
+    /// bar.
+    DrumPlayBar,
+    /// Load kit 1..=16 of the kit list (factory kits first).
+    DrumKit(u8),
+    /// Read-only pad colours (`rille_core::remix::led_code`): pattern 1..=16
+    /// (bright = current, blinking = queued, dim = has steps), instrument
+    /// 1..=8 as a trigger pad (flashes on a hit, off when it cannot be
+    /// heard), as a mute pad (dim when it sounds, bright when soloed, off
+    /// when muted), pattern length 1..=16 (lit up to the length), kit
+    /// 1..=16 (bright = loaded, dim = available).
+    DrumPatternLed(u8),
+    DrumTriggerLed(u8),
+    DrumMuteLed(u8),
+    DrumLengthLed(u8),
+    DrumKitLed(u8),
+    /// Read-only colour of the selected instrument (bright).
+    DrumSelLed,
 }
 
 impl Control {
@@ -249,9 +292,8 @@ impl Control {
             | DrumInstDecay(_) | DrumSelLevel | DrumSelTune | DrumSelDecay | DrumSwing | DrumLevel | DrumFilter
             | DrumMeter => ControlKind::Continuous,
             Jog | FxSelect(_) | BrowserScroll | BrowserTreeScroll | RemixPage | RemixQuantizeSize
-            | RemixCaptureSource | DrumInstSelect | DrumPatternSelect | DrumLength | DrumKitSelect => {
-                ControlKind::Relative
-            }
+            | RemixCaptureSource | DrumInstSelect | DrumPatternSelect | DrumLength | DrumKitSelect | DrumRepeatRate
+            | DrumNudge => ControlKind::Relative,
             _ => ControlKind::Button,
         }
     }
@@ -314,6 +356,26 @@ impl Control {
                 | DrumPfl
                 | DrumMeter
                 | DrumShow
+                | DrumInstSolo(_)
+                | DrumInstClear(_)
+                | DrumRepeat(_)
+                | DrumRepeatRate
+                | DrumLengthSet(_)
+                | DrumPatternCopy(_)
+                | DrumNudge
+                | DrumUndo
+                | DrumRedo
+                | DrumCopy
+                | DrumPaste
+                | DrumChoke
+                | DrumPlayBar
+                | DrumKit(_)
+                | DrumPatternLed(_)
+                | DrumTriggerLed(_)
+                | DrumMuteLed(_)
+                | DrumLengthLed(_)
+                | DrumKitLed(_)
+                | DrumSelLed
         )
     }
 
@@ -321,7 +383,20 @@ impl Control {
     /// such as [`Control::Meter`].
     pub fn is_input(self) -> bool {
         use Control::*;
-        !matches!(self, Meter | MainMeter(_) | DrumMeter | DrumStepLed(_) | DrumInstLed(_))
+        !matches!(
+            self,
+            Meter
+                | MainMeter(_)
+                | DrumMeter
+                | DrumStepLed(_)
+                | DrumInstLed(_)
+                | DrumPatternLed(_)
+                | DrumTriggerLed(_)
+                | DrumMuteLed(_)
+                | DrumLengthLed(_)
+                | DrumKitLed(_)
+                | DrumSelLed
+        )
     }
 
     /// Resting value of continuous controls (used for reset and soft-takeover).
@@ -439,6 +514,15 @@ impl Control {
             DrumPfl,
             DrumMeter,
             DrumShow,
+            DrumRepeatRate,
+            DrumNudge,
+            DrumUndo,
+            DrumRedo,
+            DrumCopy,
+            DrumPaste,
+            DrumChoke,
+            DrumPlayBar,
+            DrumSelLed,
         ]);
         for f in [DrumStep, DrumAccent, DrumStepLed] {
             v.extend((1..=STEPS as u8).map(f));
@@ -446,10 +530,31 @@ impl Control {
         for f in [DrumCell, DrumCellAccent] {
             v.extend((1..=CELLS as u8).map(f));
         }
-        for f in [DrumInst, DrumInstLed, DrumTrigger, DrumInstMute, DrumInstLevel, DrumInstTune, DrumInstDecay] {
+        for f in [
+            DrumInst,
+            DrumInstLed,
+            DrumTrigger,
+            DrumInstMute,
+            DrumInstLevel,
+            DrumInstTune,
+            DrumInstDecay,
+            DrumInstSolo,
+            DrumInstClear,
+            DrumRepeat,
+            DrumTriggerLed,
+            DrumMuteLed,
+        ] {
             v.extend((1..=INSTRUMENTS as u8).map(f));
         }
-        v.extend((1..=PATTERNS as u8).map(DrumPattern));
+        for f in [DrumPattern, DrumPatternCopy, DrumPatternLed] {
+            v.extend((1..=PATTERNS as u8).map(f));
+        }
+        for f in [DrumLengthSet, DrumLengthLed] {
+            v.extend((1..=STEPS as u8).map(f));
+        }
+        for f in [DrumKit, DrumKitLed] {
+            v.extend((1..=crate::drums::KIT_PADS as u8).map(f));
+        }
         v.extend((1..=2).map(DrumFxAssign));
         v
     }
@@ -569,6 +674,26 @@ impl Control {
             DrumPfl => ("pfl", None),
             DrumMeter => ("meter", None),
             DrumShow => ("show", None),
+            DrumInstSolo(n) => ("inst_solo", Some(n)),
+            DrumInstClear(n) => ("inst_clear", Some(n)),
+            DrumRepeat(n) => ("repeat", Some(n)),
+            DrumRepeatRate => ("repeat_rate", None),
+            DrumLengthSet(n) => ("length_set", Some(n)),
+            DrumPatternCopy(n) => ("pattern_copy", Some(n)),
+            DrumNudge => ("nudge", None),
+            DrumUndo => ("undo", None),
+            DrumRedo => ("redo", None),
+            DrumCopy => ("copy", None),
+            DrumPaste => ("paste", None),
+            DrumChoke => ("choke", None),
+            DrumPlayBar => ("play_bar", None),
+            DrumKit(n) => ("kit", Some(n)),
+            DrumPatternLed(n) => ("pattern_led", Some(n)),
+            DrumTriggerLed(n) => ("trigger_led", Some(n)),
+            DrumMuteLed(n) => ("mute_led", Some(n)),
+            DrumLengthLed(n) => ("length_led", Some(n)),
+            DrumKitLed(n) => ("kit_led", Some(n)),
+            DrumSelLed => ("sel_led", None),
         }
     }
 
@@ -683,6 +808,17 @@ pub enum ControlValue {
     Absolute(f32),
     /// Relative change; for jog wheels in revolutions, for encoders in steps.
     Delta(f32),
+    /// A press with a velocity `0..=1` (a pressure-sensitive pad); its
+    /// release is `Press(false)`. Controls that ignore velocity treat it as
+    /// `Press(true)`.
+    Hit(f32),
+}
+
+impl ControlValue {
+    /// A button going down, with or without velocity.
+    pub fn is_press(self) -> bool {
+        matches!(self, ControlValue::Press(true) | ControlValue::Hit(_))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

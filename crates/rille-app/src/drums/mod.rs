@@ -239,7 +239,7 @@ impl App {
     pub(crate) fn install_drums(self: &Arc<Self>) {
         let set = self.drums_lock().set.clone();
         for (i, p) in set.patterns.iter().enumerate() {
-            self.send(Command::SetDrumPattern { index: i as u8, pattern: *p });
+            self.send(Command::SetDrumPattern { index: i as u8, pattern: *p, undo: false });
         }
         self.send(Command::SetDrumParams(set.params));
         // A new engine starts at revision 0; restoring counts as an edit
@@ -340,6 +340,7 @@ impl App {
                 }
                 drop(d);
                 app.send(Command::SetDrumKit(Some(Arc::new(DrumKit { samples }))));
+                app.refresh_drum_kit_list();
                 app.notify(UiEvent::DrumsChanged);
             })
             .expect("spawn drum kit loader");
@@ -354,6 +355,47 @@ impl App {
         self.select_drum_kit(&kits[next].name);
     }
 
+    /// Kit `index` of the list (factory kits first), if there is one.
+    pub(crate) fn pick_drum_kit(self: &Arc<Self>, index: usize) {
+        if let Some(k) = self.drum_kits().get(index) {
+            self.select_drum_kit(&k.name);
+        }
+    }
+
+    /// Reads the kit list again for controllers (see [`crate::values::KitList`]).
+    pub(crate) fn refresh_drum_kit_list(&self) {
+        let names: Vec<String> = self.drum_kits().into_iter().map(|k| k.name).collect();
+        let current = self.drum_kit_name();
+        let current = names.iter().position(|n| *n == current).unwrap_or(0);
+        *self.drum_kit_list.write().expect("kit list lock") = crate::values::KitList { names, current };
+    }
+
+    /// State controllers read besides the engine's.
+    pub(crate) fn app_values(&self) -> crate::values::AppValues {
+        crate::values::AppValues {
+            recording: self.recording_on.clone(),
+            drums_visible: self.drums_visible.clone(),
+            kits: self.drum_kit_list.clone(),
+        }
+    }
+
+    /// Shows the drum machine when a drum controller (a mapping with a drum
+    /// screen) connects.
+    pub(crate) fn show_drums_for(&self, mapping: Option<&str>) {
+        let Some(name) = mapping else { return };
+        let is_drum = {
+            let store = self.mappings.lock().expect("mappings lock");
+            store
+                .by_name(name)
+                .and_then(|m| m.hid.as_ref())
+                .and_then(|h| h.bitmap.as_ref())
+                .is_some_and(|b| b.screen == rille_midi::screen::ScreenKind::Drum)
+        };
+        if is_drum && !self.drums_visible() {
+            self.toggle_drums_visible();
+        }
+    }
+
     /// Saves the current kit's samples as a new kit of your own, `name`,
     /// and switches to it. Returns its name.
     pub fn new_drum_kit(&self, name: &str) -> Result<String, String> {
@@ -363,6 +405,7 @@ impl App {
         d.set.kit = name.clone();
         self.save_drum_set(&d);
         drop(d);
+        self.refresh_drum_kit_list();
         self.notify(UiEvent::DrumsChanged);
         Ok(name)
     }
@@ -446,7 +489,7 @@ impl App {
     pub fn drum_paste_pattern(&self) {
         let Some(p) = self.drums_lock().clipboard else { return };
         let current = self.snapshot().drums.current;
-        self.send(Command::SetDrumPattern { index: current, pattern: p });
+        self.send(Command::SetDrumPattern { index: current, pattern: p, undo: true });
     }
 
     pub fn drum_has_clipboard(&self) -> bool {

@@ -18,6 +18,12 @@
 //! - RGB pads (layouts with [`RgbPads`]): note `n` with velocity `code` on
 //!   channel [`RGB_PAD_CHANNEL`] (2) lights pad `n` (`1..`) in the colour of
 //!   the remix LED code [`rille_core::remix::led_code`] (0 = off)
+//! - pressure pads (layouts with [`PressurePads`]): pad `p` (`0..16`) →
+//!   note `note + p` with the velocity of the hit, note off when let go
+//! - further RGB LEDs ([`RgbPads::extra`]) are lit like pads numbered after
+//!   the last pad
+//! - pixel displays (layouts with a [`Bitmap`]) take whole frames through
+//!   [`HidTranslator::set_screen`], not MIDI
 //! - segment displays (layouts with [`Display`]s): CC `cc` on channel
 //!   [`DISPLAY_CHANNEL`] (3) shows its value on display `cc` (see
 //!   [`display_text`]): `0..=99` as a number, `100..=105` a letter A, b, C, d,
@@ -92,6 +98,60 @@ pub struct HidLayout {
     /// the first output report, control name).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alsa_leds: Vec<(usize, String)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure_pads: Option<PressurePads>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitmap: Option<Bitmap>,
+}
+
+/// Pressure-sensitive pads in an input report of their own: little-endian
+/// 16-bit values, each the pad number in the top 4 bits and the pressure in
+/// the lower 12 (a pad may appear more than once per report).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PressurePads {
+    pub report: u8,
+    /// Offset of the first value and the number of values.
+    pub offset: usize,
+    pub count: usize,
+    /// Pad `p` sends note `note + p`.
+    pub note: u8,
+    /// Pressure from which a pad is hit, and below which it is let go.
+    pub on: u16,
+    pub off: u16,
+    /// Pressure of the hardest hit (velocity 127).
+    pub max: u16,
+    /// Reports a hit waits for its peak pressure (its velocity); about a
+    /// millisecond each.
+    #[serde(default = "default_peak_reports")]
+    pub peak_reports: u8,
+}
+
+fn default_peak_reports() -> u8 {
+    3
+}
+
+/// A one-bit pixel display. Each byte is a column of eight pixels (bit 0 at
+/// the top) in a row of `width` bytes ("page"); a frame goes out in chunks of
+/// `chunk_pages` pages, each an output report with a header of four
+/// little-endian 16-bit values (x, first page, width, pages) before the
+/// pixels.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bitmap {
+    pub report: u8,
+    pub width: u16,
+    pub height: u16,
+    pub chunk_pages: u16,
+    /// What the frame shows, see [`crate::screen`].
+    pub screen: crate::screen::ScreenKind,
+}
+
+impl Bitmap {
+    /// Bytes of a whole frame.
+    pub fn frame_len(&self) -> usize {
+        usize::from(self.width) * usize::from(self.height / 8)
+    }
 }
 
 /// How rille reads a controller's reports and sets its LEDs.
@@ -126,7 +186,7 @@ pub const RGB_PAD_CHANNEL: u8 = 2;
 /// MIDI channel (`1..=16`) of segment display messages.
 pub const DISPLAY_CHANNEL: u8 = 3;
 /// Bytes read per input report.
-const MAX_REPORT: usize = 64;
+const MAX_REPORT: usize = 128;
 
 /// A position counter of `bits` bits (4: the nibble at `shift`, 8: the whole
 /// byte) in the input report; wraps around.
@@ -151,6 +211,13 @@ pub struct RgbPads {
     /// The colour each of a pad's three bytes holds: 0 = red, 1 = green,
     /// 2 = blue.
     pub order: [usize; 3],
+    /// First bytes of further RGB LEDs (same order), lit as pads `count + 1`
+    /// and on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra: Vec<usize>,
+    /// Gain of red, green and blue, to make the LEDs' white white.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance: Option<[f32; 3]>,
 }
 
 /// A 7-segment display. Each digit is a decimal point byte followed by the
@@ -311,6 +378,32 @@ impl HidLayout {
         {
             return Err("hid: RGB pads must be bytes of the first output report, order 0-2".into());
         }
+        if let Some(p) = &self.rgb_pads
+            && (p.extra.iter().any(|&o| !in_report(0, o) || !in_report(0, o + 2))
+                || usize::from(p.count) + p.extra.len() > 127
+                || p.balance.is_some_and(|b| b.iter().any(|g| !(0.0..=4.0).contains(g))))
+        {
+            return Err("hid: extra RGB LEDs must be bytes of the first output report, balance 0-4".into());
+        }
+        if let Some(p) = &self.pressure_pads
+            && (p.offset == 0
+                || p.offset + 2 * p.count > MAX_REPORT
+                || p.note > 127 - 15
+                || p.off >= p.on
+                || p.max <= p.on
+                || p.peak_reports == 0)
+        {
+            return Err("hid: pressure pads: values within the report, note 0-112, off < on < max".into());
+        }
+        if let Some(b) = &self.bitmap
+            && (b.width == 0
+                || b.height == 0
+                || b.height % 8 != 0
+                || b.chunk_pages == 0
+                || (b.height / 8) % b.chunk_pages != 0)
+        {
+            return Err("hid: bitmap height must be whole pages of 8 rows, in whole chunks".into());
+        }
         for d in &self.displays {
             let fits = d
                 .digits
@@ -342,6 +435,23 @@ pub struct HidTranslator {
     touch: [Option<(usize, u16)>; 2],
     reports: Vec<Vec<u8>>,
     dirty: Vec<bool>,
+    pads: [PadState; 16],
+    /// The display's frame, and per chunk whether it changed.
+    screen: Vec<u8>,
+    screen_dirty: Vec<bool>,
+}
+
+/// A pressure pad, see [`PressurePads`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum PadState {
+    #[default]
+    Up,
+    /// Hit, waiting for the peak.
+    Rising {
+        peak: u16,
+        left: u8,
+    },
+    Down,
 }
 
 impl HidTranslator {
@@ -362,6 +472,10 @@ impl HidTranslator {
                 }
             }
         }
+        let (screen, screen_dirty) = match &layout.bitmap {
+            Some(b) => (vec![0; b.frame_len()], vec![true; usize::from(b.height / 8 / b.chunk_pages)]),
+            None => (Vec::new(), Vec::new()),
+        };
         Self {
             last: None,
             ranges: vec![(0, layout.knob_max); layout.knobs.len()],
@@ -369,7 +483,75 @@ impl HidTranslator {
             touch: [None; 2],
             dirty: vec![true; reports.len()],
             reports,
+            pads: [PadState::Up; 16],
+            screen,
+            screen_dirty,
             layout,
+        }
+    }
+
+    /// Sets the pixel display's frame ([`Bitmap::frame_len`] bytes; see
+    /// [`Bitmap`]); only changed chunks go out on the next flush.
+    pub fn set_screen(&mut self, frame: &[u8]) {
+        let Some(b) = &self.layout.bitmap else { return };
+        if frame.len() != self.screen.len() {
+            return;
+        }
+        let chunk = usize::from(b.width) * usize::from(b.chunk_pages);
+        for (i, (new, old)) in frame.chunks(chunk).zip(self.screen.chunks_mut(chunk)).enumerate() {
+            if new != old {
+                old.copy_from_slice(new);
+                self.screen_dirty[i] = true;
+            }
+        }
+    }
+
+    /// MIDI for a pressure pad report, see [`PressurePads`].
+    fn pad_input(&mut self, p: &PressurePads, r: &[u8], out: &mut Vec<[u8; 3]>) {
+        // The highest pressure of each pad in this report.
+        let mut now = [None::<u16>; 16];
+        for k in 0..p.count {
+            let Some(v) = u16_at(r, p.offset + 2 * k) else { break };
+            let pad = usize::from(v >> 12);
+            now[pad] = Some(now[pad].unwrap_or(0).max(v & 0x0FFF));
+        }
+        let velocity = |peak: u16| {
+            let x = f32::from(peak.saturating_sub(p.on)) / f32::from(p.max - p.on);
+            (1.0 + x.clamp(0.0, 1.0) * 126.0).round() as u8
+        };
+        for (pad, pressure) in now.iter().enumerate() {
+            let Some(v) = *pressure else { continue };
+            let note = p.note + pad as u8;
+            self.pads[pad] = match self.pads[pad] {
+                PadState::Up if v >= p.on => match p.peak_reports {
+                    1 => {
+                        out.push([0x90, note, velocity(v)]);
+                        PadState::Down
+                    }
+                    n => PadState::Rising { peak: v, left: n - 1 },
+                },
+                PadState::Rising { peak, left } => {
+                    let peak = peak.max(v);
+                    // Sent once the peak is known: the time is up, or the
+                    // pressure falls (a short tap).
+                    if left <= 1 || v < peak.saturating_sub(peak / 8) || v < p.off {
+                        out.push([0x90, note, velocity(peak)]);
+                        if v < p.off {
+                            out.push([0x80, note, 0]);
+                            PadState::Up
+                        } else {
+                            PadState::Down
+                        }
+                    } else {
+                        PadState::Rising { peak, left: left - 1 }
+                    }
+                }
+                PadState::Down if v < p.off => {
+                    out.push([0x80, note, 0]);
+                    PadState::Up
+                }
+                state => state,
+            };
         }
     }
 
@@ -394,6 +576,9 @@ impl HidTranslator {
     /// The first report sends every knob and every pressed button.
     pub fn input(&mut self, r: &[u8], out: &mut Vec<[u8; 3]>) {
         let l = self.layout.clone();
+        if let Some(p) = l.pressure_pads.as_ref().filter(|p| r.first() == Some(&p.report)) {
+            return self.pad_input(p, r, out);
+        }
         if r.first() != Some(&l.input_report) {
             return;
         }
@@ -501,13 +686,17 @@ impl HidTranslator {
     }
 
     fn set_pad(&mut self, pads: &RgbPads, pad: u8, code: u8) {
-        if !(1..=pads.count).contains(&pad) {
-            return;
-        }
+        let first = match usize::from(pad) {
+            n if (1..=usize::from(pads.count)).contains(&n) => pads.offset + 3 * (n - 1),
+            n => match n.checked_sub(usize::from(pads.count) + 1).and_then(|i| pads.extra.get(i)) {
+                Some(&o) => o,
+                None => return,
+            },
+        };
         let rgb = rille_core::remix::led_rgb(code);
-        let first = pads.offset + 3 * usize::from(pad - 1);
+        let balance = pads.balance.unwrap_or([1.0; 3]);
         for (i, &c) in pads.order.iter().enumerate() {
-            let v = rgb.get(c).map_or(0, |v| (v.clamp(0.0, 1.0) * 127.0).round() as u8);
+            let v = rgb.get(c).map_or(0, |v| (v.clamp(0.0, 1.0) * balance[c] * 127.0).round().min(127.0) as u8);
             self.set_led(0, first + i, v);
         }
     }
@@ -542,6 +731,19 @@ impl HidTranslator {
         for (r, dirty) in self.reports.iter().zip(&mut self.dirty) {
             if std::mem::take(dirty) {
                 write(r);
+            }
+        }
+        let Some(b) = &self.layout.bitmap else { return };
+        let chunk = usize::from(b.width) * usize::from(b.chunk_pages);
+        for (i, dirty) in self.screen_dirty.iter_mut().enumerate() {
+            if std::mem::take(dirty) {
+                let mut r = Vec::with_capacity(9 + chunk);
+                r.push(b.report);
+                for v in [0, i as u16 * b.chunk_pages, b.width, b.chunk_pages] {
+                    r.extend_from_slice(&v.to_le_bytes());
+                }
+                r.extend_from_slice(&self.screen[i * chunk..(i + 1) * chunk]);
+                write(&r);
             }
         }
     }
@@ -735,6 +937,13 @@ impl HidLink {
         msgs.iter().for_each(|m| s.translator.output(*m));
         s.flush();
     }
+
+    /// Shows a frame on the pixel display, see [`HidTranslator::set_screen`].
+    pub fn show(&self, frame: &[u8]) {
+        let mut s = lock(&self.shared);
+        s.translator.set_screen(frame);
+        s.flush();
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -763,6 +972,8 @@ impl HidLink {
 
     pub fn send(&self, _msgs: &[[u8; 3]]) {}
 
+    pub fn show(&self, _frame: &[u8]) {}
+
     pub fn is_alive(&self) -> bool {
         false
     }
@@ -789,6 +1000,93 @@ mod tests {
 
     fn f1() -> Arc<HidLayout> {
         bundled("traktor-kontrol-f1.toml")
+    }
+
+    fn mikro_like() -> Arc<HidLayout> {
+        Arc::new(
+            toml::from_str(
+                r#"
+                name = "Pads"
+                vendor_id = 1
+                product_id = 2
+                input_report = 1
+                buttons = [1, 4]
+                outputs = [[0x80, 79]]
+                rgb_pads = { offset = 31, count = 16, order = [0, 1, 2], extra = [9], balance = [0.5, 1.0, 1.0] }
+                pressure_pads = { report = 0x20, offset = 1, count = 32, note = 64, on = 300, off = 150, max = 4000 }
+                bitmap = { report = 0xE0, width = 128, height = 64, chunk_pages = 2, screen = "drum" }
+                "#,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// A pad report with `pressures` of pads 0.. (each sent twice, as the
+    /// Mikro MK2 does).
+    fn pads(pressures: &[(u8, u16)]) -> Vec<u8> {
+        let mut r = vec![0x20];
+        for half in 0..2 {
+            let _ = half;
+            for pad in 0..16u8 {
+                let p = pressures.iter().find(|(n, _)| *n == pad).map_or(0, |e| e.1);
+                r.extend_from_slice(&(u16::from(pad) << 12 | p).to_le_bytes());
+            }
+        }
+        r
+    }
+
+    #[test]
+    fn pressure_pads_send_the_peak_as_velocity() {
+        let l = mikro_like();
+        assert_eq!(l.validate(), Ok(()));
+        let mut t = HidTranslator::new(l);
+        let mut out = Vec::new();
+        for p in [400, 2000, 3800] {
+            t.input(&pads(&[(3, p)]), &mut out);
+        }
+        assert_eq!(out, [[0x90, 67, 120]], "after three reports, at the peak");
+        out.clear();
+        t.input(&pads(&[(3, 2500)]), &mut out);
+        assert!(out.is_empty(), "held");
+        t.input(&pads(&[(3, 100)]), &mut out);
+        assert_eq!(out, [[0x80, 67, 0]]);
+        out.clear();
+        // A quick soft tap: down and up before the window ends.
+        t.input(&pads(&[(0, 900)]), &mut out);
+        t.input(&pads(&[(0, 120)]), &mut out);
+        assert_eq!(out, [[0x90, 64, 21], [0x80, 64, 0]]);
+    }
+
+    #[test]
+    fn bitmap_frames_go_out_in_changed_chunks() {
+        let mut t = HidTranslator::new(mikro_like());
+        let mut sent: Vec<Vec<u8>> = Vec::new();
+        t.flush(|r| sent.push(r.to_vec()));
+        assert_eq!(sent.len(), 1 + 4, "LEDs and the whole screen at first");
+        let chunk = &sent[3];
+        assert_eq!(chunk.len(), 9 + 256);
+        assert_eq!(&chunk[..9], &[0xE0, 0, 0, 4, 0, 128, 0, 2, 0], "x, first page, width, pages");
+        let mut frame = vec![0; 1024];
+        frame[700] = 0xFF; // page 5: the third chunk
+        t.set_screen(&frame);
+        sent.clear();
+        t.flush(|r| sent.push(r.to_vec()));
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0][3], 4);
+        assert_eq!(sent[0][9 + 700 - 512], 0xFF);
+    }
+
+    #[test]
+    fn extra_rgb_leds_follow_the_pads_with_balance() {
+        let mut t = HidTranslator::new(mikro_like());
+        let white = rille_core::remix::led_code(0, true);
+        t.output([0x91, 17, white]);
+        let mut sent = Vec::new();
+        t.flush(|r| sent.push(r.to_vec()));
+        let r = &sent[0];
+        let rgb = rille_core::remix::led_rgb(white);
+        assert_eq!(r[9], (rgb[0] * 0.5 * 127.0).round() as u8, "red at half: {:?}", &r[9..12]);
+        assert_eq!(r[10], (rgb[1] * 127.0).round() as u8);
     }
 
     #[test]

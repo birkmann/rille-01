@@ -311,7 +311,7 @@ impl RemixDeck {
 
     /// Remix controls; `false` if `c` is not one (the deck handles it).
     pub(crate) fn control(&mut self, c: Control, v: ControlValue, deck: u8, declick: usize) -> bool {
-        let press = matches!(v, ControlValue::Press(true));
+        let press = v.is_press();
         let abs = match v {
             ControlValue::Absolute(x) => Some(x.clamp(0.0, 1.0)),
             _ => None,

@@ -263,6 +263,8 @@ pub struct App {
     drums: Mutex<drums::Drums>,
     /// The drum machine panel is shown (for controller LEDs).
     drums_visible: Arc<AtomicBool>,
+    /// The drum kits and the one loaded (for controller pads and screens).
+    drum_kit_list: Arc<RwLock<values::KitList>>,
     /// This app, for work that must outlive a `&self` call.
     me: Weak<App>,
 }
@@ -295,6 +297,7 @@ impl App {
         let app = Arc::new_cyclic(|me| App {
             drums: Mutex::new(drums::Drums::load(&paths.drums())),
             drums_visible,
+            drum_kit_list: Arc::default(),
             me: me.clone(),
             settings: RwLock::new(settings),
             engine: Arc::new(EngineSlot::default()),
@@ -533,14 +536,14 @@ impl App {
             | Control::BrowserToggleNode => {
                 self.notify(UiEvent::Browser(ev));
             }
-            Control::Eject if matches!(ev.value, ControlValue::Press(true)) => self.eject(ev.target.unit),
+            Control::Eject if ev.value.is_press() => self.eject(ev.target.unit),
             Control::Record => {
-                if matches!(ev.value, ControlValue::Press(true)) {
+                if ev.value.is_press() {
                     self.toggle_recording();
                 }
             }
             Control::DrumShow => {
-                if matches!(ev.value, ControlValue::Press(true)) {
+                if ev.value.is_press() {
                     self.toggle_drums_visible();
                 }
             }
@@ -551,11 +554,21 @@ impl App {
                     app.step_drum_kit(d.round() as i64);
                 }
             }
+            Control::DrumKit(n) => {
+                if let (true, Some(app)) = (ev.value.is_press(), self.me.upgrade()) {
+                    app.pick_drum_kit(usize::from(n).saturating_sub(1));
+                }
+            }
+            Control::DrumCopy if ev.value.is_press() => {
+                self.drum_copy_pattern();
+                self.notify(UiEvent::DrumsChanged);
+            }
+            Control::DrumPaste if ev.value.is_press() => self.drum_paste_pattern(),
             // Cell edits need the app (files, the other decks' audio).
             Control::RemixPadLoad(_) => self.notify(UiEvent::Browser(ev)),
             Control::RemixPadDelete(pad) | Control::RemixPadCapture(pad) | Control::RemixPadType(pad) => {
                 let deck = ev.target.unit;
-                if matches!(ev.value, ControlValue::Press(true))
+                if ev.value.is_press()
                     && let Some(cell) = self.remix_pad_cell(deck, pad)
                 {
                     match ev.target.control {
@@ -596,11 +609,7 @@ impl App {
             }
         }
         if let Some(m) = self.midi.lock().expect("midi lock").as_mut() {
-            m.send_feedback(&values::SnapshotValues::frozen(
-                &self.engine,
-                self.recording_on.clone(),
-                self.drums_visible.clone(),
-            ));
+            m.send_feedback(&values::SnapshotValues::frozen(&self.engine, self.app_values()));
         }
     }
 
@@ -1795,11 +1804,8 @@ impl App {
 
     fn start_midi(self: &Arc<Self>) {
         let (tx, rx) = crossbeam_channel::unbounded::<MidiEvent>();
-        let values = Arc::new(values::SnapshotValues::live(
-            self.engine.clone(),
-            self.recording_on.clone(),
-            self.drums_visible.clone(),
-        ));
+        self.refresh_drum_kit_list();
+        let values = Arc::new(values::SnapshotValues::live(self.engine.clone(), self.app_values()));
         match MidiManager::new("rille", tx, values) {
             Ok(mut m) => {
                 let store = self.mappings.lock().expect("mappings lock");
@@ -1824,9 +1830,11 @@ impl App {
                     match ev {
                         MidiEvent::Control(c) => app.control(c),
                         MidiEvent::Raw { bytes, t, port } => app.learn_feed(&port, &bytes, t),
-                        MidiEvent::Connected { .. } | MidiEvent::Disconnected { .. } => {
+                        MidiEvent::Connected { mapping, .. } => {
+                            app.show_drums_for(mapping.as_deref());
                             app.notify(UiEvent::MidiChanged)
                         }
+                        MidiEvent::Disconnected { .. } => app.notify(UiEvent::MidiChanged),
                         MidiEvent::NextDeckLayout { port } => app.next_deck_layout(&port),
                     }
                 }

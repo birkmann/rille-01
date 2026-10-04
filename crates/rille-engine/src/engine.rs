@@ -326,7 +326,9 @@ impl Engine {
                         let _ = self.garbage.push(Garbage::DrumKit(old));
                     }
                 }
-                Command::SetDrumPattern { index, pattern } => self.drums.set_pattern(usize::from(index), pattern),
+                Command::SetDrumPattern { index, pattern, undo } => {
+                    self.drums.set_pattern(usize::from(index), pattern, undo)
+                }
                 Command::SetDrumParams(p) => self.drums.set_params(p),
             }
         }
@@ -379,7 +381,7 @@ impl Engine {
     fn control(&mut self, ev: ControlEvent) {
         let ControlEvent { target, value } = ev;
         let unit = usize::from(target.unit);
-        let press = matches!(value, ControlValue::Press(true));
+        let press = value.is_press();
         let held = match value {
             ControlValue::Press(down) => Some(down),
             _ => None,

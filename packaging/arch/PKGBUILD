@@ -1,7 +1,7 @@
 # Maintainer: The rille contributors
 # Build from a checkout: cd packaging/arch && makepkg -si
 pkgname=rille
-pkgver=0.1.5
+pkgver=0.1.6
 pkgrel=1
 pkgdesc="DJ software for Linux with automatic beatgrids and beat-locked sync"
 url="https://github.com/birkmann/rille-01"

@@ -920,3 +920,29 @@ fn drum_channel_routes_and_meters() {
     h.poll(|_| {});
     assert!(weak.upgrade().is_none());
 }
+
+#[test]
+fn auto_loop_at_the_cue_starts_on_the_cue_beat() {
+    for keylock in [false, true] {
+        for sr in [44_100, 48_000] {
+            let (h, mut e) = create(SR, 256);
+            // 126 BPM, cue on beat 16 (a bar line).
+            let (audio, grid) = click_track(126.0, 0.05, 60.0, sr);
+            let cue = grid.secs_at(16.0);
+            load(&h, 0, 1, (audio, grid.clone()), cue);
+            if keylock != h.snapshot().decks[0].keylock {
+                press(&h, 0, Control::Keylock);
+            }
+            run(&mut e, 0.2);
+            press(&h, 0, Control::Cue);
+            run(&mut e, 0.1);
+            press(&h, 0, Control::LoopToggle);
+            run(&mut e, 0.05);
+            let s = h.snapshot().decks[0];
+            assert!(s.loop_active);
+            let start = grid.beat_at(s.loop_start_secs);
+            assert!((start - 16.0).abs() < 1e-6, "keylock {keylock}, {sr} Hz: loop starts on beat {start}");
+            assert!((grid.beat_at(s.loop_end_secs) - 20.0).abs() < 1e-6);
+        }
+    }
+}

@@ -21,6 +21,7 @@ pub mod realtime;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+pub use deck::loop_start_beat;
 pub use drums::{DrumKit, DrumParams};
 pub use engine::Engine;
 pub use mixer::{band_gains, crossfader_gain, fader_gain, fader_level, gain_knob_db};

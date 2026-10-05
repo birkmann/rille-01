@@ -153,6 +153,18 @@ pub(crate) struct Deck {
     stem_scratch: Vec<[f32; 2]>,
 }
 
+/// How far before a beat (in beats) the playhead may be and still count as
+/// on it: a deck parked on a cue sits a frame or so early (frame rounding,
+/// the stretcher's latency), and a loop must not start a beat too soon.
+const ON_BEAT_TOLERANCE: f64 = 1.0 / 32.0;
+
+/// The `unit` (beats) boundary a loop from `beat` starts on: the one at or
+/// before the playhead, or the next one when the playhead is just short of it.
+pub fn loop_start_beat(beat: f64, unit: f64) -> f64 {
+    let tolerance = (ON_BEAT_TOLERANCE / unit).min(0.25);
+    (beat / unit + tolerance).floor() * unit
+}
+
 impl Deck {
     pub fn new(index: u8, sample_rate: u32, max_block: usize) -> Self {
         Self {
@@ -529,9 +541,7 @@ impl Deck {
         let pos = self.position();
         let (start, end) = match &self.grid {
             Some(g) => {
-                let b = g.beat_at(pos);
-                let unit = size.min(1.0);
-                let sb = (b / unit + 1e-6).floor() * unit;
+                let sb = loop_start_beat(g.beat_at(pos), size.min(1.0));
                 (g.secs_at(sb), g.secs_at(sb + size))
             }
             None => (pos, pos + size * 0.5),
@@ -555,7 +565,7 @@ impl Deck {
                     return;
                 }
                 let pos = self.position();
-                let b = (g.beat_at(pos) / size + 1e-6).floor() * size;
+                let b = loop_start_beat(g.beat_at(pos), size);
                 let range = (g.secs_at(b), g.secs_at(b + size));
                 let prev_loop = (self.loop_range, self.loop_active);
                 let r = self.roll.get_or_insert(Roll { beats: size, slip: pos, prev_loop });

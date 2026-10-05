@@ -196,7 +196,7 @@ pub mod qobject {
 
 use core::pin::Pin;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant};
@@ -540,6 +540,30 @@ impl qobject::TrackListModel {
             if let Some(row) = app.track_row(id) {
                 self.as_mut().rust_mut().rows[i] = row;
             }
+            self.as_mut().emit_row_changed(i);
+        }
+        // A folder file (id −1) loaded on a deck turns into a guest track:
+        // the row takes its id, so its deck and played marks show.
+        let fresh: Vec<TrackRow> = ids.iter().filter_map(|&id| app.track_row(id)).collect();
+        let same_file = |a: &Path, b: &Path| {
+            a == b || (a.file_name() == b.file_name() && a.canonicalize().is_ok_and(|c| c == b))
+        };
+        let adopted: Vec<(usize, TrackRow)> = self
+            .rust()
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.id < 0 && r.beatport_id.is_none())
+            .filter_map(|(i, r)| {
+                let t = fresh.iter().find(|t| same_file(&r.path, &t.path))?;
+                let mut row = t.clone();
+                // Selection is kept by the row's path.
+                row.path.clone_from(&r.path);
+                Some((i, row))
+            })
+            .collect();
+        for (i, row) in adopted {
+            self.as_mut().rust_mut().rows[i] = row;
             self.as_mut().emit_row_changed(i);
         }
     }

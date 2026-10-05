@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 
 use rille_core::remix::{CELLS, PAGE_ROWS, PAGES, ROWS, SLOT_COLORS, SLOTS, pad_cell};
 use rille_core::{BeatClock, BeatGrid};
-use rille_engine::{Command, LOOP_SIZES, MAX_DECKS, RemixSample, TrackAudio, remix_grid};
+use rille_engine::{Command, LOOP_SIZES, MAX_DECKS, RemixSample, TrackAudio, loop_start_beat, remix_grid};
 use rille_library::TrackId;
 use serde::{Deserialize, Serialize};
 
@@ -480,7 +480,7 @@ impl App {
         } else {
             let size = LOOP_SIZES[ds.loop_size_idx.min(LOOP_SIZES.len() - 1)];
             let unit = size.min(1.0);
-            let b = (grid.beat_at(ds.position_secs) / unit + 1e-6).floor() * unit;
+            let b = loop_start_beat(grid.beat_at(ds.position_secs), unit);
             (grid.secs_at(b), grid.secs_at(b + size))
         };
         if end <= start {

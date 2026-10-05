@@ -69,11 +69,34 @@ pub fn stat(path: &Path) -> io::Result<(u64, i64)> {
     Ok((m.len(), mtime))
 }
 
+/// What the browser shows for a file outside the collection: tags and cover,
+/// without the content hash (which costs extra reads on slow media).
+#[derive(Clone, Debug, Default)]
+pub struct FileMeta {
+    pub path: PathBuf,
+    pub size: u64,
+    pub mtime: i64,
+    pub tags: Tags,
+    /// Cover hash; thumbnails exist in the cache when set.
+    pub cover: Option<String>,
+}
+
 /// Reads everything about `path`. Only IO errors are fatal; unreadable tags
 /// fall back to the file name and are reported in `warning`.
 pub fn read_file(path: &Path, cache_dir: &Path) -> Result<FileInfo> {
+    let (m, warning) = read_meta_inner(path, cache_dir)?;
+    let hash = content_hash(path, m.size).map_err(io_err(path))?;
+    Ok(FileInfo { path: m.path, size: m.size, mtime: m.mtime, hash, tags: m.tags, cover: m.cover, warning })
+}
+
+/// Tags, audio properties and cover of `path` (no content hash). Only IO
+/// errors are fatal; unreadable tags fall back to the file name.
+pub fn read_meta(path: &Path, cache_dir: &Path) -> Result<FileMeta> {
+    read_meta_inner(path, cache_dir).map(|(m, _)| m)
+}
+
+fn read_meta_inner(path: &Path, cache_dir: &Path) -> Result<(FileMeta, Option<String>)> {
     let (size, mtime) = stat(path).map_err(io_err(path))?;
-    let hash = content_hash(path, size).map_err(io_err(path))?;
     let mut warnings = Vec::new();
     let (mut tags, picture) = read_tags(path).unwrap_or_else(|e| {
         warnings.push(format!("tags: {e}"));
@@ -84,7 +107,7 @@ pub fn read_file(path: &Path, cache_dir: &Path) -> Result<FileInfo> {
         .or_else(|| folder_cover(path))
         .and_then(|bytes| make_cover(&bytes, cache_dir).map_err(|e| warnings.push(format!("cover: {e}"))).ok());
     let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
-    Ok(FileInfo { path: path.to_owned(), size, mtime, hash, tags, cover, warning })
+    Ok((FileMeta { path: path.to_owned(), size, mtime, tags, cover }, warning))
 }
 
 // ---------------------------------------------------------------------------

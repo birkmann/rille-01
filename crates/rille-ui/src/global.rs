@@ -78,6 +78,38 @@ pub fn token_path(token: i64) -> Option<std::path::PathBuf> {
     usize::try_from(token).ok().and_then(|i| tokens().paths.get(i).cloned())
 }
 
+// ----------------------------------------------------------- changed folders
+
+/// Explorer folders whose files' tags were read, with a running sequence
+/// number (see `TrackListModel::updateFolder`).
+#[derive(Default)]
+struct FolderChanges {
+    seq: u64,
+    recent: std::collections::VecDeque<(u64, std::path::PathBuf)>,
+}
+
+static FOLDER_CHANGES: OnceLock<Mutex<FolderChanges>> = OnceLock::new();
+
+fn folder_changes() -> std::sync::MutexGuard<'static, FolderChanges> {
+    FOLDER_CHANGES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn push_folder_changed(dir: std::path::PathBuf) {
+    let mut c = folder_changes();
+    c.seq += 1;
+    let seq = c.seq;
+    c.recent.push_back((seq, dir));
+    while c.recent.len() > 64 {
+        c.recent.pop_front();
+    }
+}
+
+/// Folders changed after `since`, and the new sequence number.
+pub fn folders_changed_since(since: u64) -> (Vec<std::path::PathBuf>, u64) {
+    let c = folder_changes();
+    (c.recent.iter().filter(|(s, _)| *s > since).map(|(_, d)| d.clone()).collect(), c.seq)
+}
+
 // ------------------------------------------------------------ changed tracks
 
 /// Recently changed track ids with a running sequence number, so each list

@@ -114,7 +114,7 @@ pub fn suggest(reference: &TrackRow, rows: &[TrackRow], exclude: &HashSet<TrackI
     };
     let mut scored: Vec<(f32, &TrackRow)> = rows
         .iter()
-        .filter(|r| r.id != reference.id && !r.missing && !exclude.contains(&r.id) && !same_song(r))
+        .filter(|r| r.id != reference.id && !r.missing && !r.guest && !exclude.contains(&r.id) && !same_song(r))
         .filter_map(|r| score(reference, &ref_genre, r).filter(|s| *s >= MIN_SCORE).map(|s| (s, r)))
         .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| b.1.rating.cmp(&a.1.rating)));
@@ -161,6 +161,7 @@ mod tests {
             missing: false,
             beatport_id: None,
             beatport_offline: false,
+            guest: false,
         }
     }
 

@@ -117,7 +117,8 @@ impl Library {
         // 2. Compare with the database.
         let mut known = HashMap::new();
         {
-            let mut stmt = self.conn.prepare("SELECT path, file_size, mtime, missing FROM tracks")?;
+            // Guest tracks in an import folder join the collection.
+            let mut stmt = self.conn.prepare("SELECT path, file_size, mtime, missing FROM tracks WHERE guest = 0")?;
             let rows = stmt.query_map([], |r| {
                 Ok((blob_path(r.get(0)?), (r.get::<_, u64>(1)?, r.get::<_, i64>(2)?, r.get::<_, bool>(3)?)))
             })?;
@@ -184,9 +185,11 @@ impl Library {
         for p in &wanted {
             let known = self
                 .conn
-                .query_row("SELECT file_size, mtime, missing FROM tracks WHERE path = ?1", [path_blob(p)], |r| {
-                    Ok((r.get::<_, u64>(0)?, r.get::<_, i64>(1)?, r.get::<_, bool>(2)?))
-                })
+                .query_row(
+                    "SELECT file_size, mtime, missing FROM tracks WHERE path = ?1 AND guest = 0",
+                    [path_blob(p)],
+                    |r| Ok((r.get::<_, u64>(0)?, r.get::<_, i64>(1)?, r.get::<_, bool>(2)?)),
+                )
                 .ok();
             match (known, meta::stat(p)) {
                 (Some((size, mtime, false)), Ok(st)) if st == (size, mtime) => report.unchanged += 1,
@@ -249,7 +252,12 @@ fn read_guarded(path: &Path, cache_dir: &Path) -> Result<FileInfo, String> {
 
 /// Order-preserving parallel map over scoped threads.
 fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    par_map_n(items, std::thread::available_parallelism().map_or(1, |n| n.get()), f)
+}
+
+/// [`par_map`] over at most `threads` threads.
+pub(crate) fn par_map_n<T: Sync, R: Send>(items: &[T], threads: usize, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let threads = threads.max(1);
     let per = items.len().div_ceil(threads).max(1);
     std::thread::scope(|s| {
         let handles: Vec<_> = items.chunks(per).map(|c| s.spawn(|| c.iter().map(&f).collect::<Vec<_>>())).collect();

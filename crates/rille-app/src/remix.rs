@@ -425,12 +425,13 @@ impl App {
             .expect("spawn remix cell loader");
     }
 
-    /// Imports a file (drag and drop, file browser) and loads it into a cell.
+    /// Loads a file (drag and drop, file browser) into a cell; a file outside
+    /// the collection becomes a guest track (see [`App::load_file`]).
     pub fn load_remix_file(self: &Arc<Self>, deck: u8, cell: Option<usize>, path: &Path) {
-        let id = self.library.lock().expect("library lock").import_file(path);
+        let id = self.library.lock().expect("library lock").import_file_guest(path);
         match id {
             Ok(id) => {
-                self.refresh_tracks();
+                self.refresh_track(id);
                 self.load_remix_cell(deck, cell, id);
             }
             Err(e) => self.notify(UiEvent::Status(format!("Cannot load {}: {e}", path.display()))),

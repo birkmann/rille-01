@@ -34,14 +34,19 @@ pub fn places() -> Vec<Place> {
             out.push(Place { name: "Music".into(), path: music, kind: PlaceKind::Music });
         }
     }
-    let user = std::env::var("USER").unwrap_or_default();
-    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
-    for dir in mount_points(&mounts, &user) {
+    for dir in drives() {
         let name = dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().into_owned());
         out.push(Place { name, path: dir, kind: PlaceKind::Drive });
     }
     out.push(Place { name: "Computer".into(), path: PathBuf::from("/"), kind: PlaceKind::Root });
     out
+}
+
+/// Mounted removable and extra drives (USB sticks, second disks).
+pub fn drives() -> Vec<PathBuf> {
+    let user = std::env::var("USER").unwrap_or_default();
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    mount_points(&mounts, &user)
 }
 
 /// `XDG_MUSIC_DIR` from `~/.config/user-dirs.dirs`.
@@ -223,6 +228,7 @@ pub fn file_row(path: &Path) -> TrackRow {
         missing: false,
         beatport_id: None,
         beatport_offline: false,
+        guest: false,
     }
 }
 

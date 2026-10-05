@@ -6,7 +6,7 @@ use lofty::prelude::*;
 use lofty::tag::{Tag, TagType};
 use rille_core::track::ANALYZER_VERSION;
 use rille_core::{BeatGrid, BeatMap, CueKind, CuePoint, GridFlags, GridSource, Key, TrackAnalysis, TrackCues};
-use rille_library::{CoverSize, Error, Library, ScanProgress, Tags};
+use rille_library::{CoverSize, Error, Library, ScanProgress, Tags, read_metas};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -108,7 +108,7 @@ fn schema_create_and_reopen() {
     }
     let conn = rusqlite::Connection::open(&db).unwrap();
     let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let mode: String = conn.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap();
     assert_eq!(mode, "wal");
 
@@ -237,6 +237,98 @@ fn import_tagged_wav_with_cover() {
         let img = image::open(&p).unwrap();
         assert_eq!((img.width(), img.height()), (size.px(), size.px()));
     }
+}
+
+#[test]
+fn browsed_file_meta_is_cached_until_the_file_changes() {
+    let mut env = Env::new();
+    let stick = env.dir.path().join("stick");
+    let tagged = stick.join("whatever.wav");
+    let plain = stick.join("Some Artist - Some Title.wav");
+    write_wav(&tagged, 1.0, 440.0);
+    write_tags(&tagged);
+    write_wav(&plain, 1.0, 220.0);
+    let paths = vec![tagged.clone(), plain.clone(), stick.join("gone.wav")];
+
+    let metas = read_metas(&paths, env.lib.cache_dir(), 2);
+    assert_eq!(metas.len(), 2, "unreadable files are left out");
+    env.lib.put_file_meta(&metas).unwrap();
+    let cached = env.lib.file_meta(&paths).unwrap();
+    assert_eq!(cached.len(), 2);
+
+    let row = cached[&tagged].to_row();
+    assert_eq!((row.id, row.title.as_str(), row.artist.as_str()), (-1, "Tagged Title", "Tagged Artist"));
+    assert_eq!((row.album.as_str(), row.genre.as_str(), row.bpm), ("An Album", "Techno", Some(128.0)));
+    assert_eq!(row.key, Some(Key::new(9, true)));
+    assert!((row.duration_secs - 1.0).abs() < 0.01);
+    let cover = row.cover.clone().expect("cover");
+    assert!(row.has_cover && rille_library::cover_thumb(env.lib.cache_dir(), &cover, CoverSize::Small).exists());
+    let row = cached[&plain].to_row();
+    assert_eq!((row.title.as_str(), row.artist.as_str(), row.has_cover), ("Some Title", "Some Artist", false));
+    assert!(env.lib.tracks().unwrap().is_empty(), "browsing imports nothing");
+
+    // A changed file is read again.
+    write_wav(&plain, 2.0, 220.0);
+    let cached = env.lib.file_meta(&paths).unwrap();
+    assert!(cached.contains_key(&tagged) && !cached.contains_key(&plain));
+
+    env.lib.clear_file_meta_under(&stick).unwrap();
+    assert!(env.lib.file_meta_paths().unwrap().is_empty());
+}
+
+#[test]
+fn guest_tracks_stay_out_of_the_collection_until_imported() {
+    let mut env = Env::new();
+    let stick = env.dir.path().join("stick");
+    let path = stick.join("guest.wav");
+    write_wav(&path, 2.0, 440.0);
+
+    let id = env.lib.import_file_guest(&path).unwrap();
+    assert_eq!(env.lib.import_file_guest(&path).unwrap(), id, "loading again is idempotent");
+    let row = env.lib.track(id).unwrap().unwrap();
+    assert!(row.guest);
+    assert_eq!(env.lib.tracks_under(&stick.canonicalize().unwrap(), false).unwrap().len(), 1);
+    assert!(env.lib.tracks_needing_analysis().unwrap().is_empty(), "guests are analyzed only when loaded");
+
+    // Analysis and cues of a loaded guest survive the import.
+    env.lib.set_analysis(id, &analysis(128.0, ANALYZER_VERSION)).unwrap();
+    let cues = TrackCues { main_cue_secs: 1.5, ..TrackCues::default() };
+    env.lib.set_cues(id, &cues).unwrap();
+    let report = env.lib.import_files(std::slice::from_ref(&path), &mut |_| {}).unwrap();
+    assert_eq!(report.ids, vec![id]);
+    let row = env.lib.track(id).unwrap().unwrap();
+    assert!(!row.guest && row.analyzed);
+    assert_eq!(env.lib.cues(id).unwrap(), cues);
+
+    // A collection track stays one when loaded the guest way.
+    assert_eq!(env.lib.import_file_guest(&path).unwrap(), id);
+    assert!(!env.lib.track(id).unwrap().unwrap().guest);
+
+    // A guest in an import folder joins the collection on the next scan.
+    let member = env.music().join("member.wav");
+    write_wav(&member, 1.0, 330.0);
+    let gid = env.lib.import_file_guest(&member).unwrap();
+    assert!(env.lib.track(gid).unwrap().unwrap().guest);
+    env.lib.add_root(&env.music()).unwrap();
+    env.lib.scan(&mut |_| {}).unwrap();
+    assert!(!env.lib.track(gid).unwrap().unwrap().guest);
+}
+
+#[test]
+fn guest_files_never_relink_collection_tracks() {
+    let mut env = Env::new();
+    let original = env.music().join("track.wav");
+    write_wav(&original, 1.0, 440.0);
+    let id = env.lib.import_file(&original).unwrap();
+    // The collection's file is gone; a copy of it is browsed on a stick.
+    let copy = env.dir.path().join("stick/track.wav");
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    std::fs::copy(&original, &copy).unwrap();
+    std::fs::remove_file(&original).unwrap();
+    let gid = env.lib.import_file_guest(&copy).unwrap();
+    assert_ne!(gid, id);
+    assert!(env.lib.track(gid).unwrap().unwrap().guest);
+    assert_eq!(env.lib.track(id).unwrap().unwrap().path, original.canonicalize().unwrap_or(original));
 }
 
 #[test]

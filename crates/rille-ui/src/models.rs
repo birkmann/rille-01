@@ -48,6 +48,11 @@ pub mod qobject {
         #[cxx_name = "updateChanged"]
         fn update_changed(self: Pin<&mut TrackListModel>);
 
+        /// Re-reads the shown explorer folder if its files' tags were read.
+        #[qinvokable]
+        #[cxx_name = "updateFolder"]
+        fn update_folder(self: Pin<&mut TrackListModel>);
+
         #[qinvokable]
         #[cxx_name = "trackId"]
         fn track_id(self: &TrackListModel, row: i32) -> i64;
@@ -200,7 +205,7 @@ use rille_core::GridFlags;
 use rille_library::{CoverSize, TrackRow};
 
 use crate::deck_controller::key_color;
-use crate::global::{app, changed_since, changes_seq, path_token, token_path};
+use crate::global::{app, changed_since, changes_seq, folders_changed_since, path_token, token_path};
 use crate::tree_model::{
     BP_OFFLINE, BP_PURCHASES, BP_TOP100, KIND_BEATPORT_LIST, KIND_BEATPORT_PLAYLIST, KIND_BEATPORT_RECENT,
     KIND_BEATPORT_SEARCH,
@@ -270,6 +275,9 @@ pub struct TrackListRust {
     seen: u64,
     /// Suggestion scores (0..=1) by track id, in the suggestions view.
     scores: HashMap<i64, f32>,
+    /// Last folder change sequence number seen (see
+    /// `global::push_folder_changed`).
+    folder_seen: u64,
 }
 
 fn roles(names: &[&str]) -> QHash<QHashPair_i32_QByteArray> {
@@ -442,7 +450,7 @@ impl qobject::TrackListModel {
             rille_app::sort_rows(&mut rows, sort_key(&self.sort_key().to_string()), *self.descending());
         }
         let total_secs: f64 = rows.iter().map(|r| r.duration_secs).sum();
-        let new = rows.iter().filter(|r| r.id < 0).count();
+        let new = rows.iter().filter(|r| r.id < 0 || r.guest).count();
         let scores: HashMap<i64, f32> = if *self.source_kind() == 6 {
             app.suggestions().into_iter().map(|s| (s.id, s.score)).collect()
         } else {
@@ -533,6 +541,19 @@ impl qobject::TrackListModel {
                 self.as_mut().rust_mut().rows[i] = row;
             }
             self.as_mut().emit_row_changed(i);
+        }
+    }
+
+    fn update_folder(mut self: Pin<&mut Self>) {
+        let (dirs, seq) = folders_changed_since(self.rust().folder_seen);
+        self.as_mut().rust_mut().folder_seen = seq;
+        if *self.source_kind() != 3 || dirs.is_empty() {
+            return;
+        }
+        let Some(dir) = token_path(*self.source_id()) else { return };
+        let dir = dir.canonicalize().unwrap_or(dir);
+        if dirs.contains(&dir) {
+            self.refresh();
         }
     }
 
@@ -655,7 +676,8 @@ impl qobject::TrackListModel {
     fn import_selected(&self, analyze: bool) {
         let Some(app) = app() else { return };
         let rows = self.rust().selected_rows();
-        let new_file = |r: &TrackRow| r.id < 0 && r.beatport_id.is_none();
+        // Files outside the collection, guest tracks among them.
+        let new_file = |r: &TrackRow| (r.id < 0 || r.guest) && r.beatport_id.is_none();
         let paths: Vec<PathBuf> = if rows.is_empty() {
             // Nothing selected: the whole folder.
             self.rust().rows.iter().filter(|r| new_file(r)).map(|r| r.path.clone()).collect()
@@ -814,7 +836,7 @@ impl qobject::TrackListModel {
             "rowNumber" => QVariant::from(&(i as i32 + 1)),
             "tagColor" => s(&r.color.map_or(String::new(), |c| format!("#{c:06x}"))),
             "analysisState" => s(state_text(app.analysis_state(r))),
-            "inCollection" => QVariant::from(&(r.id >= 0)),
+            "inCollection" => QVariant::from(&(r.id >= 0 && !r.guest)),
             "locked" => QVariant::from(&r.grid_locked),
             "selected" => QVariant::from(&self.rust().selected.contains(&r.path)),
             "year" => s(&r.year.map_or(String::new(), |y| y.to_string())),

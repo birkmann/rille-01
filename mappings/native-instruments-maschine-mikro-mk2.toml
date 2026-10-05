@@ -272,7 +272,7 @@ encoding = "twos_complement"
 target = "drum.sel_level"
 midi = { type = "cc", channel = 1, number = 64 }
 mode = "relative"
-step = 0.01
+step = 0.03125
 encoding = "twos_complement"
 condition = { modifier = "enc_level" }
 
@@ -288,7 +288,7 @@ condition = { modifier = "enc_tune" }
 target = "drum.sel_decay"
 midi = { type = "cc", channel = 1, number = 64 }
 mode = "relative"
-step = 0.01
+step = 0.03125
 encoding = "twos_complement"
 condition = { modifier = "enc_decay" }
 
@@ -296,7 +296,7 @@ condition = { modifier = "enc_decay" }
 target = "drum.level"
 midi = { type = "cc", channel = 1, number = 64 }
 mode = "relative"
-step = 0.01
+step = 0.03125
 encoding = "twos_complement"
 condition = { modifier = "enc_volume" }
 

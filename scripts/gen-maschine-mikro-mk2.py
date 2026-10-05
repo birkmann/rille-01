@@ -253,11 +253,13 @@ def main():
     emit("# --- Encoder: turn ----------------------------------------------------\n")
     enc = {"encoding": "twos_complement"}
     inp("drum.filter", cc=ENCODER_CC, mode="relative", step=0.01, **enc)
+    # Levels and decay in 1/32 per click: 1 % steps on the quadratic fader
+    # curve could hardly be heard, and silencing a track took many turns.
     for m, target, step in [
-        ("enc_level", "drum.sel_level", 0.01),
+        ("enc_level", "drum.sel_level", 1 / 32),
         ("enc_tune", "drum.sel_tune", 1 / 48),
-        ("enc_decay", "drum.sel_decay", 0.01),
-        ("enc_volume", "drum.level", 0.01),
+        ("enc_decay", "drum.sel_decay", 1 / 32),
+        ("enc_volume", "drum.level", 1 / 32),
     ]:
         inp(target, cc=ENCODER_CC, condition=m, mode="relative", step=step, **enc)
     inp("drum.swing", cc=ENCODER_CC, condition="shift", mode="relative", step=0.01, **enc)

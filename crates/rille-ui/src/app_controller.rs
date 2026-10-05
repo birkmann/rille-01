@@ -124,10 +124,33 @@ pub mod qobject {
         #[cxx_name = "newDrumKit"]
         fn new_drum_kit(self: &AppController, name: &QString) -> QString;
 
-        /// An audio file as instrument `inst`'s sound.
+        /// Audio files (URLs, one per line) as the instruments' sounds: from
+        /// instrument `inst` on in the track order, or with `inst` < 0 each
+        /// to the instrument its name suggests.
         #[qinvokable]
-        #[cxx_name = "drumLoadUrl"]
-        fn drum_load_url(self: &AppController, inst: i32, url: &QUrl);
+        #[cxx_name = "drumLoadUrls"]
+        fn drum_load_urls(self: &AppController, inst: i32, urls: &QString);
+
+        /// Moves the drum track at position `from` to position `to`.
+        #[qinvokable]
+        #[cxx_name = "drumMoveTrack"]
+        fn drum_move_track(self: &AppController, from: i32, to: i32);
+
+        /// Saves the track order and sounds with the current kit; returns an
+        /// error message, or empty.
+        #[qinvokable]
+        #[cxx_name = "saveDrumRack"]
+        fn save_drum_rack(self: &AppController) -> QString;
+
+        /// Writes the rack into a new folder in `folder`.
+        #[qinvokable]
+        #[cxx_name = "exportDrumRack"]
+        fn export_drum_rack(self: &AppController, folder: &QUrl);
+
+        /// Copies the rack in `folder` to the user's kits and switches to it.
+        #[qinvokable]
+        #[cxx_name = "importDrumRack"]
+        fn import_drum_rack(self: &AppController, folder: &QUrl);
 
         /// A library track (drag and drop, the browser's selection) as
         /// instrument `inst`'s sound.
@@ -889,9 +912,12 @@ impl qobject::AppController {
                 )
             })
             .collect();
+        let order: Vec<String> = app.drum_order().iter().map(u8::to_string).collect();
+        let labels: Vec<String> =
+            app.drum_labels().iter().map(|l| l.as_deref().map_or_else(|| "null".into(), json_str)).collect();
         let c = &d.channel;
         let json = format!(
-            r#"{{"current":{},"queued":{},"selected":{},"length":{},"swing":{:.4},"rows":[{}],"used":[{}],"inst":[{}],"level":{:.4},"filter":{:.4},"fx":[{},{}],"pfl":{},"kit":{},"factory":{},"kits":{},"clipboard":{},"undo":{},"redo":{},"waiting":{},"stopping":{},"solo":{}}}"#,
+            r#"{{"current":{},"queued":{},"selected":{},"length":{},"swing":{:.4},"rows":[{}],"used":[{}],"inst":[{}],"order":[{}],"labels":[{}],"level":{:.4},"filter":{:.4},"fx":[{},{}],"pfl":{},"kit":{},"factory":{},"kits":{},"clipboard":{},"undo":{},"redo":{},"waiting":{},"stopping":{},"solo":{}}}"#,
             d.current,
             d.queued.map_or(-1, i32::from),
             d.selected,
@@ -900,6 +926,8 @@ impl qobject::AppController {
             rows.join(","),
             used.join(","),
             inst.join(","),
+            order.join(","),
+            labels.join(","),
             c.volume,
             c.filter,
             c.fx_assign[0],
@@ -934,9 +962,40 @@ impl qobject::AppController {
         }
     }
 
-    fn drum_load_url(&self, inst: i32, url: &QUrl) {
-        if let (Some(app), Ok(inst)) = (app(), usize::try_from(inst)) {
-            app.drum_load_file(inst, &url_path(url));
+    fn drum_load_urls(&self, inst: i32, urls: &QString) {
+        let Some(app) = app() else { return };
+        let paths: Vec<PathBuf> = urls
+            .to_string()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| url_path(&QUrl::from(&QString::from(l.trim()))))
+            .collect();
+        app.drum_load_files(usize::try_from(inst).ok(), &paths);
+    }
+
+    fn drum_move_track(&self, from: i32, to: i32) {
+        if let (Some(app), Ok(from), Ok(to)) = (app(), usize::try_from(from), usize::try_from(to)) {
+            app.drum_move_track(from, to);
+        }
+    }
+
+    fn save_drum_rack(&self) -> QString {
+        let Some(app) = app() else { return QString::default() };
+        match app.save_drum_rack() {
+            Ok(()) => QString::default(),
+            Err(e) => QString::from(e),
+        }
+    }
+
+    fn export_drum_rack(&self, folder: &QUrl) {
+        if let Some(app) = app() {
+            app.export_drum_rack(&url_path(folder));
+        }
+    }
+
+    fn import_drum_rack(&self, folder: &QUrl) {
+        if let Some(app) = app() {
+            app.import_drum_rack(&url_path(folder));
         }
     }
 

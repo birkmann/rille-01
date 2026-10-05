@@ -36,7 +36,7 @@
 #
 # LEDs mirror the buttons on the same note numbers (127 = on, 0 = off).
 #
-# Drum machine targets (not bound here; see the README for the full list):
+# Drum machine targets (not bound here; see docs/drum-machine.md for the full list):
 #   drum.play, drum.record, drum.step.1-16, drum.accent.1-16 (selected
 #   instrument), drum.cell.1-128 (instrument * 16 + step), drum.inst.1-8,
 #   drum.trigger.1-8, drum.inst_mute.1-8, drum.sel_level / sel_tune /

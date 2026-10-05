@@ -7,16 +7,19 @@ import rille.ui
 
 // The drum machine: eight instruments, sixteen steps, always in time with
 // the master clock. One sequencer row (the selected instrument) or four;
-// the instrument tabs choose what the row and the knobs edit. Every control
-// sends a `drum.*` target, so MIDI learn works on all of them.
+// the instrument tabs choose what the row and the knobs edit, and dragging
+// them sets the track order the rows follow. Every control sends a `drum.*`
+// target, so MIDI learn works on all of them.
 Rectangle {
     id: drums
     readonly property var st: JSON.parse(AppController.drumsJson || "{}")
     readonly property var inst: st.inst || []
     readonly property int sel: st.selected || 0
+    // Instruments left to right (and top to bottom in four rows).
+    readonly property var order: st.order && st.order.length === 8 ? st.order : [0, 1, 2, 3, 4, 5, 6, 7]
     readonly property bool four: AppController.drumsRows === 4
-    // Four rows: the half of the instruments the selected one is in.
-    readonly property int pageStart: sel < 4 ? 0 : 4
+    // Four rows: the half of the tracks the selected one is in.
+    readonly property int pageStart: order.indexOf(sel) < 4 ? 0 : 4
     readonly property var hits: AppController.drumsHits.split(",")
     readonly property bool beatOn: ((AppController.clockBeat % 1) + 1) % 1 < 0.5
     readonly property bool external: AppController.mixerChannels.length > 0
@@ -37,6 +40,42 @@ Rectangle {
     }
     function instColor(i) {
         return drums.inst[i] ? drums.inst[i].color : Theme.sync
+    }
+    function loaded(i) {
+        return drums.inst[i] ? drums.inst[i].loaded : true
+    }
+    // What instrument `i`'s sound is called, if known.
+    function label(i) {
+        return (drums.st.labels || [])[i] || ""
+    }
+    // Moves instrument `i`'s track `by` places.
+    function moveTrack(i, by) {
+        var from = drums.order.indexOf(i)
+        var to = Math.max(0, Math.min(7, from + by))
+        if (from >= 0 && to !== from)
+            AppController.drumMoveTrack(from, to)
+    }
+    // Files or a library track dropped on instrument `i` (several files:
+    // that track and the ones after it).
+    function dropSounds(i, d) {
+        if (d.hasUrls && d.urls.length > 0)
+            AppController.drumLoadUrls(i, Array.prototype.map.call(d.urls, u => u.toString()).join("\n"))
+        else if (d.getDataAsString("application/x-rille-track").length)
+            AppController.drumLoadTrack(i, Number(d.getDataAsString("application/x-rille-track")))
+        else if (d.getDataAsString("application/x-rille-path").length)
+            AppController.drumLoadPath(i, Number(d.getDataAsString("application/x-rille-path")))
+        d.acceptProposedAction()
+    }
+    // Saves the rack with the current kit; a factory kit under a new name.
+    function saveRack() {
+        if (drums.st.factory)
+            newKit.open()
+        else
+            AppController.saveDrumRack()
+    }
+    function loadSounds(i) {
+        sampleDialog.instIndex = i
+        sampleDialog.open()
     }
     // Muted, or silent while another instrument is soloed.
     function silent(i) {
@@ -335,28 +374,61 @@ Rectangle {
             // Narrow: pads up to about 64 px tall, the rest of the room below.
             Layout.maximumHeight: drums.narrow ? (Theme.mobile ? 34 : 26) + (drums.four ? 4 : 1) * (2 * 64 + 6 + 4) : Number.POSITIVE_INFINITY
             spacing: 4
-            RowLayout {
+            // The tracks in order; drag one sideways to move it.
+            Item {
+                id: tabs
                 Layout.fillWidth: true
                 Layout.preferredHeight: Theme.mobile ? 30 : 22
                 Layout.fillHeight: false
-                spacing: 3
-                Repeater {
-                    model: 8
-                    DrumInstTab {
-                        required property int index
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        inst: index
-                        name: drums.instName(index)
-                        fullName: drums.fullNames[index]
-                        tint: drums.instColor(index)
-                        selected: drums.sel === index
-                        used: ((drums.st.rows || [])[index] || ".").replace(/\./g, "").length > 0
-                        muted: drums.silent(index)
-                        loaded: drums.inst[index] ? drums.inst[index].loaded : true
-                        hits: drums.hits[index] || ""
-                        onMenuRequested: instMenu.openFor(index)
+                // Place a dragged tab would go to (−1: none dragged).
+                property int dropAt: -1
+                readonly property real slot: (width + tabRow.spacing) / 8
+                function target(from, offset) {
+                    return Math.max(0, Math.min(7, Math.round(from + offset / slot)))
+                }
+                RowLayout {
+                    id: tabRow
+                    anchors.fill: parent
+                    spacing: 3
+                    Repeater {
+                        model: 8
+                        DrumInstTab {
+                            id: instTab
+                            required property int index
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            inst: drums.order[index]
+                            name: drums.instName(inst)
+                            fullName: drums.fullNames[inst]
+                            tint: drums.instColor(inst)
+                            selected: drums.sel === inst
+                            used: ((drums.st.rows || [])[inst] || ".").replace(/\./g, "").length > 0
+                            muted: drums.silent(inst)
+                            loaded: drums.loaded(inst)
+                            label: drums.label(inst)
+                            hits: drums.hits[inst] || ""
+                            onMenuRequested: instMenu.openFor(inst)
+                            onDragMoved: tabs.dropAt = tabs.target(index, dragOffset)
+                            onDragDropped: {
+                                var to = tabs.target(index, dragOffset)
+                                tabs.dropAt = -1
+                                if (to !== index)
+                                    AppController.drumMoveTrack(index, to)
+                            }
+                            onDraggingChanged: if (!dragging) tabs.dropAt = -1
+                        }
                     }
+                }
+                // Where the dragged track lands.
+                Rectangle {
+                    visible: tabs.dropAt >= 0
+                    x: tabs.dropAt * tabs.slot - 1
+                    width: tabs.slot - tabRow.spacing + 2
+                    height: parent.height
+                    radius: 3
+                    color: "transparent"
+                    border.color: Theme.sync
+                    border.width: 2
                 }
             }
             Repeater {
@@ -364,7 +436,7 @@ Rectangle {
                 RowLayout {
                     id: seqRow
                     required property int index
-                    readonly property int instIndex: drums.four ? drums.pageStart + index : drums.sel
+                    readonly property int instIndex: drums.four ? drums.order[drums.pageStart + index] : drums.sel
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     spacing: 6
@@ -716,7 +788,7 @@ Rectangle {
         }
         StyledMenuItem {
             caption: true
-            text: drums.fullNames[instMenu.instIndex] + " · " + (drums.st.kit || "")
+            text: drums.fullNames[instMenu.instIndex] + " · " + (drums.label(instMenu.instIndex) || drums.st.kit || "")
         }
         StyledMenuItem {
             iconName: "play"
@@ -726,10 +798,7 @@ Rectangle {
         StyledMenuItem {
             iconName: "import"
             text: "Load a sound…"
-            onTriggered: {
-                sampleDialog.instIndex = instMenu.instIndex
-                sampleDialog.open()
-            }
+            onTriggered: drums.loadSounds(instMenu.instIndex)
         }
         StyledMenuItem {
             iconName: "music"
@@ -741,6 +810,19 @@ Rectangle {
             enabled: !drums.st.factory && !!drums.inst[instMenu.instIndex] && drums.inst[instMenu.instIndex].loaded
             text: "Remove the sound"
             onTriggered: AppController.drumClearSample(instMenu.instIndex)
+        }
+        StyledMenuSeparator {}
+        StyledMenuItem {
+            iconName: "chevron-left"
+            enabled: drums.order.indexOf(instMenu.instIndex) > 0
+            text: "Move left"
+            onTriggered: drums.moveTrack(instMenu.instIndex, -1)
+        }
+        StyledMenuItem {
+            iconName: "chevron-right"
+            enabled: drums.order.indexOf(instMenu.instIndex) < 7
+            text: "Move right"
+            onTriggered: drums.moveTrack(instMenu.instIndex, 1)
         }
         StyledMenuSeparator {}
         StyledMenuItem {
@@ -764,25 +846,48 @@ Rectangle {
         id: kitMenu
         StyledMenuItem {
             caption: true
-            text: "Kit: " + (drums.st.kit || "") + (drums.st.factory ? " (factory)" : "")
+            text: "Rack: " + (drums.st.kit || "") + (drums.st.factory ? " (factory)" : "")
         }
         StyledMenuItem {
-            iconName: "plus"
-            text: "New kit from this one…"
-            onTriggered: newKit.open()
+            iconName: "drums"
+            text: "Sounds…"
+            onTriggered: rackPopup.open()
+        }
+        StyledMenuItem {
+            iconName: "import"
+            text: "Load sounds…"
+            onTriggered: drums.loadSounds(-1)
         }
         StyledMenuItem {
             iconName: "import"
             text: "Load a sound into " + drums.instName(drums.sel) + "…"
-            onTriggered: {
-                sampleDialog.instIndex = drums.sel
-                sampleDialog.open()
-            }
+            onTriggered: drums.loadSounds(drums.sel)
         }
         StyledMenuItem {
             iconName: "music"
             text: "Load the selected track into " + drums.instName(drums.sel)
             onTriggered: AppController.drumLoadSelected(drums.sel)
+        }
+        StyledMenuSeparator {}
+        StyledMenuItem {
+            iconName: "check"
+            text: drums.st.factory ? "Save rack…" : "Save rack"
+            onTriggered: drums.saveRack()
+        }
+        StyledMenuItem {
+            iconName: "plus"
+            text: "Save rack as…"
+            onTriggered: newKit.open()
+        }
+        StyledMenuItem {
+            iconName: "external"
+            text: "Export rack…"
+            onTriggered: exportDialog.open()
+        }
+        StyledMenuItem {
+            iconName: "import"
+            text: "Import rack…"
+            onTriggered: importDialog.open()
         }
         StyledMenuItem {
             iconName: "folder"
@@ -852,13 +957,15 @@ Rectangle {
         ColumnLayout {
             spacing: 8
             UiText {
-                text: "New kit from " + (drums.st.kit || "")
+                text: "Save rack as"
                 font.pixelSize: Theme.fontLarge
                 font.bold: true
             }
             UiText {
-                text: "Its sounds are copied to a folder of its own, where you can replace them."
+                Layout.preferredWidth: 320
+                text: "The sounds of " + (drums.st.kit || "") + ", the track order and each instrument's tune, decay and level go to a kit folder of its own."
                 color: Theme.textDim
+                wrapMode: Text.WordWrap
             }
             TextField {
                 id: kitName
@@ -881,7 +988,7 @@ Rectangle {
                     onClicked: newKit.close()
                 }
                 DjButton {
-                    text: "Create"
+                    text: "Save"
                     lit: true
                     litColor: Theme.sync
                     onClicked: newKit.create()
@@ -890,11 +997,149 @@ Rectangle {
         }
     }
 
+    // The rack: which sound each track plays, in the track order.
+    Popup {
+        id: rackPopup
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(470, Overlay.overlay ? Overlay.overlay.width - 32 : 470)
+        modal: true
+        padding: 14
+        background: Rectangle { color: Theme.panelRaised; border.color: Theme.border; radius: 8 }
+        ColumnLayout {
+            width: parent.width
+            spacing: 6
+            RowLayout {
+                Layout.fillWidth: true
+                UiText {
+                    Layout.fillWidth: true
+                    text: "Sounds · " + (drums.st.kit || "")
+                    font.pixelSize: Theme.fontLarge
+                    font.bold: true
+                    elide: Text.ElideRight
+                }
+                DjButton {
+                    flat: true
+                    icon: "x"
+                    implicitWidth: 26
+                    implicitHeight: 24
+                    onClicked: rackPopup.close()
+                }
+            }
+            UiText {
+                Layout.fillWidth: true
+                text: "Drop files on a track, or load several at once: kick.wav, snare.wav … go to their tracks, the others to the free tracks from the left."
+                color: Theme.textDim
+                wrapMode: Text.WordWrap
+            }
+            Repeater {
+                model: 8
+                Rectangle {
+                    id: rackRow
+                    required property int index
+                    readonly property int instIndex: drums.order[index]
+                    readonly property bool loaded: drums.loaded(instIndex)
+                    Layout.fillWidth: true
+                    implicitHeight: 30
+                    radius: 3
+                    color: rowDrop.containsDrag ? Theme.controlHover : Theme.control
+                    border.color: rowDrop.containsDrag ? Theme.sync : (drums.sel === instIndex ? drums.instColor(instIndex) : Theme.border)
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 4
+                        spacing: 6
+                        UiText {
+                            Layout.preferredWidth: 26
+                            text: drums.instName(rackRow.instIndex)
+                            color: drums.instColor(rackRow.instIndex)
+                            font.pixelSize: Theme.fontSmall
+                            font.bold: true
+                        }
+                        UiText {
+                            Layout.fillWidth: true
+                            text: rackRow.loaded ? (drums.label(rackRow.instIndex) || drums.fullNames[rackRow.instIndex]) : "No sound"
+                            color: rackRow.loaded ? Theme.text : Theme.textFaint
+                            elide: Text.ElideRight
+                        }
+                        DjButton {
+                            flat: true
+                            icon: "play"
+                            implicitWidth: 26
+                            implicitHeight: 22
+                            enabled: rackRow.loaded
+                            target: "drum.trigger." + (rackRow.instIndex + 1)
+                            tip: "Play"
+                        }
+                        DjButton {
+                            flat: true
+                            icon: "import"
+                            implicitWidth: 26
+                            implicitHeight: 22
+                            tip: "Load a sound into " + drums.fullNames[rackRow.instIndex]
+                            onClicked: drums.loadSounds(rackRow.instIndex)
+                        }
+                        DjButton {
+                            flat: true
+                            icon: "trash"
+                            implicitWidth: 26
+                            implicitHeight: 22
+                            enabled: !drums.st.factory && rackRow.loaded
+                            tip: "Remove the sound"
+                            onClicked: AppController.drumClearSample(rackRow.instIndex)
+                        }
+                    }
+                    DropArea {
+                        id: rowDrop
+                        anchors.fill: parent
+                        keys: ["application/x-rille-track", "application/x-rille-path", "text/uri-list"]
+                        onDropped: d => drums.dropSounds(rackRow.instIndex, d)
+                    }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 4
+                spacing: 4
+                DjButton {
+                    icon: "import"
+                    text: "Load sounds…"
+                    implicitHeight: 26
+                    onClicked: drums.loadSounds(-1)
+                }
+                Item { Layout.fillWidth: true }
+                DjButton {
+                    text: "Save rack"
+                    implicitHeight: 26
+                    tip: drums.st.factory ? "Factory kits stay as they are: saves it under a name of your own" : "Saves the track order and each instrument's tune, decay and level with " + (drums.st.kit || "")
+                    onClicked: drums.saveRack()
+                }
+                DjButton {
+                    text: "Export…"
+                    implicitHeight: 26
+                    tip: "Writes the rack (sounds as WAV and a kit.toml) into a new folder"
+                    onClicked: exportDialog.open()
+                }
+            }
+        }
+    }
+
     FileDialog {
         id: sampleDialog
+        // −1: the whole rack, each file to the track its name suggests.
         property int instIndex: 0
-        title: "Sound for " + (drums.fullNames[instIndex] || "")
+        title: instIndex < 0 ? "Sounds for the rack" : "Sound for " + (drums.fullNames[instIndex] || "") + " (several: this track and the ones after it)"
+        fileMode: FileDialog.OpenFiles
         nameFilters: ["Audio files (*.wav *.flac *.mp3 *.ogg *.aif *.aiff *.m4a)", "All files (*)"]
-        onAccepted: AppController.drumLoadUrl(instIndex, selectedFile)
+        onAccepted: AppController.drumLoadUrls(instIndex, Array.prototype.map.call(selectedFiles, u => u.toString()).join("\n"))
+    }
+    FolderDialog {
+        id: exportDialog
+        title: "Export the rack into"
+        onAccepted: AppController.exportDrumRack(selectedFolder)
+    }
+    FolderDialog {
+        id: importDialog
+        title: "Import a rack (a folder of sounds)"
+        onAccepted: AppController.importDrumRack(selectedFolder)
     }
 }

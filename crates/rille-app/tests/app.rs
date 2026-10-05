@@ -757,6 +757,36 @@ fn drum_machine_edits_kits_and_persistence() {
     app.drum_clear_sample(5);
     wait_for("sample removed", 5.0, || !app.snapshot().drums.inst[5].loaded);
 
+    // Several files at once go to the tracks their names suggest.
+    let kick = dir.path().join("Kick 04.wav");
+    let snare = dir.path().join("snare.wav");
+    for f in [&kick, &snare] {
+        std::fs::copy(&wav, f).unwrap();
+    }
+    app.drum_load_files(None, &[snare, kick]);
+    wait_for("named sounds", 5.0, || {
+        let l = app.drum_labels();
+        l[0].as_deref() == Some("Kick 04") && l[1].as_deref() == Some("snare")
+    });
+
+    // The track order, saved with the rack and its sounds.
+    app.drum_move_track(4, 0);
+    assert_eq!(app.drum_order(), [4, 0, 1, 2, 3, 5, 6, 7]);
+    drum(&app, Control::DrumInstTune(3), ControlValue::Absolute(0.75));
+    wait_for("tuned", 5.0, || app.snapshot().drums.inst[2].tune == 0.75);
+    app.save_drum_rack().unwrap();
+    assert!(app.save_drum_rack().is_ok());
+    app.drum_move_track(0, 7);
+    drum(&app, Control::DrumInstTune(3), ControlValue::Absolute(0.1));
+    app.select_drum_kit("909 Core");
+    wait_for("factory kit again", 5.0, || app.drum_kit_name() == "909 Core");
+    assert!(app.save_drum_rack().is_err(), "factory kits stay as they are");
+    assert_eq!(app.drum_order(), [0, 1, 2, 3, 5, 6, 7, 4], "a kit without a rack keeps the order");
+    app.select_drum_kit("My 808 Boom");
+    wait_for("the rack back", 5.0, || {
+        app.drum_order() == [4, 0, 1, 2, 3, 5, 6, 7] && app.snapshot().drums.inst[2].tune == 0.75
+    });
+
     // The panel's visibility from a controller.
     assert!(!app.settings().drums_visible);
     drum(&app, Control::DrumShow, ControlValue::Press(true));
@@ -771,6 +801,8 @@ fn drum_machine_edits_kits_and_persistence() {
         let d = app.snapshot().drums;
         d.current == 8 && d.patterns[8].is_on(1, 0) && d.inst[1].tune == 0.25 && d.inst[0].loaded && !d.inst[5].loaded
     });
+    assert_eq!(app.drum_order(), [4, 0, 1, 2, 3, 5, 6, 7]);
+    wait_for("sound names", 5.0, || app.drum_labels()[0].as_deref() == Some("Kick 04"));
     assert!(app.settings().drums_visible);
     app.shutdown();
 }

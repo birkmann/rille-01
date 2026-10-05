@@ -16,6 +16,12 @@ pub const CELLS: usize = INSTRUMENTS * STEPS;
 /// Short instrument names, also the keys of a kit file.
 pub const NAMES: [&str; INSTRUMENTS] = ["BD", "SD", "CH", "OH", "CP", "RS", "LT", "CY"];
 
+/// A track order: the instrument at each position, left to right (top to
+/// bottom in the sequencer).
+pub type Order = [u8; INSTRUMENTS];
+/// The order of a fresh machine: [`NAMES`] as they are.
+pub const DEFAULT_ORDER: Order = [0, 1, 2, 3, 4, 5, 6, 7];
+
 /// Instrument colours, indices into [`crate::remix::COLORS`].
 pub const INST_COLORS: [u8; INSTRUMENTS] = [3, 1, 8, 9, 13, 5, 11, 15];
 
@@ -163,6 +169,40 @@ impl Pattern {
     }
 }
 
+/// An order from instrument names (any case): unknown and repeated names
+/// are skipped, instruments not named follow in their usual order.
+pub fn order_from_names<S: AsRef<str>>(names: &[S]) -> Order {
+    let mut order = Vec::with_capacity(INSTRUMENTS);
+    for name in names {
+        if let Some(i) = NAMES.iter().position(|n| n.eq_ignore_ascii_case(name.as_ref().trim()))
+            && !order.contains(&(i as u8))
+        {
+            order.push(i as u8);
+        }
+    }
+    order.extend(DEFAULT_ORDER.iter().filter(|i| !order.contains(i)).collect::<Vec<_>>());
+    order.try_into().expect("every instrument once")
+}
+
+/// The instrument names of `order`, as a file stores them.
+pub fn order_names(order: &Order) -> Vec<String> {
+    order.iter().map(|&i| NAMES[usize::from(i).min(INSTRUMENTS - 1)].to_owned()).collect()
+}
+
+/// Moves the track at position `from` to position `to`, the tracks between
+/// shifting over.
+pub fn move_track(order: &mut Order, from: usize, to: usize) {
+    if from < INSTRUMENTS && to < INSTRUMENTS {
+        let inst = order[from];
+        if from < to {
+            order.copy_within(from + 1..=to, from);
+        } else {
+            order.copy_within(to..from, to + 1);
+        }
+        order[to] = inst;
+    }
+}
+
 /// When step `s` (an absolute sixteenth count from the bar origin) plays, in
 /// beats from the origin. Odd steps (the off-beat sixteenths) are delayed by
 /// the swing.
@@ -290,6 +330,23 @@ mod tests {
         assert_eq!(pattern_step(17, 16), 1);
         assert_eq!(pattern_step(-1, 16), 15);
         assert_eq!(pattern_step(7, 3), 1);
+    }
+
+    #[test]
+    fn track_order() {
+        assert_eq!(order_from_names::<&str>(&[]), DEFAULT_ORDER);
+        let o = order_from_names(&["cp", "BD", "nope", "bd", "OH"]);
+        assert_eq!(o, [4, 0, 3, 1, 2, 5, 6, 7]);
+        assert_eq!(order_names(&o)[..3], ["CP", "BD", "OH"]);
+        assert_eq!(order_from_names(&order_names(&o)), o);
+        let mut o = DEFAULT_ORDER;
+        move_track(&mut o, 4, 1);
+        assert_eq!(o, [0, 4, 1, 2, 3, 5, 6, 7]);
+        move_track(&mut o, 0, 7);
+        assert_eq!(o, [4, 1, 2, 3, 5, 6, 7, 0]);
+        move_track(&mut o, 3, 3);
+        move_track(&mut o, 9, 0);
+        assert_eq!(o, [4, 1, 2, 3, 5, 6, 7, 0]);
     }
 
     #[test]

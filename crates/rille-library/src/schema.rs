@@ -111,6 +111,34 @@ CREATE UNIQUE INDEX tracks_beatport ON tracks(beatport_id) WHERE beatport_id IS 
 -- Streamed tracks downloaded to keep offline: never removed to make room.
 ALTER TABLE tracks ADD COLUMN beatport_offline INTEGER NOT NULL DEFAULT 0;
 "#,
+    r#"
+-- Guest tracks: loaded from a folder (a USB stick) without being imported.
+-- They keep analysis, cues and waveform but are not in the collection.
+ALTER TABLE tracks ADD COLUMN guest INTEGER NOT NULL DEFAULT 0;
+
+-- Tags and covers of browsed files outside the collection, valid while the
+-- file's size and mtime match.
+CREATE TABLE file_meta (
+    path BLOB PRIMARY KEY,
+    file_size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    artist TEXT NOT NULL,
+    album TEXT NOT NULL,
+    remixer TEXT NOT NULL,
+    label TEXT NOT NULL,
+    genre TEXT NOT NULL,
+    comment TEXT NOT NULL,
+    year INTEGER,
+    duration REAL NOT NULL,
+    bitrate INTEGER,
+    sample_rate INTEGER,
+    bpm REAL,
+    musical_key INTEGER,
+    cover TEXT,
+    read_at INTEGER NOT NULL
+);
+"#,
 ];
 
 pub const VERSION: u32 = MIGRATIONS.len() as u32;

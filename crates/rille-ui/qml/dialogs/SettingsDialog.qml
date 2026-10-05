@@ -259,6 +259,16 @@ Popup {
                                 }
                             }
                             SettingRow {
+                                label: "Load buttons"
+                                hint: "The A B C D buttons on a hovered track in the browser, with 4 decks: in two rows placed like the decks on screen, or in one row."
+                                StyledCombo {
+                                    width: 180
+                                    model: ["Like the decks (AB / CD)", "One row (A B C D)"]
+                                    currentIndex: dialog.s.load_buttons_grid === false ? 1 : 0
+                                    onActivated: idx => dialog.set("load_buttons_grid", idx === 0)
+                                }
+                            }
+                            SettingRow {
                                 label: "Deck height"
                                 hint: "Height of all decks; the extra room goes to the waveforms and is taken from the browser. On small windows the decks grow only as far as the browser keeps some room."
                                 StyledCombo {

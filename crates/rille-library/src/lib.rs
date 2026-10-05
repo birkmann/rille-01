@@ -7,6 +7,7 @@
 //! Structured data (analysis, grids, cues) is stored as JSON next to plain
 //! columns that the library table sorts by.
 
+mod file_meta;
 mod library;
 mod meta;
 mod nml;
@@ -15,8 +16,9 @@ mod scan;
 mod schema;
 mod search;
 
+pub use file_meta::read_metas;
 pub use library::{CoverSize, Library, TrackRow, cover_thumb};
-pub use meta::{SUPPORTED_EXTENSIONS, Tags, is_supported, parse_key};
+pub use meta::{FileMeta, SUPPORTED_EXTENSIONS, Tags, is_supported, parse_key, read_meta};
 pub use nml::NmlReport;
 pub use playlists::{HistoryEntry, HistorySession, PlaylistNode};
 pub use scan::{ImportReport, ScanError, ScanProgress, ScanReport};

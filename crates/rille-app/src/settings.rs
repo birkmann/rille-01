@@ -203,6 +203,9 @@ pub struct Settings {
     /// Height of all decks, the extra room going to the waveforms: 0 normal,
     /// 1 tall, 2 taller.
     pub deck_height: u8,
+    /// The browser's hover load buttons with 4 decks: true in two rows
+    /// like the decks on screen (A B over C D), false in one row (A B C D).
+    pub load_buttons_grid: bool,
     /// Letters of the decks that are remix decks, e.g. "CD".
     pub remix_decks: String,
     /// The drum machine panel is shown.
@@ -298,6 +301,7 @@ impl Default for Settings {
             tempo_range: 0.08,
             deck_count: 2,
             deck_height: 0,
+            load_buttons_grid: true,
             remix_decks: String::new(),
             drums_visible: false,
             drums_position: 0,
@@ -323,7 +327,7 @@ impl Default for Settings {
             header_meter: false,
             show_mixer: true,
             mixer_key: false,
-            load_lock: false,
+            load_lock: true,
             load_lock_level: 0.5,
             load_lock_decks: "ABCD".into(),
             midi_mappings: BTreeMap::new(),

@@ -65,6 +65,9 @@ pub struct TrackRow {
     /// A streamed track downloaded to keep offline: its file is never
     /// removed to make room.
     pub beatport_offline: bool,
+    /// Loaded from a folder without being imported: it keeps its analysis
+    /// and cues but is not part of the collection.
+    pub guest: bool,
 }
 
 impl TrackRow {
@@ -94,7 +97,7 @@ impl CoverSize {
 const TRACK_SELECT: &str = "SELECT t.id, t.path, t.title, t.artist, t.album, t.remixer, t.label, t.genre, t.comment,
     t.year, t.duration, t.bpm, t.musical_key, t.rating, t.color, t.play_count, t.last_played, t.date_added,
     t.file_size, t.bitrate, t.sample_rate, t.cover, g.confidence, g.flags, g.locked,
-    a.analyzer_version, e.track_id IS NOT NULL, t.missing, t.beatport_id, t.beatport_offline
+    a.analyzer_version, e.track_id IS NOT NULL, t.missing, t.beatport_id, t.beatport_offline, t.guest
     FROM tracks t LEFT JOIN beatgrids g ON g.track_id = t.id LEFT JOIN analysis a ON a.track_id = t.id
     LEFT JOIN analysis_errors e ON e.track_id = t.id AND e.analyzer_version >= ?V";
 
@@ -142,6 +145,7 @@ fn track_row(r: &Row) -> rusqlite::Result<TrackRow> {
         missing: r.get(27)?,
         beatport_id: r.get(28)?,
         beatport_offline: r.get(29)?,
+        guest: r.get(30)?,
     })
 }
 
@@ -220,24 +224,47 @@ impl Library {
     /// its id. A file whose content matches a track whose file is gone is
     /// relinked to that track instead of being added twice.
     pub fn import_file(&mut self, path: &Path) -> Result<TrackId> {
+        self.import_one(path, false)
+    }
+
+    /// Like [`Self::import_file`], but a file not known yet becomes a guest
+    /// track: it gets a row (for analysis, cues and waveform) without
+    /// joining the collection. A known track keeps whether it is a guest.
+    pub fn import_file_guest(&mut self, path: &Path) -> Result<TrackId> {
+        self.import_one(path, true)
+    }
+
+    fn import_one(&mut self, path: &Path, guest: bool) -> Result<TrackId> {
         if !meta::is_supported(path) {
             return Err(Error::Unsupported(path.to_owned()));
         }
         let path = path.canonicalize().map_err(io_err(path))?;
         let known = self
             .conn
-            .query_row("SELECT id, file_size, mtime, missing FROM tracks WHERE path = ?1", [path_blob(&path)], |r| {
-                Ok((r.get::<_, TrackId>(0)?, r.get::<_, u64>(1)?, r.get::<_, i64>(2)?, r.get::<_, bool>(3)?))
-            })
+            .query_row(
+                "SELECT id, file_size, mtime, missing, guest FROM tracks WHERE path = ?1",
+                [path_blob(&path)],
+                |r| {
+                    Ok((
+                        r.get::<_, TrackId>(0)?,
+                        r.get::<_, u64>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, bool>(3)?,
+                        r.get::<_, bool>(4)?,
+                    ))
+                },
+            )
             .optional()?;
-        if let Some((id, size, mtime, false)) = known {
-            if meta::stat(&path).map_err(io_err(&path))? == (size, mtime) {
+        if let Some((id, size, mtime, false, was_guest)) = known {
+            if (guest || !was_guest) && meta::stat(&path).map_err(io_err(&path))? == (size, mtime) {
                 return Ok(id);
             }
         }
+        // A known track keeps its flag; importing a guest makes it a member.
+        let guest = guest && known.is_none_or(|k| k.4);
         let info = meta::read_file(&path, &self.cache_dir)?;
         let tx = self.conn.transaction()?;
-        let (id, _) = store_file(&tx, &info)?;
+        let (id, _) = store_file_as(&tx, &info, guest)?;
         tx.commit()?;
         Ok(id)
     }
@@ -372,12 +399,13 @@ impl Library {
     // -- Analysis and grids ------------------------------------------------
 
     /// Present tracks without an analysis from the current analyzer (and
-    /// that the current analyzer has not failed on).
+    /// that the current analyzer has not failed on). Guest tracks are
+    /// analyzed only when loaded.
     pub fn tracks_needing_analysis(&self) -> Result<Vec<TrackId>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.id FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id
              LEFT JOIN analysis_errors e ON e.track_id = t.id AND e.analyzer_version >= ?1
-             WHERE t.missing = 0 AND (a.analyzer_version IS NULL OR a.analyzer_version < ?1)
+             WHERE t.missing = 0 AND t.guest = 0 AND (a.analyzer_version IS NULL OR a.analyzer_version < ?1)
              AND e.track_id IS NULL ORDER BY t.id",
         )?;
         let ids = stmt.query_map([ANALYZER_VERSION], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -605,6 +633,12 @@ pub(crate) enum Stored {
 /// Inserts or refreshes a file's row. Tag-derived bpm/key only fill empty
 /// columns so analysis results win.
 pub(crate) fn store_file(conn: &Connection, info: &FileInfo) -> Result<(TrackId, Stored)> {
+    store_file_as(conn, info, false)
+}
+
+/// [`store_file`], with `guest` deciding whether the track stays out of the
+/// collection.
+fn store_file_as(conn: &Connection, info: &FileInfo, guest: bool) -> Result<(TrackId, Stored)> {
     let blob = path_blob(&info.path);
     let existing = conn.query_row("SELECT id FROM tracks WHERE path = ?1", [blob], |r| r.get(0)).optional()?;
     let (id, how) = match existing {
@@ -612,10 +646,11 @@ pub(crate) fn store_file(conn: &Connection, info: &FileInfo) -> Result<(TrackId,
         None => {
             // A track with the same content whose file is gone was moved here.
             let mut stmt = conn.prepare_cached(
-                "SELECT id, path FROM tracks WHERE content_hash = ?1 AND file_size = ?2 AND beatport_id IS NULL",
+                "SELECT id, path FROM tracks WHERE content_hash = ?1 AND file_size = ?2 AND beatport_id IS NULL
+                 AND guest = ?3",
             )?;
             let candidates: Vec<(TrackId, Vec<u8>)> = stmt
-                .query_map(params![info.hash as i64, info.size], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .query_map(params![info.hash as i64, info.size, guest], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<rusqlite::Result<_>>()?;
             match candidates.into_iter().find(|(_, p)| !blob_path(p.clone()).exists()) {
                 Some((id, _)) => (id, Stored::Relinked),
@@ -634,7 +669,7 @@ pub(crate) fn store_file(conn: &Connection, info: &FileInfo) -> Result<(TrackId,
         "UPDATE tracks SET path = ?2, file_size = ?3, mtime = ?4, content_hash = ?5, title = ?6, artist = ?7,
          album = ?8, remixer = ?9, label = ?10, genre = ?11, comment = ?12, year = ?13, duration = ?14,
          bitrate = ?15, sample_rate = ?16, bpm = COALESCE(bpm, ?17), musical_key = COALESCE(musical_key, ?18),
-         cover = ?19, missing = 0 WHERE id = ?1",
+         cover = ?19, missing = 0, guest = ?20 WHERE id = ?1",
         params![
             id,
             blob,
@@ -655,6 +690,7 @@ pub(crate) fn store_file(conn: &Connection, info: &FileInfo) -> Result<(TrackId,
             t.bpm,
             t.key.map(u8::from),
             info.cover,
+            guest,
         ],
     )?;
     Ok((id, how))

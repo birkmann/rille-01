@@ -357,6 +357,9 @@ Item {
         function onTracksRevisionChanged() {
             tracks.updateChanged()
         }
+        function onFolderRevisionChanged() {
+            tracks.updateFolder()
+        }
         function onBeatportRevisionChanged() {
             if (browser.beatportMode)
                 browser.refreshInPlace()

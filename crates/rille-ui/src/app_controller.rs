@@ -41,6 +41,9 @@ pub mod qobject {
         #[qproperty(i32, browser_action_seq, cxx_name = "browserActionSeq")]
         /// Bumped when single tracks changed (see `TrackListModel::updateChanged`).
         #[qproperty(i32, tracks_revision, cxx_name = "tracksRevision")]
+        /// Bumped when tags of an explorer folder's files were read (see
+        /// `TrackListModel::updateFolder`).
+        #[qproperty(i32, folder_revision, cxx_name = "folderRevision")]
         #[qproperty(i32, analysis_done, cxx_name = "analysisDone")]
         #[qproperty(i32, analysis_total, cxx_name = "analysisTotal")]
         #[qproperty(i32, analysis_failed, cxx_name = "analysisFailed")]
@@ -56,6 +59,9 @@ pub mod qobject {
         #[qproperty(i32, deck_count, cxx_name = "deckCount")]
         /// Settings → Decks: deck height, 0 normal, 1 tall, 2 taller.
         #[qproperty(i32, deck_height, cxx_name = "deckHeight")]
+        /// Settings → Decks: the browser's load buttons in two rows like
+        /// the decks (A B over C D) instead of one row.
+        #[qproperty(bool, load_buttons_grid, cxx_name = "loadButtonsGrid")]
         /// Main output meter in the title bar.
         #[qproperty(bool, header_meter, cxx_name = "headerMeter")]
         /// Settings → Audio: the on-screen mixer and crossfader are hidden.
@@ -478,6 +484,7 @@ pub struct AppControllerRust {
     browser_action: QString,
     browser_action_seq: i32,
     tracks_revision: i32,
+    folder_revision: i32,
     analysis_done: i32,
     analysis_total: i32,
     analysis_failed: i32,
@@ -491,6 +498,7 @@ pub struct AppControllerRust {
     tempo_range: f64,
     deck_count: i32,
     deck_height: i32,
+    load_buttons_grid: bool,
     header_meter: bool,
     mixer_hidden: bool,
     mixer_key: bool,
@@ -732,6 +740,7 @@ impl qobject::AppController {
         self.as_mut().set_tempo_range(settings.tempo_range);
         self.as_mut().set_deck_count(i32::from(settings.deck_count));
         self.as_mut().set_deck_height(i32::from(settings.deck_height));
+        self.as_mut().set_load_buttons_grid(settings.load_buttons_grid);
         self.as_mut().set_header_meter(settings.header_meter);
         self.as_mut().set_mixer_hidden(!settings.show_mixer);
         self.as_mut().set_mixer_key(settings.mixer_key);
@@ -815,6 +824,11 @@ impl qobject::AppController {
                     crate::global::push_changed(&ids);
                     let r = *self.tracks_revision() + 1;
                     self.as_mut().set_tracks_revision(r);
+                }
+                UiEvent::FolderMetaChanged(dir) => {
+                    crate::global::push_folder_changed(dir);
+                    let r = *self.folder_revision() + 1;
+                    self.as_mut().set_folder_revision(r);
                 }
                 UiEvent::ImportProgress { done, total, timing } => {
                     self.as_mut().rust_mut().import =
@@ -1154,12 +1168,13 @@ impl qobject::AppController {
         let s = app.settings();
         let roots: Vec<String> = s.library_roots.iter().map(|r| json_str(&r.display().to_string())).collect();
         QString::from(format!(
-            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"deck_height":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"mixer_key":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{},"beatport_quality":{},"beatport_cache_mb":{},"stems_cache_mb":{},"load_lock":{},"load_lock_level":{},"load_lock_decks":{},"drums_visible":{},"drums_position":{},"drums_rows":{}}}"#,
+            r#"{{"audio_device":{},"buffer_frames":{},"tempo_range":{},"deck_count":{},"deck_height":{},"load_buttons_grid":{},"split_cue":{},"bpm_min":{},"bpm_max":{},"key_notation":"{}","auto_gain":{},"target_lufs":{},"library_roots":[{}],"midi":{},"waveform_seconds":{},"waveform_style":"{}","waveform_bottom":{},"waveform_height":{},"waveform_mixer":{},"waveform_fader_dim":{},"background_analysis":{},"header_meter":{},"show_mixer":{},"mixer_key":{},"browser_columns":{},"remix_decks":{},"mixing":"{}","mixer_channels":{},"suggestions":{},"browser_row_size":{},"browser_sidebar_width":{},"beatport_quality":{},"beatport_cache_mb":{},"stems_cache_mb":{},"load_lock":{},"load_lock_level":{},"load_lock_decks":{},"drums_visible":{},"drums_position":{},"drums_rows":{}}}"#,
             s.audio_device.as_deref().map_or("null".into(), json_str),
             s.buffer_frames.map_or("null".into(), |b| b.to_string()),
             s.tempo_range,
             s.deck_count,
             s.deck_height,
+            s.load_buttons_grid,
             s.split_cue,
             s.bpm_min,
             s.bpm_max,
@@ -1213,6 +1228,7 @@ impl qobject::AppController {
             "tempo_range" => s.tempo_range = f.unwrap_or(s.tempo_range).clamp(0.02, 1.0),
             "deck_count" => s.deck_count = if v == "4" { 4 } else { 2 },
             "deck_height" => s.deck_height = v.parse::<u8>().unwrap_or(0).min(2),
+            "load_buttons_grid" => s.load_buttons_grid = b,
             "split_cue" => s.split_cue = b,
             "mixing" => s.mixing = MixingMode::from_name(&v),
             "mixer_channels" => {

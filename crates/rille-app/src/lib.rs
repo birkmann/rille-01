@@ -8,6 +8,7 @@ pub mod beatport;
 pub mod drums;
 mod engine_slot;
 pub mod explorer;
+mod folder_meta;
 pub mod record;
 pub mod remix;
 pub mod settings;
@@ -76,6 +77,8 @@ pub enum UiEvent {
     StemsChanged,
     /// The drum machine's kit or kit list changed.
     DrumsChanged,
+    /// Tags of more files in this explorer folder were read.
+    FolderMetaChanged(PathBuf),
 }
 
 /// The analysis queue's state for the status bar.
@@ -265,6 +268,11 @@ pub struct App {
     drums_visible: Arc<AtomicBool>,
     /// The drum kits and the one loaded (for controller pads and screens).
     drum_kit_list: Arc<RwLock<values::KitList>>,
+    /// The mounted drives last seen and when, to notice a USB stick
+    /// plugged in or pulled out.
+    drives: Mutex<(Instant, Vec<PathBuf>)>,
+    /// Reads tags of explorer folders in the background.
+    folder_meta: folder_meta::FolderMetaState,
     /// This app, for work that must outlive a `&self` call.
     me: Weak<App>,
 }
@@ -325,6 +333,8 @@ impl App {
             recording: Mutex::new(None),
             recording_on: Arc::new(AtomicBool::new(false)),
             stems: stems::StemsState::default(),
+            folder_meta: folder_meta::FolderMetaState::default(),
+            drives: Mutex::new((Instant::now(), explorer::drives())),
             paths,
         });
         app.restart_audio(opts.audio);
@@ -343,12 +353,33 @@ impl App {
     /// Stops background work and audio.
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
+        self.stop_folder_meta();
         let _ = self.analysis_kick.send(());
         self.queue.shutdown();
         *self.midi.lock().expect("midi lock") = None;
         self.stop_recording();
         self.capture_drums();
         *self.audio_runner.lock().expect("audio lock") = None;
+    }
+
+    /// Every two seconds: a drive plugged in or pulled out refreshes the
+    /// explorer.
+    fn watch_drives(&self, now: Instant) {
+        let mut drives = self.drives.lock().expect("drives lock");
+        if now.duration_since(drives.0) < Duration::from_secs(2) {
+            return;
+        }
+        drives.0 = now;
+        let current = explorer::drives();
+        if current != drives.1 {
+            drives.1 = current;
+            drop(drives);
+            self.notify(UiEvent::LibraryChanged);
+        }
+    }
+
+    fn is_shut_down(&self) -> bool {
+        self.shutdown.load(Ordering::Relaxed)
     }
 
     // ---------------------------------------------------------------- state
@@ -593,6 +624,7 @@ impl App {
             *last = now;
             dt
         };
+        self.watch_drives(now);
         if let Some(engine) = self.engine.get() {
             engine.poll(|e| self.on_engine_event(e));
             // Dropouts, at most one line a second.
@@ -877,7 +909,10 @@ impl App {
         true
     }
 
-    /// Imports a file (drag and drop, file browser) and loads it.
+    /// Loads a file (drag and drop, file browser). A file outside the
+    /// collection becomes a guest track: it keeps its analysis and cues but
+    /// stays out of the collection until imported. Tags are read in the
+    /// background, so a slow USB stick does not hold up the UI.
     pub fn load_file(self: &Arc<Self>, deck: u8, path: &Path) {
         if self.is_remix_deck(deck) {
             self.load_remix_file(deck, None, path);
@@ -886,14 +921,21 @@ impl App {
         if self.refuse_load(deck) {
             return;
         }
-        let id = self.library.lock().expect("library lock").import_file(path);
-        match id {
-            Ok(id) => {
-                self.refresh_tracks();
-                self.load_track(deck, id);
-            }
-            Err(e) => self.notify(UiEvent::Status(format!("Cannot load {}: {e}", path.display()))),
-        }
+        let app = self.clone();
+        let path = path.to_owned();
+        std::thread::Builder::new()
+            .name(format!("open-deck-{deck}"))
+            .spawn(move || {
+                let id = app.library.lock().expect("library lock").import_file_guest(&path);
+                match id {
+                    Ok(id) => {
+                        app.refresh_track(id);
+                        app.load_track(deck, id);
+                    }
+                    Err(e) => app.notify(UiEvent::Status(format!("Cannot load {}: {e}", path.display()))),
+                }
+            })
+            .expect("spawn file loader");
     }
 
     pub fn eject(&self, deck: u8) {
@@ -1260,12 +1302,13 @@ impl App {
                 .filter(|i| matching.as_ref().is_none_or(|m| m.contains(i)))
                 .map(|i| t.rows[i].clone())
                 .collect(),
-            // The collection is the local files; streamed tracks have their own list.
+            // The collection is the local files; streamed tracks have their own
+            // list, guest tracks show only in their folder.
             None => t
                 .rows
                 .iter()
                 .enumerate()
-                .filter(|(i, r)| r.beatport_id.is_none() && matching.as_ref().is_none_or(|m| m.contains(i)))
+                .filter(|(i, r)| r.beatport_id.is_none() && !r.guest && matching.as_ref().is_none_or(|m| m.contains(i)))
                 .map(|(_, r)| r.clone())
                 .collect(),
         };
@@ -1592,9 +1635,10 @@ impl App {
         }
     }
 
-    /// Number of tracks in the collection (local files, not streamed ones).
+    /// Number of tracks in the collection (local files, not streamed or
+    /// guest ones).
     pub fn track_count(&self) -> usize {
-        self.tracks.read().expect("tracks lock").rows.iter().filter(|r| r.beatport_id.is_none()).count()
+        self.tracks.read().expect("tracks lock").rows.iter().filter(|r| r.beatport_id.is_none() && !r.guest).count()
     }
 
     /// Number of tracks streamed from Beatport.
@@ -1638,22 +1682,47 @@ impl App {
     }
 
     /// The explorer's view of a folder: its audio files, with collection
-    /// data where the file is in the collection (others have id −1 and a
-    /// title from the file name).
-    pub fn folder_rows(&self, dir: &Path) -> Vec<TrackRow> {
+    /// (or guest) data where the file has a track, else the tags read
+    /// while browsing. Files whose tags are not read yet get a title from
+    /// the file name (id −1) and are read in the background; a
+    /// [`UiEvent::FolderMetaChanged`] follows.
+    pub fn folder_rows(self: &Arc<Self>, dir: &Path) -> Vec<TrackRow> {
         let files = explorer::audio_files(dir, false);
-        let known: HashMap<PathBuf, TrackRow> = {
+        let canon_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_owned());
+        let canon: Vec<PathBuf> = files.iter().map(|p| p.canonicalize().unwrap_or_else(|_| p.clone())).collect();
+        let (known, cached) = {
             let lib = self.library.lock().expect("library lock");
-            let canon = dir.canonicalize().unwrap_or_else(|_| dir.to_owned());
-            lib.tracks_under(&canon, false).unwrap_or_default().into_iter().map(|r| (r.path.clone(), r)).collect()
+            let known: HashMap<PathBuf, TrackRow> = lib
+                .tracks_under(&canon_dir, false)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| (r.path.clone(), r))
+                .collect();
+            let unknown: Vec<PathBuf> = canon.iter().filter(|p| !known.contains_key(*p)).cloned().collect();
+            let cached = lib.file_meta(&unknown).unwrap_or_default();
+            (known, cached)
         };
-        files
-            .into_iter()
-            .map(|p| {
-                let canon = p.canonicalize().unwrap_or_else(|_| p.clone());
-                known.get(&canon).cloned().unwrap_or_else(|| explorer::file_row(&p))
+        let mut unread = Vec::new();
+        let rows = files
+            .iter()
+            .zip(&canon)
+            .map(|(p, c)| {
+                if let Some(r) = known.get(c) {
+                    return r.clone();
+                }
+                if let Some(m) = cached.get(c) {
+                    let mut row = m.to_row();
+                    row.path.clone_from(p);
+                    return row;
+                }
+                unread.push(c.clone());
+                explorer::file_row(p)
             })
-            .collect()
+            .collect();
+        if !unread.is_empty() {
+            self.request_folder_meta(canon_dir, unread);
+        }
+        rows
     }
 
     /// Cover thumbnail for a row's cover key, without touching the database.

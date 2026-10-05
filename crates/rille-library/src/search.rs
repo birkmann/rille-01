@@ -92,6 +92,7 @@ mod tests {
             missing: false,
             beatport_id: None,
             beatport_offline: false,
+            guest: false,
         }
     }
 

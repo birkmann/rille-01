@@ -122,20 +122,27 @@ Rectangle {
                 color: row.model.missing ? Theme.danger : (row.model.inCollection || row.model.streamed ? Theme.text : Theme.textDim)
                 font.bold: row.model.selected
             }
-            Row {
+            // Like the decks on screen (A B on top, C D below) or in one row
+            // (Settings → Decks → Load buttons).
+            Grid {
                 id: hoverLoad
                 anchors.right: parent.right
                 anchors.rightMargin: 4
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 2
+                columns: hoverLoad.twoRows ? 2 : 4
+                rowSpacing: 2
+                columnSpacing: 2
                 // Touch: on the selected row.
                 visible: rowHover.hovered || (Theme.mobile && row.model.selected)
+                readonly property bool fourDecks: AppController.deckCount === 4
+                readonly property bool twoRows: fourDecks && AppController.loadButtonsGrid
                 readonly property int buttonWidth: Theme.mobile ? 32 : 24
-                readonly property int buttonHeight: Theme.mobile ? 28 : 20
-                DjButton { text: "A"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 0) }
-                DjButton { text: "B"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 1) }
-                DjButton { visible: AppController.deckCount === 4; text: "C"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 2) }
-                DjButton { visible: AppController.deckCount === 4; text: "D"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 3) }
+                readonly property int buttonHeight: Math.min(Theme.mobile ? 28 : 20,
+                    twoRows ? Math.floor((row.rowHeight - 4 - rowSpacing) / 2) : row.rowHeight)
+                DjButton { text: "A"; tip: "Load to deck A"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 0) }
+                DjButton { text: "B"; tip: "Load to deck B"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 1) }
+                DjButton { visible: hoverLoad.fourDecks; text: "C"; tip: "Load to deck C"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 2) }
+                DjButton { visible: hoverLoad.fourDecks; text: "D"; tip: "Load to deck D"; implicitWidth: hoverLoad.buttonWidth; implicitHeight: hoverLoad.buttonHeight; onClicked: row.loadRow(row.index, 3) }
             }
         }
     }

@@ -370,6 +370,7 @@ impl App {
             missing: false,
             beatport_id: Some(t.id),
             beatport_offline: false,
+            guest: false,
         }
     }
 

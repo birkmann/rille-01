@@ -627,7 +627,11 @@ fn load_lock_keeps_tracks_off_decks_on_air() {
         app.control(ControlEvent { target, value: ControlValue::Absolute(v) });
     };
 
-    // Off by default: a playing deck with its fader up still loads.
+    // On by default; switched off, a playing deck with its fader up still loads.
+    assert!(app.settings().load_lock);
+    let mut s = app.settings();
+    s.load_lock = false;
+    app.set_settings(s);
     assert!(!app.load_locked(0));
     let mut s = app.settings();
     s.load_lock = true;
@@ -804,5 +808,44 @@ fn drum_machine_edits_kits_and_persistence() {
     assert_eq!(app.drum_order(), [4, 0, 1, 2, 3, 5, 6, 7]);
     wait_for("sound names", 5.0, || app.drum_labels()[0].as_deref() == Some("Kick 04"));
     assert!(app.settings().drums_visible);
+    app.shutdown();
+}
+
+#[test]
+fn stick_folders_browse_and_load_without_importing() {
+    let dir = tempfile::tempdir().unwrap();
+    let stick = dir.path().join("stick");
+    std::fs::create_dir_all(&stick).unwrap();
+    let r = synth::render(&Spec { sections: vec![(32, 126.0)], seed: 3, ..Spec::default() });
+    let track = stick.join("Some Artist - Some Title.wav");
+    write_wav(&track, &r.audio);
+    let app = start(dir.path());
+    let mut s = app.settings();
+    s.background_analysis = false;
+    app.set_settings(s);
+
+    // Tags are read in the background; the folder is not imported.
+    let rows = app.folder_rows(&stick);
+    assert_eq!((rows.len(), rows[0].id), (1, -1));
+    wait_for("folder tags", 20.0, || app.poll_ui_events().iter().any(|e| matches!(e, UiEvent::FolderMetaChanged(_))));
+    let rows = app.folder_rows(&stick);
+    assert_eq!((rows[0].id, rows[0].artist.as_str(), rows[0].title.as_str()), (-1, "Some Artist", "Some Title"));
+    assert!(rows[0].duration_secs > 10.0, "read from the file: {}", rows[0].duration_secs);
+    assert_eq!(rows[0].path, track);
+    assert_eq!(app.track_count(), 0);
+
+    // Loaded: analyzed as a guest track, still not in the collection.
+    app.load_file(0, &track);
+    wait_for("analysis", 60.0, || app.deck(0).grid.is_some());
+    assert_eq!(app.track_count(), 0);
+    assert!(app.tracks(Source::Collection, "", SortKey::Title, false).is_empty());
+    let rows = app.folder_rows(&stick);
+    assert!(rows[0].id >= 0 && rows[0].guest && rows[0].analyzed);
+
+    // Imported: joins the collection with its analysis.
+    app.import_paths(vec![track.clone()], false);
+    wait_for("import", 20.0, || app.track_count() == 1);
+    let rows = app.tracks(Source::Collection, "", SortKey::Title, false);
+    assert!(!rows[0].guest && rows[0].analyzed);
     app.shutdown();
 }

@@ -44,10 +44,49 @@ one by hand, put samples named after the instruments in a folder there
 AIFF), or name the files in a `kit.toml` (`[samples]` with
 `BD = "my kick.wav"`).
 
+## Effects
+
+Each instrument has its own effects, and the drums share send and master
+effects, in this order:
+
+1. **Inserts** on each instrument: bit reduction, sample-rate reduction,
+   overdrive, then a resonant low-, band- or high-pass filter. Then the
+   instrument's level.
+2. **Sends**: each instrument sends to the drums' delay (in time with the
+   master clock) and reverb. Their output joins the mix.
+3. **Master**: a compressor on all the drums, then an overdrive. The
+   compressor listens to all the drums or to one instrument. With BD as the
+   sidechain source, the other instruments duck under the kick.
+4. The drum channel: OUTPUT filter, FX1/FX2, headphones, volume fader.
+
+The tabs above the selected instrument's knobs switch between:
+
+| Tab | Knobs |
+|---|---|
+| SRC | Tune, decay, level |
+| FX | Bit reduction, sample-rate reduction, overdrive |
+| FILT | Cutoff, resonance, filter type |
+| SEND | Delay send, reverb send |
+
+The DRUM FX tabs switch between:
+
+| Tab | Knobs |
+|---|---|
+| DLY | Delay time, feedback, filter |
+| REV | Reverb size, damping, pre-delay |
+| COMP | Compressor threshold, ratio, release |
+| MST | Compressor sidechain source and mix, master overdrive |
+
+- Every effect is off when its knob is at its default: inserts and sends at
+  zero, the filter open, the compressor threshold fully right.
+- A dot on a tab shows that something on that page is away from its default.
+- Double-click a knob to reset it.
+
 ## Racks
 
 A rack is a kit together with the track order and each instrument's tune,
-decay and level.
+decay, level, inserts and send levels. The send and master effects are not
+part of a rack: they stay as they are when you switch kits.
 
 - **Save rack** keeps them in the kit's `kit.toml` (`order`, `[names]`,
   `[sounds.BD]` …); switching to the kit brings them back.
@@ -110,6 +149,15 @@ For mapping files and MIDI learn (see [Controllers](controllers.md)).
 | `drum.inst_mute.1`-`8`, `drum.inst_solo.1`-`8`, `drum.inst_clear.1`-`8` | Mute, solo, clear the instrument's steps |
 | `drum.inst_level.1`-`8`, `drum.inst_tune.1`-`8`, `drum.inst_decay.1`-`8` | Level, tune, decay of the instrument |
 | `drum.sel_level`, `drum.sel_tune`, `drum.sel_decay` | Level, tune, decay of the selected instrument |
+| `drum.inst_bits.1`-`8`, `drum.inst_srr.1`-`8`, `drum.inst_drive.1`-`8` | Bit reduction, sample-rate reduction, overdrive of the instrument |
+| `drum.inst_cutoff.1`-`8`, `drum.inst_res.1`-`8`, `drum.inst_ftype.1`-`8` | Filter cutoff, resonance, type (low-, band-, high-pass) of the instrument |
+| `drum.inst_delay.1`-`8`, `drum.inst_reverb.1`-`8` | Delay and reverb send of the instrument |
+| `drum.sel_bits`, `drum.sel_srr`, `drum.sel_drive`, `drum.sel_cutoff`, `drum.sel_res`, `drum.sel_ftype`, `drum.sel_delay`, `drum.sel_reverb` | The same for the selected instrument |
+| `drum.delay_time`, `drum.delay_feedback`, `drum.delay_filter` | The drums' delay |
+| `drum.reverb_size`, `drum.reverb_damp`, `drum.reverb_predelay` | The drums' reverb |
+| `drum.comp_threshold`, `drum.comp_ratio`, `drum.comp_release`, `drum.comp_mix` | The drums' compressor |
+| `drum.comp_sidechain` | What the compressor listens to: all the drums (left), then BD … CY |
+| `drum.drive` | Overdrive on all the drums |
 | `drum.repeat.1`-`8`, `drum.repeat_rate` | Note repeat (held: rolls), its rate |
 | `drum.pattern.1`-`16`, `drum.pattern_select` | Choose a pattern; previous/next pattern |
 | `drum.pattern_copy.1`-`16` | Copy the pattern there |

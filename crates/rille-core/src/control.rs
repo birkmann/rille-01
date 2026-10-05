@@ -276,6 +276,41 @@ pub enum Control {
     DrumReplace,
     /// Load the track selected in the library as instrument 1..=8's sound.
     DrumLoadSelected(u8),
+    // Drum effects (see `rille_core::drums::SoundFx` and `DrumFx`), `0..=1`.
+    /// Inserts and send levels of instrument 1..=8: bit reduction, sample-rate
+    /// reduction, overdrive, filter cutoff, resonance and type (low-, band-,
+    /// high-pass), delay send, reverb send.
+    DrumInstBits(u8),
+    DrumInstSrr(u8),
+    DrumInstDrive(u8),
+    DrumInstCutoff(u8),
+    DrumInstRes(u8),
+    DrumInstFilterType(u8),
+    DrumInstDelay(u8),
+    DrumInstReverb(u8),
+    /// The same for the selected instrument.
+    DrumSelBits,
+    DrumSelSrr,
+    DrumSelDrive,
+    DrumSelCutoff,
+    DrumSelRes,
+    DrumSelFilterType,
+    DrumSelDelay,
+    DrumSelReverb,
+    /// The drums' send effects (delay, reverb) and master effects (compressor
+    /// with sidechain source, overdrive).
+    DrumDelayTime,
+    DrumDelayFeedback,
+    DrumDelayFilter,
+    DrumReverbSize,
+    DrumReverbDamp,
+    DrumReverbPredelay,
+    DrumCompThreshold,
+    DrumCompRatio,
+    DrumCompRelease,
+    DrumCompSidechain,
+    DrumCompMix,
+    DrumDrive,
 }
 
 impl Control {
@@ -302,6 +337,7 @@ impl Control {
             Jog | FxSelect(_) | BrowserScroll | BrowserTreeScroll | RemixPage | RemixQuantizeSize
             | RemixCaptureSource | DrumInstSelect | DrumPatternSelect | DrumLength | DrumKitSelect | DrumRepeatRate
             | DrumNudge => ControlKind::Relative,
+            c if c.drum_sound_fx().is_some() || c.drum_fx().is_some() => ControlKind::Continuous,
             _ => ControlKind::Button,
         }
     }
@@ -387,7 +423,8 @@ impl Control {
                 | DrumCountIn
                 | DrumReplace
                 | DrumLoadSelected(_)
-        )
+        ) || self.drum_sound_fx().is_some()
+            || self.drum_fx().is_some()
     }
 
     /// Whether hardware or the UI can drive it; false for read-only state
@@ -419,7 +456,11 @@ impl Control {
             Volume | RemixVolume(_) | StemVolume(_) | DrumInstLevel(_) | DrumSelLevel | DrumInstDecay(_)
             | DrumSelDecay => 1.0,
             MainLevel | CueVolume | DrumLevel => 0.8,
-            _ => 0.0,
+            c => match (c.drum_sound_fx(), c.drum_fx()) {
+                (Some((p, _)), _) => crate::drums::SoundFx::default().get(p),
+                (_, Some(p)) => crate::drums::DrumFx::default().get(p),
+                _ => 0.0,
+            },
         }
     }
 
@@ -570,7 +611,103 @@ impl Control {
             v.extend((1..=crate::drums::KIT_PADS as u8).map(f));
         }
         v.extend((1..=2).map(DrumFxAssign));
+        for &p in crate::drums::SoundFxParam::ALL {
+            v.push(Control::drum_sound(p, None));
+            v.extend((1..=INSTRUMENTS as u8).map(|n| Control::drum_sound(p, Some(n))));
+        }
+        v.extend(crate::drums::DrumFxParam::ALL.iter().map(|&p| Control::from_drum_fx(p)));
         v
+    }
+
+    /// The instrument setting a drum effect control sets, and the
+    /// instrument (1..=8), `None` for the selected one.
+    pub fn drum_sound_fx(self) -> Option<(crate::drums::SoundFxParam, Option<u8>)> {
+        use crate::drums::SoundFxParam as P;
+        use Control::*;
+        Some(match self {
+            DrumInstBits(n) => (P::Bits, Some(n)),
+            DrumSelBits => (P::Bits, None),
+            DrumInstSrr(n) => (P::Srr, Some(n)),
+            DrumSelSrr => (P::Srr, None),
+            DrumInstDrive(n) => (P::Drive, Some(n)),
+            DrumSelDrive => (P::Drive, None),
+            DrumInstCutoff(n) => (P::Cutoff, Some(n)),
+            DrumSelCutoff => (P::Cutoff, None),
+            DrumInstRes(n) => (P::Res, Some(n)),
+            DrumSelRes => (P::Res, None),
+            DrumInstFilterType(n) => (P::FilterType, Some(n)),
+            DrumSelFilterType => (P::FilterType, None),
+            DrumInstDelay(n) => (P::Delay, Some(n)),
+            DrumSelDelay => (P::Delay, None),
+            DrumInstReverb(n) => (P::Reverb, Some(n)),
+            DrumSelReverb => (P::Reverb, None),
+            _ => return None,
+        })
+    }
+
+    /// The control for setting `p` of instrument `n` (1..=8), or of the
+    /// selected one.
+    pub fn drum_sound(p: crate::drums::SoundFxParam, n: Option<u8>) -> Control {
+        use crate::drums::SoundFxParam as P;
+        use Control::*;
+        match (p, n) {
+            (P::Bits, Some(n)) => DrumInstBits(n),
+            (P::Bits, None) => DrumSelBits,
+            (P::Srr, Some(n)) => DrumInstSrr(n),
+            (P::Srr, None) => DrumSelSrr,
+            (P::Drive, Some(n)) => DrumInstDrive(n),
+            (P::Drive, None) => DrumSelDrive,
+            (P::Cutoff, Some(n)) => DrumInstCutoff(n),
+            (P::Cutoff, None) => DrumSelCutoff,
+            (P::Res, Some(n)) => DrumInstRes(n),
+            (P::Res, None) => DrumSelRes,
+            (P::FilterType, Some(n)) => DrumInstFilterType(n),
+            (P::FilterType, None) => DrumSelFilterType,
+            (P::Delay, Some(n)) => DrumInstDelay(n),
+            (P::Delay, None) => DrumSelDelay,
+            (P::Reverb, Some(n)) => DrumInstReverb(n),
+            (P::Reverb, None) => DrumSelReverb,
+        }
+    }
+
+    /// The send or master effect setting a drum control sets.
+    pub fn drum_fx(self) -> Option<crate::drums::DrumFxParam> {
+        use crate::drums::DrumFxParam as P;
+        use Control::*;
+        Some(match self {
+            DrumDelayTime => P::DelayTime,
+            DrumDelayFeedback => P::DelayFeedback,
+            DrumDelayFilter => P::DelayFilter,
+            DrumReverbSize => P::ReverbSize,
+            DrumReverbDamp => P::ReverbDamp,
+            DrumReverbPredelay => P::ReverbPredelay,
+            DrumCompThreshold => P::CompThreshold,
+            DrumCompRatio => P::CompRatio,
+            DrumCompRelease => P::CompRelease,
+            DrumCompSidechain => P::CompSidechain,
+            DrumCompMix => P::CompMix,
+            DrumDrive => P::Drive,
+            _ => return None,
+        })
+    }
+
+    pub fn from_drum_fx(p: crate::drums::DrumFxParam) -> Control {
+        use crate::drums::DrumFxParam as P;
+        use Control::*;
+        match p {
+            P::DelayTime => DrumDelayTime,
+            P::DelayFeedback => DrumDelayFeedback,
+            P::DelayFilter => DrumDelayFilter,
+            P::ReverbSize => DrumReverbSize,
+            P::ReverbDamp => DrumReverbDamp,
+            P::ReverbPredelay => DrumReverbPredelay,
+            P::CompThreshold => DrumCompThreshold,
+            P::CompRatio => DrumCompRatio,
+            P::CompRelease => DrumCompRelease,
+            P::CompSidechain => DrumCompSidechain,
+            P::CompMix => DrumCompMix,
+            P::Drive => DrumDrive,
+        }
     }
 
     fn name(self) -> (&'static str, Option<u8>) {
@@ -711,6 +848,34 @@ impl Control {
             DrumCountIn => ("count_in", None),
             DrumReplace => ("replace", None),
             DrumLoadSelected(n) => ("load_selected", Some(n)),
+            DrumInstBits(n) => ("inst_bits", Some(n)),
+            DrumInstSrr(n) => ("inst_srr", Some(n)),
+            DrumInstDrive(n) => ("inst_drive", Some(n)),
+            DrumInstCutoff(n) => ("inst_cutoff", Some(n)),
+            DrumInstRes(n) => ("inst_res", Some(n)),
+            DrumInstFilterType(n) => ("inst_ftype", Some(n)),
+            DrumInstDelay(n) => ("inst_delay", Some(n)),
+            DrumInstReverb(n) => ("inst_reverb", Some(n)),
+            DrumSelBits => ("sel_bits", None),
+            DrumSelSrr => ("sel_srr", None),
+            DrumSelDrive => ("sel_drive", None),
+            DrumSelCutoff => ("sel_cutoff", None),
+            DrumSelRes => ("sel_res", None),
+            DrumSelFilterType => ("sel_ftype", None),
+            DrumSelDelay => ("sel_delay", None),
+            DrumSelReverb => ("sel_reverb", None),
+            DrumDelayTime => ("delay_time", None),
+            DrumDelayFeedback => ("delay_feedback", None),
+            DrumDelayFilter => ("delay_filter", None),
+            DrumReverbSize => ("reverb_size", None),
+            DrumReverbDamp => ("reverb_damp", None),
+            DrumReverbPredelay => ("reverb_predelay", None),
+            DrumCompThreshold => ("comp_threshold", None),
+            DrumCompRatio => ("comp_ratio", None),
+            DrumCompRelease => ("comp_release", None),
+            DrumCompSidechain => ("comp_sidechain", None),
+            DrumCompMix => ("comp_mix", None),
+            DrumDrive => ("drive", None),
         }
     }
 

@@ -35,6 +35,104 @@ Rectangle {
     readonly property int maxContentWidth: 1400
     readonly property var fullNames: ["Bass drum", "Snare drum", "Closed hi-hat", "Open hi-hat", "Clap", "Rim shot", "Tom", "Cymbal"]
 
+    // Knob pages (see DrumKnobPage) of the selected instrument: its sound,
+    // inserts, filter and sends.
+    readonly property var soundPages: {
+        var s = drums.inst[drums.sel] || {}
+        var fx = s.fx || {}
+        var v = (x, d) => x !== undefined ? x : d
+        return [
+            { name: "SRC", tip: "Pitch, length and level of the selected instrument", knobs: [
+                { label: "TUNE", target: "drum.sel_tune", value: v(s.tune, 0.5), defaultValue: 0.5, bipolar: true,
+                  format: x => { var st = Math.round((x - 0.5) * 24); return (st > 0 ? "+" : "") + st + " st" },
+                  tip: "Pitch of the selected instrument, ±12 semitones" },
+                { label: "DECAY", target: "drum.sel_decay", value: v(s.decay, 1), defaultValue: 1,
+                  format: x => x >= 0.999 ? "FULL" : drums.percent(x),
+                  tip: "Length of the selected instrument's sound: right = the whole sample, left = short" },
+                { label: "LEVEL", target: "drum.sel_level", value: v(s.level, 1), defaultValue: 1, format: drums.percent,
+                  tip: "Level of the selected instrument within the kit" }
+            ] },
+            { name: "FX", tip: "Bit reduction, sample-rate reduction and overdrive on the selected instrument", knobs: [
+                { label: "BITS", target: "drum.sel_bits", value: v(fx.bits, 0), defaultValue: 0,
+                  format: x => x <= 0 ? "OFF" : (16 - 14 * x).toFixed(1) + " bit",
+                  tip: "Bit reduction: right = fewer bits, a cruder sound" },
+                { label: "SRR", target: "drum.sel_srr", value: v(fx.srr, 0), defaultValue: 0,
+                  format: x => x <= 0 ? "OFF" : "÷" + Math.pow(48, x).toFixed(1),
+                  tip: "Sample-rate reduction: right = a lower rate, more aliasing" },
+                { label: "DRIVE", target: "drum.sel_drive", value: v(fx.drive, 0), defaultValue: 0, format: drums.offPercent,
+                  tip: "Overdrive on the selected instrument" }
+            ] },
+            { name: "FILT", tip: "Resonant filter on the selected instrument", knobs: [
+                { label: "CUTOFF", target: "drum.sel_cutoff", value: v(fx.cutoff, 1), defaultValue: 1,
+                  format: x => drums.hz(20 * Math.pow(1000, x)),
+                  tip: "Filter cutoff, 20 Hz to 20 kHz" },
+                { label: "RES", target: "drum.sel_res", value: v(fx.res, 0), defaultValue: 0, format: drums.percent,
+                  tip: "Filter resonance" },
+                { label: "TYPE", target: "drum.sel_ftype", value: v(fx.ftype, 0), defaultValue: 0,
+                  format: x => ["LOW-PASS", "BAND-PASS", "HIGH-PASS"][Math.min(2, Math.floor(x * 3))],
+                  tip: "Filter type: low-pass, band-pass or high-pass" }
+            ] },
+            { name: "SEND", tip: "How much of the selected instrument goes to the drums' delay and reverb", knobs: [
+                { label: "DELAY", target: "drum.sel_delay", value: v(fx.delay, 0), defaultValue: 0, format: drums.offPercent,
+                  tip: "Send to the drums' delay" },
+                { label: "REVERB", target: "drum.sel_reverb", value: v(fx.reverb, 0), defaultValue: 0, format: drums.offPercent,
+                  tip: "Send to the drums' reverb" }
+            ] }
+        ]
+    }
+    // Knob pages of the send effects and the master effects.
+    readonly property var busPages: {
+        var b = drums.st.bus || {}
+        var v = (x, d) => x !== undefined ? x : d
+        var times = ["1/32", "3/64", "1/16", "3/32", "1/8", "3/16", "1/4", "1/2", "1 BAR"]
+        return [
+            { name: "DLY", tip: "The drums' delay, in time with the master clock", knobs: [
+                { label: "TIME", target: "drum.delay_time", value: v(b.delay_time, 0.5), defaultValue: 0.5,
+                  format: x => times[Math.min(8, Math.floor(x * 9))], tip: "Delay time" },
+                { label: "FDBK", target: "drum.delay_feedback", value: v(b.delay_feedback, 0.4), defaultValue: 0.4,
+                  format: drums.percent, tip: "Delay feedback: how long the echoes go on" },
+                { label: "FILTER", target: "drum.delay_filter", value: v(b.delay_filter, 0.5), defaultValue: 0.5, bipolar: true,
+                  format: Theme.filterText, tip: "Filter on the echoes: left = low-pass, right = high-pass" }
+            ] },
+            { name: "REV", tip: "The drums' reverb", knobs: [
+                { label: "SIZE", target: "drum.reverb_size", value: v(b.reverb_size, 0.5), defaultValue: 0.5,
+                  format: x => (0.3 * Math.pow(40, x)).toFixed(1) + " s", tip: "Reverb decay time" },
+                { label: "DAMP", target: "drum.reverb_damp", value: v(b.reverb_damp, 0.3), defaultValue: 0.3,
+                  format: drums.percent, tip: "Reverb damping: right = darker" },
+                { label: "PRE", target: "drum.reverb_predelay", value: v(b.reverb_predelay, 0.1), defaultValue: 0.1,
+                  format: x => Math.round(x * 200) + " ms", tip: "Reverb pre-delay" }
+            ] },
+            { name: "COMP", tip: "Compressor on all the drums", knobs: [
+                { label: "THRESH", target: "drum.comp_threshold", value: v(b.comp_threshold, 1), defaultValue: 1,
+                  format: x => x >= 0.999 ? "OFF" : (-40 * (1 - x)).toFixed(1) + " dB",
+                  tip: "Compressor threshold: right = off, left = more compression" },
+                { label: "RATIO", target: "drum.comp_ratio", value: v(b.comp_ratio, 0.25), defaultValue: 0.25,
+                  format: x => Math.pow(20, x).toFixed(1) + ":1", tip: "Compressor ratio" },
+                { label: "REL", target: "drum.comp_release", value: v(b.comp_release, 0.4), defaultValue: 0.4,
+                  format: x => Math.round(30 * Math.pow(1000 / 30, x)) + " ms", tip: "Compressor release" }
+            ] },
+            { name: "MST", tip: "Compressor sidechain and mix, and overdrive on all the drums", knobs: [
+                { label: "SC", target: "drum.comp_sidechain", value: v(b.comp_sidechain, 0), defaultValue: 0,
+                  format: x => { var i = Math.round(x * 8); return i === 0 ? "ALL" : drums.instName(i - 1) },
+                  tip: "What the compressor listens to: all the drums, or one instrument (e.g. BD, to duck the rest under the kick)" },
+                { label: "MIX", target: "drum.comp_mix", value: v(b.comp_mix, 1), defaultValue: 1, format: drums.percent,
+                  tip: "Compressor mix: left = dry, right = fully compressed" },
+                { label: "DRIVE", target: "drum.drive", value: v(b.drive, 0), defaultValue: 0, format: drums.offPercent,
+                  tip: "Overdrive on all the drums, after the compressor" }
+            ] }
+        ]
+    }
+
+    function percent(x) {
+        return Math.round(x * 100) + "%"
+    }
+    function offPercent(x) {
+        return x <= 0 ? "OFF" : Math.round(x * 100) + "%"
+    }
+    function hz(f) {
+        return f >= 1000 ? (f / 1000).toFixed(f >= 9950 ? 0 : 1) + " kHz" : Math.round(f) + " Hz"
+    }
+
     function instName(i) {
         return drums.inst[i] ? drums.inst[i].name : ""
     }
@@ -536,41 +634,36 @@ Rectangle {
                         tip: "Solo the selected instrument: only soloed instruments play"
                     }
                 }
+                DrumKnobPage {
+                    pages: drums.soundPages
+                    color: drums.instColor(drums.sel)
+                }
+            }
+        }
+
+        // --- The drums' send and master effects -----------------------------
+        RowLayout {
+            Layout.row: drums.narrow ? 3 : (drums.twoRows ? 1 : 0)
+            Layout.column: drums.narrow ? 0 : (drums.twoRows ? 1 : 5)
+            Layout.columnSpan: drums.narrow ? 3 : 1
+            Layout.alignment: Qt.AlignVCenter
+            Layout.fillWidth: false
+            Layout.fillHeight: drums.oneRow
+            spacing: 8
+            SectionRule {}
+            ColumnLayout {
+                Layout.alignment: Qt.AlignVCenter
+                spacing: 0
                 RowLayout {
-                    spacing: 0
-                    Knob {
-                        label: "TUNE"
-                        size: 30
-                        bipolar: true
-                        color: drums.instColor(drums.sel)
-                        value: drums.inst[drums.sel] ? drums.inst[drums.sel].tune : 0.5
-                        target: "drum.sel_tune"
-                        format: v => {
-                            var st = Math.round((v - 0.5) * 24)
-                            return (st > 0 ? "+" : "") + st + " st"
-                        }
-                        tip: "Pitch of the selected instrument, ±12 semitones"
+                    Layout.preferredHeight: 20
+                    SectionTitle {
+                        text: "DRUM FX"
+                        color: Theme.textDim
                     }
-                    Knob {
-                        label: "DECAY"
-                        size: 30
-                        defaultValue: 1
-                        color: drums.instColor(drums.sel)
-                        value: drums.inst[drums.sel] ? drums.inst[drums.sel].decay : 1
-                        target: "drum.sel_decay"
-                        format: v => v >= 0.999 ? "FULL" : Math.round(v * 100) + "%"
-                        tip: "Length of the selected instrument's sound: right = the whole sample, left = short"
-                    }
-                    Knob {
-                        label: "LEVEL"
-                        size: 30
-                        defaultValue: 1
-                        color: drums.instColor(drums.sel)
-                        value: drums.inst[drums.sel] ? drums.inst[drums.sel].level : 1
-                        target: "drum.sel_level"
-                        format: v => Math.round(v * 100) + "%"
-                        tip: "Level of the selected instrument within the kit"
-                    }
+                }
+                DrumKnobPage {
+                    pages: drums.busPages
+                    color: Theme.fx
                 }
             }
         }
@@ -578,8 +671,8 @@ Rectangle {
         // --- The drums' channel: filter, FX, cue and the volume fader --------
         RowLayout {
             Layout.row: drums.narrow ? 2 : (drums.twoRows ? 1 : 0)
-            Layout.column: drums.narrow || drums.twoRows ? 1 : 5
-            Layout.columnSpan: drums.narrow || drums.twoRows ? 2 : 1
+            Layout.column: drums.narrow ? 1 : (drums.twoRows ? 2 : 6)
+            Layout.columnSpan: drums.narrow ? 2 : 1
             Layout.alignment: Qt.AlignVCenter
             Layout.preferredHeight: drums.oneRow ? -1 : 70
             Layout.fillWidth: false
@@ -670,15 +763,15 @@ Rectangle {
 
         Item {
             visible: drums.narrow
-            Layout.row: 4
+            Layout.row: 5
             Layout.column: 0
             Layout.fillHeight: true
         }
 
         // --- Kit ---------------------------------------------------------------
         RowLayout {
-            Layout.row: drums.narrow ? 3 : (drums.twoRows ? 1 : 0)
-            Layout.column: drums.narrow ? 0 : (drums.twoRows ? 3 : 6)
+            Layout.row: drums.narrow ? 4 : (drums.twoRows ? 1 : 0)
+            Layout.column: drums.narrow ? 0 : (drums.twoRows ? 3 : 7)
             Layout.columnSpan: drums.narrow ? 3 : 1
             Layout.alignment: drums.twoRows ? Qt.AlignVCenter | Qt.AlignRight : Qt.AlignVCenter
             Layout.fillWidth: drums.narrow

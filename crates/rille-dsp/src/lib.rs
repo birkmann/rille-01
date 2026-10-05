@@ -7,6 +7,7 @@
 pub mod biquad;
 pub mod delay_line;
 pub mod denormal;
+pub mod drum_fx;
 pub mod eq;
 pub mod filter;
 pub mod fx;
@@ -18,6 +19,7 @@ pub mod smooth;
 pub use biquad::{Biquad, Coeffs, StereoBiquad};
 pub use delay_line::DelayLine;
 pub use denormal::flush_denormals;
+pub use drum_fx::{BitCrush, Compressor, Downsample, Drive, FilterType, MultiFilter, TrackFx};
 pub use eq::IsolatorEq;
 pub use filter::{DjFilter, FilterMode, Svf};
 pub use fx::{Beatmasher, Delay, Effect, Flanger, FxCtx, FxUnit, Gater, LfoFilter, Reverb};

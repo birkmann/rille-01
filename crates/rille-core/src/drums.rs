@@ -169,6 +169,119 @@ impl Pattern {
     }
 }
 
+/// Declares a set of knobs (`0..=1` each): a `Copy` struct, a parameter
+/// enum with `ALL`, and `get`/`set` by parameter.
+macro_rules! knob_set {
+    ($(#[$m:meta])* $name:ident, $param:ident { $($(#[$fm:meta])* $field:ident / $variant:ident = $default:expr),* $(,)? }) => {
+        $(#[$m])*
+        #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+        #[serde(default)]
+        pub struct $name {
+            $($(#[$fm])* pub $field: f32,)*
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self { $($field: $default),* }
+            }
+        }
+
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum $param {
+            $($variant),*
+        }
+
+        impl $param {
+            pub const ALL: &[$param] = &[$($param::$variant),*];
+        }
+
+        impl $name {
+            pub fn get(&self, p: $param) -> f32 {
+                match p {
+                    $($param::$variant => self.$field),*
+                }
+            }
+
+            /// Sets `p` to `v` clamped to `0..=1` (NaN: 0).
+            pub fn set(&mut self, p: $param, v: f32) {
+                let v = if v >= 0.0 { v.min(1.0) } else { 0.0 };
+                match p {
+                    $($param::$variant => self.$field = v),*
+                }
+            }
+
+            /// Every value clamped to `0..=1` (NaN: 0).
+            pub fn clamped(mut self) -> Self {
+                for &p in $param::ALL {
+                    self.set(p, self.get(p));
+                }
+                self
+            }
+        }
+    };
+}
+
+knob_set! {
+    /// An instrument's inserts and send levels. The defaults leave the sound
+    /// alone.
+    SoundFx, SoundFxParam {
+        /// Bit reduction, 0 = off.
+        bits / Bits = 0.0,
+        /// Sample-rate reduction, 0 = off.
+        srr / Srr = 0.0,
+        /// Overdrive, 0 = off.
+        drive / Drive = 0.0,
+        /// Filter cutoff, 20 Hz … 20 kHz.
+        cutoff / Cutoff = 1.0,
+        /// Filter resonance.
+        res / Res = 0.0,
+        /// Filter type in three zones: low-, band-, high-pass.
+        filter_type / FilterType = 0.0,
+        /// Send levels to the drums' delay and reverb.
+        delay / Delay = 0.0,
+        reverb / Reverb = 0.0,
+    }
+}
+
+knob_set! {
+    /// The drum machine's send effects (delay, reverb) and master effects
+    /// (compressor, overdrive).
+    DrumFx, DrumFxParam {
+        delay_time / DelayTime = 0.5,
+        delay_feedback / DelayFeedback = 0.4,
+        /// Centre = off, left low-pass, right high-pass.
+        delay_filter / DelayFilter = 0.5,
+        reverb_size / ReverbSize = 0.5,
+        reverb_damp / ReverbDamp = 0.3,
+        reverb_predelay / ReverbPredelay = 0.1,
+        /// −40 … 0 dB; 1.0 (0 dB) = off.
+        comp_threshold / CompThreshold = 1.0,
+        comp_ratio / CompRatio = 0.25,
+        comp_release / CompRelease = 0.4,
+        /// What the compressor listens to, see [`sidechain_source`].
+        comp_sidechain / CompSidechain = 0.0,
+        comp_mix / CompMix = 1.0,
+        /// Master overdrive, 0 = off.
+        drive / Drive = 0.0,
+    }
+}
+
+/// Sources the compressor can listen to: the drums themselves, then each
+/// instrument.
+pub const SIDECHAIN_SOURCES: usize = INSTRUMENTS + 1;
+
+/// The compressor's key for sidechain knob `v`: `None` = the drums
+/// themselves, else an instrument.
+pub fn sidechain_source(v: f32) -> Option<usize> {
+    let i = ((if v >= 0.0 { v.min(1.0) } else { 0.0 }) * (SIDECHAIN_SOURCES - 1) as f32).round() as usize;
+    i.checked_sub(1)
+}
+
+/// The sidechain knob value of `source` (see [`sidechain_source`]).
+pub fn sidechain_knob(source: Option<usize>) -> f32 {
+    source.map_or(0.0, |i| (i.min(INSTRUMENTS - 1) + 1) as f32 / (SIDECHAIN_SOURCES - 1) as f32)
+}
+
 /// An order from instrument names (any case): unknown and repeated names
 /// are skipped, instruments not named follow in their usual order.
 pub fn order_from_names<S: AsRef<str>>(names: &[S]) -> Order {
@@ -274,6 +387,30 @@ pub fn factory_patterns() -> [Pattern; PATTERNS] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn knob_sets() {
+        let mut fx = SoundFx::default();
+        assert_eq!(fx.get(SoundFxParam::Cutoff), 1.0);
+        fx.set(SoundFxParam::Drive, 2.0);
+        assert_eq!(fx.drive, 1.0);
+        fx.set(SoundFxParam::Res, f32::NAN);
+        assert_eq!(fx.res, 0.0);
+        fx.reverb = 3.0;
+        assert_eq!(fx.clamped().reverb, 1.0);
+        assert_eq!(SoundFxParam::ALL.len(), 8);
+        assert_eq!(DrumFx::default().get(DrumFxParam::CompThreshold), 1.0);
+    }
+
+    #[test]
+    fn sidechain_sources() {
+        assert_eq!(sidechain_source(0.0), None);
+        assert_eq!(sidechain_source(1.0), Some(INSTRUMENTS - 1));
+        for i in 0..INSTRUMENTS {
+            assert_eq!(sidechain_source(sidechain_knob(Some(i))), Some(i));
+        }
+        assert_eq!(sidechain_source(sidechain_knob(None)), None);
+    }
 
     #[test]
     fn steps_and_accents() {

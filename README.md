@@ -24,7 +24,8 @@ automatically and precisely enough that sync never drifts.**
 - **Stems:** split a track into drums, bass, other and vocals (HTDemucs).
 - **Remix decks:** four slots of 16 loop and one-shot cells, in time with the deck.
 - **Drum machine:** 16-step sequencer with eight tracks, your own samples and
-  racks, in phase with the master. [Drum machine](docs/drum-machine.md).
+  racks, in phase with the master. Effects on each track, a delay and reverb
+  to send to, and a compressor with sidechain. [Drum machine](docs/drum-machine.md).
 - **Mixer and FX:** auto-gain, 3-band EQ, filter, crossfader, headphone cue,
   limiter; two FX units with six tempo-synced effects.
 - **Library:** music folders, tags, cover art, playlists, history, Traktor
@@ -63,7 +64,7 @@ Keyboard, grid correction, suggestions and Beatport are in the
 
 - [Installing](docs/install.md): AppImage, macOS, from source, udev rule, uninstalling
 - [Manual](docs/manual.md): getting started, keyboard, suggestions, grids, Beatport, files
-- [Drum machine](docs/drum-machine.md): sequencer, kits and racks, Maschine Mikro MK2, mapping targets
+- [Drum machine](docs/drum-machine.md): sequencer, kits and racks, effects, Maschine Mikro MK2, mapping targets
 - [Controllers](docs/controllers.md): mappings, MIDI learn, deck orders, Traktor Kontrol, Xone:96, HID
 - [Development](docs/development.md): architecture, tests, accuracy, website
 

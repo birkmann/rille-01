@@ -12,14 +12,21 @@
 //! The clock beat at the end of a block is the beat heard from the leader at
 //! that point (its keylock latency is already taken out), so hits need no
 //! latency offset to line up with it.
+//!
+//! Each instrument renders into its own track, which runs through its
+//! inserts (bit reduction, sample-rate reduction, overdrive, filter) and its
+//! level, then into the sum and the delay and reverb sends. The sum with the
+//! sends' returns passes the compressor (keyed by itself or one instrument)
+//! and the master overdrive before the drums' channel strip.
 
 use std::sync::Arc;
 
 use rille_core::drums::{
-    ACCENT_VELOCITY, CELLS, CHOKE, DEFAULT_REPEAT, INSTRUMENTS, NORMAL_GAIN, PATTERNS, Pattern, REPEAT_RATES, STEPS,
-    pattern_step, step_time,
+    ACCENT_VELOCITY, CELLS, CHOKE, DEFAULT_REPEAT, DrumFx, DrumFxParam, INSTRUMENTS, NORMAL_GAIN, PATTERNS, Pattern,
+    REPEAT_RATES, STEPS, SoundFx, pattern_step, sidechain_source, step_time,
 };
 use rille_core::{Control, ControlValue};
+use rille_dsp::{Compressor, Delay, Drive, Effect, FxCtx, Reverb, TrackFx};
 
 use crate::mixer::{Strip, fader_gain};
 use crate::types::TrackAudio;
@@ -38,6 +45,11 @@ const HISTORY: usize = 32;
 const UNDO_MERGE_SECS: f64 = 0.4;
 /// Steps per bar, where DRUM PLAY BAR starts and stops.
 const BAR_STEPS: i64 = 16;
+/// Level below which a send effect's output counts as silent (−100 dB).
+const SILENCE: f32 = 1e-5;
+/// A send effect goes idle after this long without input and output (longer
+/// than the longest delay, so a gap between echoes does not cut them).
+const SEND_IDLE_SECS: f64 = 5.0;
 
 /// Gain of a hit with velocity `v` (`0..=1`): accented from
 /// [`ACCENT_VELOCITY`], softer hits down to a third of a normal step.
@@ -103,6 +115,8 @@ pub struct DrumParams {
     pub channel_level: f32,
     pub filter: f32,
     pub fx_assign: [bool; 2],
+    pub sound_fx: [SoundFx; INSTRUMENTS],
+    pub drum_fx: DrumFx,
 }
 
 impl Default for DrumParams {
@@ -117,6 +131,8 @@ impl Default for DrumParams {
             channel_level: 0.8,
             filter: 0.5,
             fx_assign: [false; 2],
+            sound_fx: [SoundFx::default(); INSTRUMENTS],
+            drum_fx: DrumFx::default(),
         }
     }
 }
@@ -147,7 +163,7 @@ impl DrumVoice {
     }
 
     /// Adds `out.len()` frames of `audio` into `out`.
-    fn render(&mut self, audio: &TrackAudio, level: f32, out: &mut [[f32; 2]]) {
+    fn render(&mut self, audio: &TrackAudio, out: &mut [[f32; 2]]) {
         let frames = &audio.frames;
         let last = frames.len().saturating_sub(1);
         for o in out.iter_mut() {
@@ -159,7 +175,7 @@ impl DrumVoice {
             let t = (self.pos - i as f64) as f32;
             let at = |k: isize| frames[(i as isize + k).clamp(0, last as isize) as usize];
             let s = hermite(at(-1), at(0), at(1), at(2), t);
-            let mut g = self.gain * level * self.env;
+            let mut g = self.gain * self.env;
             if self.release_step > 0.0 {
                 g *= self.release;
                 self.release -= self.release_step;
@@ -194,6 +210,39 @@ fn decay_mul(decay: f32, sr: f64) -> f32 {
     }
     let tau = 0.01 * 300f64.powf(f64::from(decay.clamp(0.0, 1.0)));
     (-1.0 / (tau * sr)).exp() as f32
+}
+
+/// A send effect, 100 % wet on its bus. It goes idle (and costs nothing)
+/// once it has had no input for a while and its tail has died away.
+struct SendFx<E> {
+    fx: E,
+    silent: usize,
+    idle: bool,
+}
+
+impl<E: Effect> SendFx<E> {
+    fn new(fx: E) -> Self {
+        Self { fx, silent: 0, idle: true }
+    }
+
+    /// Processes `bus` in place; `fed`: it holds some input.
+    fn process(&mut self, bus: &mut [[f32; 2]], fed: bool, ctx: &FxCtx, idle_after: usize) {
+        if !fed && self.idle {
+            return;
+        }
+        self.idle = false;
+        self.fx.process(bus, ctx);
+        let peak = bus.iter().fold(0f32, |m, f| m.max(f[0].abs()).max(f[1].abs()));
+        if !fed && peak < SILENCE {
+            self.silent += bus.len();
+            if self.silent >= idle_after {
+                self.idle = true;
+                self.fx.reset();
+            }
+        } else {
+            self.silent = 0;
+        }
+    }
 }
 
 pub struct DrumMachine {
@@ -271,6 +320,20 @@ pub struct DrumMachine {
     edit_rev: u32,
     pub(crate) strip: Strip,
     pub(crate) buf: Vec<[f32; 2]>,
+    /// Each instrument's track, after its inserts and level.
+    tracks: [Vec<[f32; 2]>; INSTRUMENTS],
+    sound_fx: [SoundFx; INSTRUMENTS],
+    inserts: [TrackFx; INSTRUMENTS],
+    /// Gains of each track at the end of the last block (level, delay send,
+    /// reverb send), ramped from there to the knobs' gains.
+    track_gains: [[f32; 3]; INSTRUMENTS],
+    drum_fx: DrumFx,
+    delay_bus: Vec<[f32; 2]>,
+    reverb_bus: Vec<[f32; 2]>,
+    delay: SendFx<Delay>,
+    reverb: SendFx<Reverb>,
+    comp: Compressor,
+    drive: Drive,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -283,7 +346,7 @@ impl DrumMachine {
     pub fn new(sample_rate: u32, max_block: usize) -> Self {
         let mut strip = Strip::new(sample_rate as f32);
         strip.volume = 0.8;
-        Self {
+        let mut m = Self {
             sr: f64::from(sample_rate),
             kit: None,
             old_kit: None,
@@ -329,7 +392,20 @@ impl DrumMachine {
             edit_rev: 0,
             strip,
             buf: vec![[0.0; 2]; max_block],
-        }
+            tracks: std::array::from_fn(|_| vec![[0.0; 2]; max_block]),
+            sound_fx: [SoundFx::default(); INSTRUMENTS],
+            inserts: std::array::from_fn(|_| TrackFx::new(sample_rate as f32)),
+            track_gains: [[1.0, 0.0, 0.0]; INSTRUMENTS],
+            drum_fx: DrumFx::default(),
+            delay_bus: vec![[0.0; 2]; max_block],
+            reverb_bus: vec![[0.0; 2]; max_block],
+            delay: SendFx::new(Delay::new(sample_rate as f32)),
+            reverb: SendFx::new(Reverb::new(sample_rate as f32)),
+            comp: Compressor::new(sample_rate as f32),
+            drive: Drive::new(sample_rate as f32),
+        };
+        m.apply_drum_fx();
+        m
     }
 
     pub fn playing(&self) -> bool {
@@ -428,7 +504,38 @@ impl DrumMachine {
         self.strip.volume = p.channel_level;
         self.strip.filter = p.filter;
         self.strip.fx_assign = p.fx_assign;
+        self.sound_fx = p.sound_fx;
+        for i in 0..INSTRUMENTS {
+            self.apply_sound_fx(i);
+        }
+        self.drum_fx = p.drum_fx;
+        self.apply_drum_fx();
         self.edited();
+    }
+
+    /// Passes instrument `inst`'s insert settings to its inserts.
+    fn apply_sound_fx(&mut self, inst: usize) {
+        let (s, fx) = (&self.sound_fx[inst], &mut self.inserts[inst]);
+        fx.bits.set_knob(s.bits);
+        fx.srr.set_knob(s.srr);
+        fx.drive.set_knob(s.drive);
+        fx.filter.set(s.cutoff, s.res, s.filter_type);
+    }
+
+    /// Passes the send and master effect settings to the effects.
+    fn apply_drum_fx(&mut self) {
+        let f = self.drum_fx;
+        for (i, v) in [f.delay_time, f.delay_feedback, f.delay_filter].into_iter().enumerate() {
+            self.delay.fx.set_knob(i, v);
+        }
+        for (i, v) in [f.reverb_size, f.reverb_damp, f.reverb_predelay].into_iter().enumerate() {
+            self.reverb.fx.set_knob(i, v);
+        }
+        self.comp.set_threshold(f.comp_threshold);
+        self.comp.set_ratio(f.comp_ratio);
+        self.comp.set_release(f.comp_release);
+        self.comp.set_mix(f.comp_mix);
+        self.drive.set_knob(f.drive);
     }
 
     /// Starts instrument `inst` now (at the start of the next block) at
@@ -542,18 +649,72 @@ impl DrumMachine {
             return;
         }
         for inst in 0..INSTRUMENTS {
-            let level = fader_gain(self.level[inst]);
             for v in &mut self.voices[inst] {
                 if !v.active {
                     continue;
                 }
                 let kit = if v.old_kit { &self.old_kit } else { &self.kit };
                 match kit.as_ref().and_then(|k| k.samples[inst].as_deref()) {
-                    Some(audio) => v.render(audio, level, &mut self.buf[from..to]),
+                    Some(audio) => v.render(audio, &mut self.tracks[inst][from..to]),
                     None => v.active = false,
                 }
             }
         }
+    }
+
+    /// Mixes the tracks rendered into `self.tracks[..][..n]` into
+    /// `self.buf`: inserts, level and sends per track, then the send
+    /// effects' returns, the compressor and the master overdrive.
+    fn mix_tracks(&mut self, n: usize, ctx: &FxCtx) {
+        let buf = &mut self.buf[..n];
+        let delay_bus = &mut self.delay_bus[..n];
+        let reverb_bus = &mut self.reverb_bus[..n];
+        delay_bus.fill([0.0; 2]);
+        reverb_bus.fill([0.0; 2]);
+        let mut fed = [false; 2];
+        let step = 1.0 / n.max(1) as f32;
+        for inst in 0..INSTRUMENTS {
+            let track = &mut self.tracks[inst][..n];
+            self.inserts[inst].process(track);
+            let s = &self.sound_fx[inst];
+            let to = [fader_gain(self.level[inst]), s.delay * s.delay, s.reverb * s.reverb];
+            let from = std::mem::replace(&mut self.track_gains[inst], to);
+            let d = [(to[0] - from[0]) * step, (to[1] - from[1]) * step, (to[2] - from[2]) * step];
+            let sends = [from[1].max(to[1]) > 0.0, from[2].max(to[2]) > 0.0];
+            for (k, f) in track.iter_mut().enumerate() {
+                let t = (k + 1) as f32;
+                let level = from[0] + d[0] * t;
+                *f = [f[0] * level, f[1] * level];
+                buf[k][0] += f[0];
+                buf[k][1] += f[1];
+                if sends[0] {
+                    let g = from[1] + d[1] * t;
+                    delay_bus[k][0] += f[0] * g;
+                    delay_bus[k][1] += f[1] * g;
+                }
+                if sends[1] {
+                    let g = from[2] + d[2] * t;
+                    reverb_bus[k][0] += f[0] * g;
+                    reverb_bus[k][1] += f[1] * g;
+                }
+            }
+            fed[0] |= sends[0];
+            fed[1] |= sends[1];
+        }
+        let quiet = |bus: &[[f32; 2]]| bus.iter().all(|f| f[0].abs() < SILENCE && f[1].abs() < SILENCE);
+        let idle_after = (SEND_IDLE_SECS * self.sr) as usize;
+        let fed = [fed[0] && !quiet(delay_bus), fed[1] && !quiet(reverb_bus)];
+        self.delay.process(delay_bus, fed[0], ctx, idle_after);
+        self.reverb.process(reverb_bus, fed[1], ctx, idle_after);
+        if !self.delay.idle || !self.reverb.idle {
+            for ((b, d), r) in buf.iter_mut().zip(delay_bus.iter()).zip(reverb_bus.iter()) {
+                b[0] += d[0] + r[0];
+                b[1] += d[1] + r[1];
+            }
+        }
+        let key = sidechain_source(self.drum_fx.comp_sidechain).map(|i| &self.tracks[i][..n]);
+        self.comp.process(buf, key);
+        self.drive.process(buf);
     }
 
     /// First absolute step at or after `pos` beats from the origin.
@@ -570,6 +731,9 @@ impl DrumMachine {
     pub(crate) fn render(&mut self, n: usize, clock_end: f64, origin: f64, bpm: f64) {
         let n = n.min(self.buf.len());
         self.buf[..n].fill([0.0; 2]);
+        for t in &mut self.tracks {
+            t[..n].fill([0.0; 2]);
+        }
         let (b0, b1) = (self.last_end, clock_end);
         self.last_end = b1;
         self.frames += n as u64;
@@ -655,6 +819,8 @@ impl DrumMachine {
             self.fire_repeats(b1, origin, frame, &mut done);
         }
         self.render_voices(done, n);
+        let ctx = FxCtx { sample_rate: self.sr as f32, bpm, beat_pos: b0, beats_per_bar: 4 };
+        self.mix_tracks(n, &ctx);
     }
 
     /// Plays the note repeats due before clock beat `until`, rendering the
@@ -980,6 +1146,24 @@ impl DrumMachine {
                     self.strip.pfl = !self.strip.pfl;
                 }
             }
+            c if c.drum_sound_fx().is_some() => {
+                if let (Some(x), Some((p, n))) = (abs, c.drum_sound_fx()) {
+                    let inst = match n {
+                        Some(n) => idx(n, INSTRUMENTS),
+                        None => Some(sel),
+                    };
+                    if let Some(i) = inst {
+                        self.sound_fx[i].set(p, x);
+                        self.apply_sound_fx(i);
+                        self.edited();
+                    }
+                }
+            }
+            c if c.drum_fx().is_some() => {
+                if let (Some(x), Some(p)) = (abs, c.drum_fx()) {
+                    self.set_drum_fx(p, x);
+                }
+            }
             // Read-only, or handled by the app.
             Control::DrumStepLed(_)
             | Control::DrumInstLed(_)
@@ -1007,6 +1191,12 @@ impl DrumMachine {
             Control::DrumInstTune(_) | Control::DrumSelTune => self.tune[inst] = x,
             _ => self.decay[inst] = x,
         }
+        self.edited();
+    }
+
+    fn set_drum_fx(&mut self, p: DrumFxParam, x: f32) {
+        self.drum_fx.set(p, x);
+        self.apply_drum_fx();
         self.edited();
     }
 
@@ -1044,6 +1234,7 @@ impl DrumMachine {
                 hits: self.hits[i],
                 soloed: self.soloed[i],
                 last_hit: self.last_hit[i],
+                fx: self.sound_fx[i],
             }),
             channel: crate::snapshot::ChannelState {
                 gain: self.strip.gain,
@@ -1065,6 +1256,7 @@ impl DrumMachine {
             replace: self.replace,
             can_undo: self.undo.len > 0,
             can_redo: self.redo.len > 0,
+            drum_fx: self.drum_fx,
         }
     }
 }
@@ -1488,5 +1680,80 @@ mod tests {
         assert_eq!(m.level[6], 0.3);
         assert_ne!(m.edit_rev, rev);
         assert!(!m.control(Control::Play, ControlValue::Press(true)));
+    }
+
+    /// Plays `pattern` from beat 0 for `blocks` blocks with `setup` applied
+    /// first; returns the left channel.
+    fn play_with(pattern: Pattern, blocks: usize, setup: impl FnOnce(&mut DrumMachine)) -> Vec<f32> {
+        let mut m = machine(pattern);
+        setup(&mut m);
+        // One block stopped, so the track gains reach the knobs.
+        m.render(N, 0.0, 0.0, 120.0);
+        for fx in &mut m.inserts {
+            fx.reset();
+        }
+        m.comp.reset();
+        play(&mut m, 0.0, blocks, |_, b| b)
+    }
+
+    fn knob(m: &mut DrumMachine, c: Control, v: f32) {
+        assert!(m.control(c, ControlValue::Absolute(v)));
+    }
+
+    #[test]
+    fn inserts_act_on_their_own_track() {
+        let mut p = row(0, "x...");
+        p.set_row_text(1, "..x.");
+        let h = hits(&play_with(p, 60, |m| knob(m, Control::DrumInstDrive(1), 1.0)));
+        assert!(h[0].1 > 0.5, "BD driven: {h:?}");
+        let sd = h.iter().find(|(i, _)| *i == 2 * SIXTEENTH).expect("SD hit");
+        assert!((sd.1 - 0.2 * NORMAL_GAIN).abs() < 1e-6, "SD untouched: {sd:?}");
+    }
+
+    #[test]
+    fn selected_instrument_knobs_set_its_effects() {
+        let mut m = machine(Pattern::default());
+        m.control(Control::DrumInst(3), ControlValue::Press(true));
+        knob(&mut m, Control::DrumSelCutoff, 0.25);
+        assert_eq!(m.sound_fx[2].cutoff, 0.25);
+        assert_eq!(m.state(0.0, 0.0).inst[2].fx.cutoff, 0.25);
+        knob(&mut m, Control::DrumCompRatio, 0.75);
+        assert_eq!(m.state(0.0, 0.0).drum_fx.comp_ratio, 0.75);
+    }
+
+    #[test]
+    fn delay_send_echoes_the_hit() {
+        let p = row(0, "x...");
+        let dry = play_with(p, 80, |_| {});
+        let wet = play_with(p, 80, |m| knob(m, Control::DrumInstDelay(1), 1.0));
+        // Half a beat (12000 frames at 120 BPM) after the hit.
+        let energy = |out: &[f32]| out[11_000..13_000].iter().map(|v| v * v).sum::<f32>();
+        assert_eq!(energy(&dry), 0.0);
+        assert!(energy(&wet) > 1e-4, "{}", energy(&wet));
+    }
+
+    /// Every instrument holds `0.1 * (i + 1)` for 50 ms.
+    fn held_kit() -> Arc<DrumKit> {
+        Arc::new(DrumKit {
+            samples: std::array::from_fn(|i| {
+                let frames = vec![[0.1 * (i + 1) as f32; 2]; 2400];
+                Some(Arc::new(TrackAudio { sample_rate: SR, frames }))
+            }),
+        })
+    }
+
+    #[test]
+    fn compressor_keyed_by_the_kick_ducks_the_snare() {
+        let comp = |m: &mut DrumMachine| {
+            m.set_kit(Some(held_kit()));
+            knob(m, Control::DrumCompThreshold, 0.0);
+            knob(m, Control::DrumCompRatio, 1.0);
+            knob(m, Control::DrumCompSidechain, rille_core::drums::sidechain_knob(Some(0)));
+        };
+        let mut both = row(0, "x...");
+        both.set_row_text(1, "x...");
+        let ducked = play_with(both, 20, comp)[2000];
+        let alone = play_with(row(1, "x..."), 20, comp)[2000];
+        assert!(ducked < alone * 0.5, "ducked {ducked}, snare alone {alone}");
     }
 }

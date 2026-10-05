@@ -216,6 +216,13 @@ fn drum_value(c: Control, d: &DrumState, clock_beat: f64) -> f32 {
     let sel = usize::from(d.selected).min(INSTRUMENTS - 1);
     let inst = |n: u8| idx(n, INSTRUMENTS).map(|i| &d.inst[i]);
     let playhead = |s: usize| d.step == Some(s as u8);
+    if let Some((p, n)) = c.drum_sound_fx() {
+        let i = n.map_or(Some(sel), |n| idx(n, INSTRUMENTS));
+        return i.map_or_else(|| c.default_value(), |i| d.inst[i].fx.get(p));
+    }
+    if let Some(p) = c.drum_fx() {
+        return d.drum_fx.get(p);
+    }
     match c {
         Control::DrumPlay => b(d.playing),
         // Blinking during the count-in.

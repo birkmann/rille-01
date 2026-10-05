@@ -894,13 +894,37 @@ impl qobject::AppController {
         let pat = &d.patterns[usize::from(d.current).min(PATTERNS - 1)];
         let rows: Vec<String> = (0..INSTRUMENTS).map(|i| json_str(&pat.row_text(i))).collect();
         let used: Vec<String> = d.patterns.iter().map(|p| (!p.is_empty()).to_string()).collect();
+        // Effect settings keyed like their targets (`drum.sel_bits` → "bits").
+        let target_key = |c: rille_core::Control, prefix: &str| {
+            let t = rille_core::ControlTarget::drum(c).to_string();
+            t.strip_prefix(prefix).map(str::to_owned).unwrap_or(t)
+        };
+        let sound_fx = |fx: &rille_core::drums::SoundFx| {
+            let fields: Vec<String> = rille_core::drums::SoundFxParam::ALL
+                .iter()
+                .map(|&p| {
+                    format!(
+                        r#""{}":{:.4}"#,
+                        target_key(rille_core::Control::drum_sound(p, None), "drum.sel_"),
+                        fx.get(p)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", fields.join(","))
+        };
+        let bus: Vec<String> = rille_core::drums::DrumFxParam::ALL
+            .iter()
+            .map(|&p| {
+                format!(r#""{}":{:.4}"#, target_key(rille_core::Control::from_drum_fx(p), "drum."), d.drum_fx.get(p))
+            })
+            .collect();
         let inst: Vec<String> = d
             .inst
             .iter()
             .zip(NAMES.iter().zip(INST_COLORS))
             .map(|(i, (name, color))| {
                 format!(
-                    r##"{{"name":"{}","color":"#{:06x}","level":{:.4},"tune":{:.4},"decay":{:.4},"muted":{},"soloed":{},"loaded":{}}}"##,
+                    r##"{{"name":"{}","color":"#{:06x}","level":{:.4},"tune":{:.4},"decay":{:.4},"muted":{},"soloed":{},"loaded":{},"fx":{}}}"##,
                     name,
                     rille_core::remix::COLORS[usize::from(color)],
                     i.level,
@@ -908,7 +932,8 @@ impl qobject::AppController {
                     i.decay,
                     i.muted,
                     i.soloed,
-                    i.loaded
+                    i.loaded,
+                    sound_fx(&i.fx)
                 )
             })
             .collect();
@@ -917,7 +942,7 @@ impl qobject::AppController {
             app.drum_labels().iter().map(|l| l.as_deref().map_or_else(|| "null".into(), json_str)).collect();
         let c = &d.channel;
         let json = format!(
-            r#"{{"current":{},"queued":{},"selected":{},"length":{},"swing":{:.4},"rows":[{}],"used":[{}],"inst":[{}],"order":[{}],"labels":[{}],"level":{:.4},"filter":{:.4},"fx":[{},{}],"pfl":{},"kit":{},"factory":{},"kits":{},"clipboard":{},"undo":{},"redo":{},"waiting":{},"stopping":{},"solo":{}}}"#,
+            r#"{{"current":{},"queued":{},"selected":{},"length":{},"swing":{:.4},"rows":[{}],"used":[{}],"inst":[{}],"order":[{}],"labels":[{}],"level":{:.4},"filter":{:.4},"fx":[{},{}],"bus":{{{}}},"pfl":{},"kit":{},"factory":{},"kits":{},"clipboard":{},"undo":{},"redo":{},"waiting":{},"stopping":{},"solo":{}}}"#,
             d.current,
             d.queued.map_or(-1, i32::from),
             d.selected,
@@ -932,6 +957,7 @@ impl qobject::AppController {
             c.filter,
             c.fx_assign[0],
             c.fx_assign[1],
+            bus.join(","),
             c.pfl,
             json_str(&kit),
             rille_app::drums::kits::is_factory(&kit),

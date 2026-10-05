@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rille_core::drums::{INSTRUMENTS, NAMES, Order, order_from_names, order_names};
+use rille_core::drums::{INSTRUMENTS, NAMES, Order, SoundFx, order_from_names, order_names};
 use rille_engine::TrackAudio;
 use serde::{Deserialize, Serialize};
 
@@ -52,18 +52,20 @@ pub type Samples = [Option<Arc<TrackAudio>>; INSTRUMENTS];
 /// What each sound is called (the file or track it came from).
 pub type Labels = [Option<String>; INSTRUMENTS];
 
-/// Level, tune and decay of one instrument, as a rack keeps them.
+/// Level, tune, decay and effects of one instrument, as a rack keeps them.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Sound {
     pub level: f32,
     pub tune: f32,
     pub decay: f32,
+    #[serde(flatten)]
+    pub fx: SoundFx,
 }
 
 impl Default for Sound {
     fn default() -> Self {
-        Self { level: 1.0, tune: 0.5, decay: 1.0 }
+        Self { level: 1.0, tune: 0.5, decay: 1.0, fx: SoundFx::default() }
     }
 }
 
@@ -187,7 +189,12 @@ pub fn load(drums: &Path, name: &str) -> Result<Kit, String> {
     kit.sounds = (!file.sounds.is_empty()).then(|| {
         std::array::from_fn(|i| {
             let s = file.sounds.get(NAMES[i]).copied().unwrap_or_default();
-            Sound { level: s.level.clamp(0.0, 1.0), tune: s.tune.clamp(0.0, 1.0), decay: s.decay.clamp(0.0, 1.0) }
+            Sound {
+                level: s.level.clamp(0.0, 1.0),
+                tune: s.tune.clamp(0.0, 1.0),
+                decay: s.decay.clamp(0.0, 1.0),
+                fx: s.fx.clamped(),
+            }
         })
     });
     Ok(kit)
@@ -490,6 +497,18 @@ mod tests {
     }
 
     #[test]
+    fn racks_without_effects_load_without_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        let rack = dir.path().join("Old");
+        std::fs::create_dir_all(&rack).unwrap();
+        std::fs::write(rack.join("kit.toml"), "[sounds.BD]\nlevel = 0.5\ntune = 0.5\ndecay = 1.0\n").unwrap();
+        let file = KitFile::read(&rack);
+        let bd = file.sounds["BD"];
+        assert_eq!(bd.level, 0.5);
+        assert_eq!(bd.fx, SoundFx::default());
+    }
+
+    #[test]
     fn racks_keep_order_names_and_sounds() {
         let dir = tempfile::tempdir().unwrap();
         let drums = dir.path();
@@ -498,7 +517,9 @@ mod tests {
         kit.samples[7] = None;
         let order = [4, 0, 1, 2, 3, 5, 6, 7];
         let mut sounds = [Sound::default(); INSTRUMENTS];
-        sounds[2] = Sound { level: 0.5, tune: 0.75, decay: 0.25 };
+        sounds[2] = Sound { level: 0.5, tune: 0.75, decay: 0.25, ..Sound::default() };
+        sounds[0].fx.drive = 0.6;
+        sounds[0].fx.reverb = 0.3;
         kit.order = Some(order);
         kit.sounds = Some(sounds);
         let name = create(drums, "Rack", &kit).unwrap();

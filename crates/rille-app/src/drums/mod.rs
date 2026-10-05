@@ -16,8 +16,8 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use rille_core::drums::{
-    DEFAULT_ORDER, INSTRUMENTS, NAMES, Order, PATTERNS, Pattern, factory_patterns, move_track, order_from_names,
-    order_names,
+    DEFAULT_ORDER, DrumFx, INSTRUMENTS, NAMES, Order, PATTERNS, Pattern, SoundFx, SoundFxParam, factory_patterns,
+    move_track, order_from_names, order_names,
 };
 use rille_core::{Control, ControlEvent, ControlTarget, ControlValue};
 use rille_engine::{Command, DrumKit, DrumParams, DrumState, TrackAudio};
@@ -62,6 +62,8 @@ struct SetFile {
     level: f32,
     filter: f32,
     fx: [bool; 2],
+    /// Send and master effects.
+    drum_fx: DrumFx,
     instruments: Vec<InstFile>,
     patterns: Vec<PatternFile>,
 }
@@ -77,6 +79,7 @@ impl Default for SetFile {
             level: p.channel_level,
             filter: p.filter,
             fx: p.fx_assign,
+            drum_fx: p.drum_fx,
             instruments: Vec::new(),
             patterns: Vec::new(),
         }
@@ -91,11 +94,13 @@ struct InstFile {
     tune: f32,
     decay: f32,
     muted: bool,
+    #[serde(flatten)]
+    fx: SoundFx,
 }
 
 impl Default for InstFile {
     fn default() -> Self {
-        Self { name: String::new(), level: 1.0, tune: 0.5, decay: 1.0, muted: false }
+        Self { name: String::new(), level: 1.0, tune: 0.5, decay: 1.0, muted: false, fx: SoundFx::default() }
     }
 }
 
@@ -132,6 +137,8 @@ impl DrumSet {
                 channel_level: s.channel.volume,
                 filter: s.channel.filter,
                 fx_assign: s.channel.fx_assign,
+                sound_fx: s.inst.map(|i| i.fx),
+                drum_fx: s.drum_fx,
             },
         }
     }
@@ -146,6 +153,7 @@ impl DrumSet {
             channel_level: f.level.clamp(0.0, 1.0),
             filter: f.filter.clamp(0.0, 1.0),
             fx_assign: f.fx,
+            drum_fx: f.drum_fx.clamped(),
             ..DrumParams::default()
         };
         for inst in &f.instruments {
@@ -154,6 +162,7 @@ impl DrumSet {
                 params.tune[i] = inst.tune.clamp(0.0, 1.0);
                 params.decay[i] = inst.decay.clamp(0.0, 1.0);
                 params.muted[i] = inst.muted;
+                params.sound_fx[i] = inst.fx.clamped();
             }
         }
         let mut patterns = [Pattern::default(); PATTERNS];
@@ -179,6 +188,7 @@ impl DrumSet {
             level: p.channel_level,
             filter: p.filter,
             fx: p.fx_assign,
+            drum_fx: p.drum_fx,
             instruments: (0..INSTRUMENTS)
                 .map(|i| InstFile {
                     name: NAMES[i].into(),
@@ -186,6 +196,7 @@ impl DrumSet {
                     tune: p.tune[i],
                     decay: p.decay[i],
                     muted: p.muted[i],
+                    fx: p.sound_fx[i],
                 })
                 .collect(),
             patterns: self
@@ -430,18 +441,22 @@ impl App {
 
     /// The instruments' level, tune and decay now.
     fn drum_sounds(&self) -> [Sound; INSTRUMENTS] {
-        self.snapshot().drums.inst.map(|i| Sound { level: i.level, tune: i.tune, decay: i.decay })
+        self.snapshot().drums.inst.map(|i| Sound { level: i.level, tune: i.tune, decay: i.decay, fx: i.fx })
     }
 
     /// Gives the instruments these levels, tunes and decays.
     fn set_drum_sounds(&self, sounds: &[Sound; INSTRUMENTS]) {
         for (i, s) in sounds.iter().enumerate() {
             let n = i as u8 + 1;
+            let fx = SoundFxParam::ALL.iter().map(|&p| (Control::drum_sound(p, Some(n)), s.fx.get(p)));
             for (control, x) in [
                 (Control::DrumInstLevel(n), s.level),
                 (Control::DrumInstTune(n), s.tune),
                 (Control::DrumInstDecay(n), s.decay),
-            ] {
+            ]
+            .into_iter()
+            .chain(fx)
+            {
                 let target = ControlTarget::drum(control);
                 self.send(Command::Control(ControlEvent { target, value: ControlValue::Absolute(x) }));
             }
@@ -725,6 +740,11 @@ mod tests {
         set.params.muted[7] = true;
         set.params.current = 3;
         set.params.fx_assign = [false, true];
+        set.params.sound_fx[0].drive = 0.5;
+        set.params.sound_fx[2].cutoff = 0.25;
+        set.params.sound_fx[2].reverb = 0.75;
+        set.params.drum_fx.comp_threshold = 0.5;
+        set.params.drum_fx.comp_sidechain = 0.125;
         set.order = [7, 6, 5, 4, 3, 2, 1, 0];
         set.save(&path).unwrap();
         assert_eq!(DrumSet::load(&path), Some(set));
@@ -744,5 +764,14 @@ mod tests {
         assert!(set.patterns[0].is_on(1, 0) && set.patterns[0].length == 16);
         assert_eq!(set.params.level, [1.0; INSTRUMENTS]);
         assert_eq!(set.order, DEFAULT_ORDER);
+        // Files from before the effects: no effects; values out of range clamped.
+        assert_eq!(set.params.sound_fx, [SoundFx::default(); INSTRUMENTS]);
+        assert_eq!(set.params.drum_fx, DrumFx::default());
+        std::fs::write(&path, "[drum_fx]\ndrive = 4.0\n[[instruments]]\nname = \"SD\"\nbits = -1.0\nreverb = 0.5\n")
+            .unwrap();
+        let set = DrumSet::load(&path).unwrap();
+        assert_eq!(set.params.drum_fx.drive, 1.0);
+        assert_eq!((set.params.sound_fx[1].bits, set.params.sound_fx[1].reverb), (0.0, 0.5));
+        assert_eq!(set.params.sound_fx[1].cutoff, 1.0);
     }
 }

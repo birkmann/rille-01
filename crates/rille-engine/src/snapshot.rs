@@ -151,6 +151,8 @@ pub struct DrumInstState {
     pub soloed: bool,
     /// Clock beat of its last audible hit.
     pub last_hit: f64,
+    /// Inserts and send levels.
+    pub fx: rille_core::drums::SoundFx,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -185,6 +187,8 @@ pub struct DrumState {
     pub replace: bool,
     pub can_undo: bool,
     pub can_redo: bool,
+    /// Send and master effects.
+    pub drum_fx: rille_core::drums::DrumFx,
 }
 
 impl DrumInstState {
@@ -222,6 +226,7 @@ impl Default for DrumState {
             replace: false,
             can_undo: false,
             can_redo: false,
+            drum_fx: rille_core::drums::DrumFx::default(),
         }
     }
 }

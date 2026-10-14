@@ -103,6 +103,10 @@ pub const KIND_BEATPORT_PLAYLIST: i32 = 9;
 /// A Beatport chart: id [`BP_TOP100`], [`BP_PURCHASES`], or a genre id for
 /// that genre's Top 100.
 pub const KIND_BEATPORT_LIST: i32 = 10;
+/// An artist's / a label's tracks (id = Beatport's); opened from a track's
+/// links, not shown in the tree.
+pub const KIND_BEATPORT_ARTIST: i32 = 11;
+pub const KIND_BEATPORT_LABEL: i32 = 12;
 pub const BP_TOP100: i64 = 0;
 pub const BP_PURCHASES: i64 = -1;
 /// Id of the "Offline" node (kind [`KIND_BEATPORT_RECENT`]; 0 = all streamed).
@@ -292,8 +296,13 @@ impl BrowserTreeRust {
         };
         if folder("My playlists", BP_FOLDER_PLAYLISTS, "g:bp-playlists", out) {
             for p in app.beatport_playlists() {
-                let detail = p.track_count.map_or_else(String::new, |n| n.to_string());
-                out.push(node(p.name, KIND_BEATPORT_PLAYLIST, p.id, 2, format!("bp:p:{}", p.id), "list", detail));
+                // Downloaded: a (green) check, and how far while it downloads.
+                let (icon, detail) = match app.beatport_playlist_offline(p.id) {
+                    Some((done, all)) if done < all => ("import", format!("{done}/{all}")),
+                    Some((_, all)) => ("check", all.to_string()),
+                    None => ("list", p.track_count.map_or_else(String::new, |n| n.to_string())),
+                };
+                out.push(node(p.name, KIND_BEATPORT_PLAYLIST, p.id, 2, format!("bp:p:{}", p.id), icon, detail));
             }
         }
         if folder("Genres · Top 100", BP_FOLDER_GENRES, "g:bp-genres", out) {

@@ -347,6 +347,12 @@ impl App {
         if app.settings().background_analysis {
             let _ = app.analysis_kick.send(());
         }
+        // Downloads from before the downloads folder move there.
+        let mover = app.clone();
+        std::thread::Builder::new()
+            .name("beatport-relocate".into())
+            .spawn(move || mover.relocate_downloads())
+            .expect("spawn beatport relocate");
         Ok(app)
     }
 
@@ -1302,13 +1308,14 @@ impl App {
                 .filter(|i| matching.as_ref().is_none_or(|m| m.contains(i)))
                 .map(|i| t.rows[i].clone())
                 .collect(),
-            // The collection is the local files; streamed tracks have their own
-            // list, guest tracks show only in their folder.
+            // The collection is the files on this computer: local ones and
+            // Beatport downloads; tracks only streamed have their own list,
+            // guest tracks show only in their folder.
             None => t
                 .rows
                 .iter()
                 .enumerate()
-                .filter(|(i, r)| r.beatport_id.is_none() && !r.guest && matching.as_ref().is_none_or(|m| m.contains(i)))
+                .filter(|(i, r)| in_collection(r) && matching.as_ref().is_none_or(|m| m.contains(i)))
                 .map(|(_, r)| r.clone())
                 .collect(),
         };
@@ -1635,10 +1642,10 @@ impl App {
         }
     }
 
-    /// Number of tracks in the collection (local files, not streamed or
-    /// guest ones).
+    /// Number of tracks in the collection (local files and Beatport
+    /// downloads, not tracks only streamed or guest ones).
     pub fn track_count(&self) -> usize {
-        self.tracks.read().expect("tracks lock").rows.iter().filter(|r| r.beatport_id.is_none() && !r.guest).count()
+        self.tracks.read().expect("tracks lock").rows.iter().filter(|r| in_collection(r)).count()
     }
 
     /// Number of tracks streamed from Beatport.
@@ -2186,6 +2193,12 @@ fn mirror_folder(lib: &mut Library, tree: &FolderTree, parent: Option<PlaylistId
         added += mirror_folder(lib, c, Some(folder))?;
     }
     Ok(added)
+}
+
+/// Whether a row belongs to the Track Collection: a local file, or a
+/// Beatport download kept offline whose file is here. Guest tracks are not.
+pub fn in_collection(r: &TrackRow) -> bool {
+    !r.guest && (r.beatport_id.is_none() || (r.beatport_offline && !r.missing))
 }
 
 fn analysis_config(s: &Settings) -> AnalysisConfig {

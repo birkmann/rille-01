@@ -13,7 +13,7 @@ pub mod model;
 
 pub use arrived::{Arrived, ArrivedReader};
 pub use auth::Token;
-pub use client::{Client, Progress, Quality};
+pub use client::{Client, PER_PAGE, Page, Progress, Quality};
 pub use links::{Link, looks_like_link, parse as parse_link};
 pub use model::{Download, Named, Playlist, Track};
 

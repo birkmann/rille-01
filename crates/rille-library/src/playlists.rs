@@ -88,6 +88,43 @@ impl Library {
         }
     }
 
+    /// Replaces a playlist's entries with `tracks`, in order.
+    pub fn set_playlist_tracks(&mut self, playlist: PlaylistId, tracks: &[TrackId]) -> Result<()> {
+        for t in tracks {
+            ensure_track(&self.conn, *t)?;
+        }
+        self.edit_playlist(playlist, |list| {
+            *list = tracks.to_vec();
+            Ok(())
+        })
+    }
+
+    /// The local copy of a downloaded Beatport playlist, if it still exists.
+    pub fn beatport_playlist(&self, beatport_id: i64) -> Result<Option<PlaylistId>> {
+        Ok(self
+            .conn
+            .query_row("SELECT playlist FROM beatport_playlists WHERE beatport_id = ?1", [beatport_id], |r| r.get(0))
+            .optional()?)
+    }
+
+    /// Remembers `playlist` as the local copy of Beatport playlist
+    /// `beatport_id` (it goes when the local playlist is deleted).
+    pub fn set_beatport_playlist(&mut self, beatport_id: i64, playlist: PlaylistId) -> Result<()> {
+        node_kind(&self.conn, playlist)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO beatport_playlists (beatport_id, playlist) VALUES (?1, ?2)",
+            params![beatport_id, playlist],
+        )?;
+        Ok(())
+    }
+
+    /// `(Beatport playlist id, local playlist)` of every downloaded playlist.
+    pub fn beatport_playlists(&self) -> Result<Vec<(i64, PlaylistId)>> {
+        let mut stmt = self.conn.prepare("SELECT beatport_id, playlist FROM beatport_playlists")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
     /// Appends the `tracks` the playlist does not hold yet, in order.
     /// Returns how many were added.
     pub fn add_missing_to_playlist(&mut self, playlist: PlaylistId, tracks: &[TrackId]) -> Result<usize> {

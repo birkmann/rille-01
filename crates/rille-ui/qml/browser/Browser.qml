@@ -21,10 +21,53 @@ Item {
     readonly property int kindBeatportRecent: 8
     readonly property int kindBeatportPlaylist: 9
     readonly property int kindBeatportList: 10
+    // An artist's / a label's tracks, opened from a track's links.
+    readonly property int kindBeatportArtist: 11
+    readonly property int kindBeatportLabel: 12
     // Settings → Beatport.
     readonly property int beatportSettingsPage: 5
     readonly property bool beatportSearch: tracks.sourceKind === kindBeatportSearch
-    readonly property bool beatportMode: tracks.sourceKind >= kindBeatportSearch && tracks.sourceKind <= kindBeatportList
+    readonly property bool beatportMode: tracks.sourceKind >= kindBeatportSearch && tracks.sourceKind <= kindBeatportLabel
+    // Where an artist or label link came from, for the back button:
+    // [{ kind, id, title, row }].
+    property var history: []
+
+    // Opens the tracks of an artist or label (a track's link), newest first.
+    function openBeatportLink(kind, id, name) {
+        history = history.concat([{ kind: tracks.sourceKind, id: tracks.sourceId, title: sourceTitle, row: sourceRow }])
+        sourceRow = -1
+        sourceTitle = (kind === kindBeatportArtist ? "Artist · " : "Label · ") + name
+        tracks.sourceKind = kind
+        tracks.sourceId = id
+        tracks.refresh()
+        list.currentIndex = -1
+        list.positionViewAtBeginning()
+    }
+    function goBack() {
+        if (history.length === 0)
+            return
+        var h = history[history.length - 1]
+        history = history.slice(0, history.length - 1)
+        sourceRow = h.row
+        sourceTitle = h.title
+        tracks.sourceKind = h.kind
+        tracks.sourceId = h.id
+        tracks.refresh()
+        list.currentIndex = -1
+    }
+    // A click on a Beatport row's artist ("artist") or label ("label").
+    function openRowLink(row, which) {
+        var json = tracks.beatportLinks(row)
+        if (json.length === 0) {
+            AppController.status = "Looking up the track on Beatport…"
+            return
+        }
+        var links = JSON.parse(json)
+        if (which === "label" && links.label)
+            openBeatportLink(kindBeatportLabel, links.label.id, links.label.name)
+        else if (which === "artist" && links.artists.length > 0)
+            openBeatportLink(kindBeatportArtist, links.artists[0].id, links.artists[0].name)
+    }
     // Lists that come from Beatport's servers (reloadable, not analyzable).
     readonly property bool beatportRemote: beatportMode && tracks.sourceKind !== kindBeatportRecent
     // Beatport tracks of the list (or the selection) not downloaded yet.
@@ -285,6 +328,7 @@ Item {
             browser.settingsRequested(beatportSettingsPage)
             return
         }
+        history = []
         sourceRow = row
         sourcesOpen = false
         sourceTitle = kind === 3 ? tree.pathTextAt(row) : (kind === kindBeatportSearch ? "Beatport" : tree.labelAt(row))
@@ -308,6 +352,17 @@ Item {
             tracks.sourceId = token
             sourceRow = -1
             sourceTitle = AppController.tokenPathText(token)
+            tracks.refresh()
+        }
+        // `--beatport-search=<text>`: start in a Beatport search.
+        var query = AppController.beatportSearchArg()
+        if (query.length > 0) {
+            sourceRow = -1
+            sourceTitle = "Beatport"
+            search.text = query
+            tracks.search = query
+            tracks.sourceKind = kindBeatportSearch
+            tracks.sourceId = 0
             tracks.refresh()
         }
     }
@@ -516,7 +571,8 @@ Item {
                                 x: arrow.x + arrow.width + 2
                                 name: node.icon
                                 size: 14
-                                color: node.isSource ? Theme.sync : Theme.textDim
+                                // Beatport downloads (a downloaded playlist, Offline) in green.
+                                color: node.isSource ? Theme.sync : (node.icon === "check" ? Theme.play : (node.icon === "import" && node.kind === browser.kindBeatportPlaylist ? Theme.sync : Theme.textDim))
                             }
                             UiText {
                                 anchors.verticalCenter: parent.verticalCenter
@@ -536,7 +592,7 @@ Item {
                                 anchors.right: parent.right
                                 anchors.rightMargin: 6
                                 text: node.detail
-                                color: Theme.textFaint
+                                color: node.kind === browser.kindBeatportPlaylist && node.icon === "check" ? Theme.play : Theme.textFaint
                                 font.pixelSize: Theme.fontSmall
                             }
                             HoverHandler { id: nodeHover }
@@ -549,6 +605,7 @@ Item {
                                     if (mouse.button === Qt.RightButton) {
                                         treeMenu.kind = node.kind
                                         treeMenu.nodeId = node.nodeId
+                                        treeMenu.downloaded = node.icon === "check" || node.icon === "import"
                                         treeMenu.popup()
                                     } else {
                                         browser.openSource(node.index)
@@ -652,6 +709,13 @@ Item {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 28
                         spacing: 4
+                        DjButton {
+                            visible: browser.history.length > 0
+                            icon: "chevron-left"
+                            tip: "Back to " + (browser.history.length > 0 ? browser.history[browser.history.length - 1].title : "")
+                            implicitWidth: 28
+                            onClicked: browser.goBack()
+                        }
                         Icon {
                             name: browser.folderMode ? "folder" : (browser.beatportMode ? "cloud" : (tracks.sourceKind === 1 ? "list" : (tracks.sourceKind === 2 ? "clock" : (tracks.sourceKind === 6 ? "suggest" : "library"))))
                             size: 16
@@ -763,6 +827,12 @@ Item {
                         readonly property real rowsWidth: width - vbar.thickness
                         onRowsWidthChanged: browser.viewWidth = rowsWidth
                         Component.onCompleted: browser.viewWidth = rowsWidth
+                        // Long Beatport lists (search, artist, label) load on
+                        // when scrolled to the end.
+                        onAtYEndChanged: {
+                            if (atYEnd && count > 0 && tracks.more)
+                                tracks.loadMoreBeatport()
+                        }
                         headerPositioning: ListView.OverlayHeader
                         header: TrackHeader {
                             z: 2
@@ -826,8 +896,18 @@ Item {
                             }
                             onLoadRow: (row, deck) => tracks.loadRow(row, deck)
                             onRate: (id, stars) => AppController.setRating(id, stars)
+                            onLinkClicked: (row, which) => browser.openRowLink(row, which)
                             dragToken: row => tracks.pathToken(row)
                         }
+                    }
+                    // The next page is coming (scrolled to the end).
+                    UiText {
+                        Layout.fillWidth: true
+                        visible: tracks.more && list.atYEnd && list.count > 0
+                        horizontalAlignment: Text.AlignHCenter
+                        text: "Loading more from Beatport…"
+                        color: Theme.textDim
+                        font.pixelSize: Theme.fontSmall
                     }
                 }
             }
@@ -958,8 +1038,17 @@ Item {
         // Beatport page of a streamed or catalog track, else empty.
         readonly property string beatportUrl: tracks.beatportUrl(row)
         readonly property bool streamed: beatportUrl.length > 0
+        // The Beatport artists and label of the row (for "More from").
+        property var links: ({ artists: [], label: null })
+        property bool linksPending: false
+        // The row's file is on this computer (a Beatport track downloaded or cached).
+        property bool fileHere: false
         function open(r) {
             row = r
+            fileHere = tracks.hasFile(r)
+            var json = tracks.beatportLinks(r)
+            linksPending = streamed && json.length === 0
+            links = json.length > 0 ? JSON.parse(json) : { artists: [], label: null }
             popup()
         }
         StyledMenuItem { caption: true; text: tracks.selectionTitle(rowMenu.row) }
@@ -968,6 +1057,33 @@ Item {
         StyledMenuItem { iconName: "play"; text: "Load on deck C"; visible: AppController.deckCount === 4; height: visible ? implicitHeight : 0; onTriggered: tracks.loadRow(rowMenu.row, 2) }
         StyledMenuItem { iconName: "play"; text: "Load on deck D"; visible: AppController.deckCount === 4; height: visible ? implicitHeight : 0; onTriggered: tracks.loadRow(rowMenu.row, 3) }
         StyledMenuSeparator {}
+        // Beatport: the tracks of the artists and the label, newest first.
+        Repeater {
+            model: rowMenu.links.artists
+            StyledMenuItem {
+                required property var modelData
+                iconName: "music"
+                text: "More from " + modelData.name
+                onTriggered: browser.openBeatportLink(browser.kindBeatportArtist, modelData.id, modelData.name)
+            }
+        }
+        StyledMenuItem {
+            iconName: "list"
+            text: rowMenu.links.label ? "More on " + rowMenu.links.label.name : ""
+            visible: rowMenu.links.label !== null
+            height: visible ? implicitHeight : 0
+            onTriggered: browser.openBeatportLink(browser.kindBeatportLabel, rowMenu.links.label.id, rowMenu.links.label.name)
+        }
+        StyledMenuItem {
+            text: "Looking up artists and label…"
+            enabled: false
+            visible: rowMenu.linksPending
+            height: visible ? implicitHeight : 0
+        }
+        StyledMenuSeparator {
+            visible: rowMenu.streamed
+            height: visible ? implicitHeight : 0
+        }
         // Catalog tracks are analyzed when they are first loaded.
         StyledMenuItem { iconName: "analyze"; enabled: rowMenu.inCollection || !rowMenu.streamed; text: tracks.selectedCount > 1 ? "Analyze " + tracks.selectedCount + " tracks" : "Analyze"; onTriggered: tracks.analyzeSelected(false) }
         StyledMenuItem { iconName: "refresh"; enabled: rowMenu.inCollection || !rowMenu.streamed; text: "Analyze again"; onTriggered: tracks.analyzeSelected(true) }
@@ -1055,6 +1171,13 @@ Item {
         }
         StyledMenuItem {
             iconName: "folder"
+            text: "Show the file in the file manager"
+            visible: rowMenu.streamed && rowMenu.fileHere
+            height: visible ? implicitHeight : 0
+            onTriggered: AppController.showFile(tracks.pathToken(rowMenu.row))
+        }
+        StyledMenuItem {
+            iconName: "folder"
             text: "Show in Explorer"
             visible: !rowMenu.streamed
             height: visible ? implicitHeight : 0
@@ -1105,6 +1228,8 @@ Item {
         id: treeMenu
         property int kind: -1
         property var nodeId: 0
+        // A Beatport playlist that was downloaded (all or partly).
+        property bool downloaded: false
         StyledMenuItem {
             text: "Import folder"
             visible: treeMenu.kind === 3
@@ -1173,10 +1298,23 @@ Item {
             onTriggered: AppController.refreshBeatportPlaylists()
         }
         StyledMenuItem {
-            text: "Download playlist for offline use"
+            text: treeMenu.downloaded ? "Update the download (new tracks, order)" : "Download playlist for offline use"
             visible: treeMenu.kind === browser.kindBeatportPlaylist
             height: visible ? implicitHeight : 0
             onTriggered: AppController.downloadBeatportPlaylist(treeMenu.nodeId)
+        }
+        StyledMenuItem {
+            text: "Remove the download"
+            visible: treeMenu.kind === browser.kindBeatportPlaylist && treeMenu.downloaded
+            height: visible ? implicitHeight : 0
+            onTriggered: AppController.removeBeatportPlaylistDownload(treeMenu.nodeId)
+        }
+        StyledMenuItem {
+            text: "Open the downloads folder"
+            visible: (treeMenu.kind === browser.kindBeatportPlaylist && treeMenu.downloaded)
+                || (treeMenu.kind === browser.kindBeatportRecent && treeMenu.nodeId === 1)
+            height: visible ? implicitHeight : 0
+            onTriggered: AppController.openBeatportDownloads()
         }
         StyledMenuItem {
             text: "Open on beatport.com"

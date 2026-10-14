@@ -108,7 +108,7 @@ fn schema_create_and_reopen() {
     }
     let conn = rusqlite::Connection::open(&db).unwrap();
     let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     let mode: String = conn.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap();
     assert_eq!(mode, "wal");
 
@@ -554,6 +554,28 @@ fn three_tracks(env: &mut Env) -> Vec<i64> {
             env.lib.import_file(&p).unwrap()
         })
         .collect()
+}
+
+#[test]
+fn beatport_playlist_copies() {
+    let mut env = Env::new();
+    let t = three_tracks(&mut env);
+    let lib = &mut env.lib;
+    let folder = lib.playlist_named(None, "Beatport", true).unwrap();
+    let list = lib.playlist_named(Some(folder), "Warmup", false).unwrap();
+    lib.set_playlist_tracks(list, &[t[2], t[0]]).unwrap();
+    assert_eq!(lib.playlist_tracks(list).unwrap(), vec![t[2], t[0]]);
+    lib.set_playlist_tracks(list, &[t[1]]).unwrap();
+    assert_eq!(lib.playlist_tracks(list).unwrap(), vec![t[1]], "replaced, in Beatport's order");
+    assert!(lib.set_playlist_tracks(list, &[999]).is_err());
+
+    assert_eq!(lib.beatport_playlist(77).unwrap(), None);
+    lib.set_beatport_playlist(77, list).unwrap();
+    assert_eq!(lib.beatport_playlist(77).unwrap(), Some(list));
+    assert_eq!(lib.beatport_playlists().unwrap(), vec![(77, list)]);
+    // Deleting the local playlist forgets the link.
+    lib.delete_playlist(folder).unwrap();
+    assert_eq!(lib.beatport_playlist(77).unwrap(), None);
 }
 
 #[test]

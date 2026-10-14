@@ -139,6 +139,13 @@ CREATE TABLE file_meta (
     read_at INTEGER NOT NULL
 );
 "#,
+    r#"
+-- Downloaded Beatport playlists and their local copies.
+CREATE TABLE beatport_playlists (
+    beatport_id INTEGER PRIMARY KEY,
+    playlist INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE
+);
+"#,
 ];
 
 pub const VERSION: u32 = MIGRATIONS.len() as u32;

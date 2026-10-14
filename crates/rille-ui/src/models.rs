@@ -38,6 +38,8 @@ pub mod qobject {
         /// Rows of the current folder that are not in the collection yet.
         #[qproperty(i32, new_count, cxx_name = "newCount")]
         #[qproperty(QString, summary)]
+        /// A Beatport list has more pages (see `loadMoreBeatport`).
+        #[qproperty(bool, more)]
         type TrackListModel = super::TrackListRust;
 
         #[qinvokable]
@@ -162,6 +164,24 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "updateDownloads"]
         fn update_downloads(self: Pin<&mut TrackListModel>);
+
+        /// Fetches the next page of a long Beatport list (search, artist,
+        /// label).
+        #[qinvokable]
+        #[cxx_name = "loadMoreBeatport"]
+        fn load_more_beatport(self: &TrackListModel);
+
+        /// The artists and label of a Beatport row as JSON
+        /// (`{"artists":[{"id":…,"name":…}],"label":{…}|null}`), or empty
+        /// while they are looked up.
+        #[qinvokable]
+        #[cxx_name = "beatportLinks"]
+        fn beatport_links(self: &TrackListModel, row: i32) -> QString;
+
+        /// Whether `row`'s file is on this computer.
+        #[qinvokable]
+        #[cxx_name = "hasFile"]
+        fn has_file(self: &TrackListModel, row: i32) -> bool;
     }
 
     unsafe extern "RustQt" {
@@ -204,11 +224,12 @@ use rille_app::{AnalysisState, App, BeatportList, DownloadState, SortKey, Source
 use rille_core::GridFlags;
 use rille_library::{CoverSize, TrackRow};
 
+use crate::app_controller::json_str;
 use crate::deck_controller::key_color;
 use crate::global::{app, changed_since, changes_seq, folders_changed_since, path_token, token_path};
 use crate::tree_model::{
-    BP_OFFLINE, BP_PURCHASES, BP_TOP100, KIND_BEATPORT_LIST, KIND_BEATPORT_PLAYLIST, KIND_BEATPORT_RECENT,
-    KIND_BEATPORT_SEARCH,
+    BP_OFFLINE, BP_PURCHASES, BP_TOP100, KIND_BEATPORT_ARTIST, KIND_BEATPORT_LABEL, KIND_BEATPORT_LIST,
+    KIND_BEATPORT_PLAYLIST, KIND_BEATPORT_RECENT, KIND_BEATPORT_SEARCH,
 };
 
 const TRACK_ROLES: &[&str] = &[
@@ -266,6 +287,7 @@ pub struct TrackListRust {
     selected_count: i32,
     new_count: i32,
     summary: QString,
+    more: bool,
     rows: Vec<TrackRow>,
     /// Selected rows by file path (stable across refreshes and re-sorting).
     selected: HashSet<PathBuf>,
@@ -384,9 +406,24 @@ impl TrackListRust {
             (KIND_BEATPORT_LIST, BP_TOP100) => Some(BeatportList::Top100),
             (KIND_BEATPORT_LIST, BP_PURCHASES) => Some(BeatportList::Purchases),
             (KIND_BEATPORT_LIST, genre) => Some(BeatportList::Genre(genre)),
+            (KIND_BEATPORT_ARTIST, id) => Some(BeatportList::Artist(id)),
+            (KIND_BEATPORT_LABEL, id) => Some(BeatportList::Label(id)),
             _ => None,
         }
     }
+}
+
+/// "1,234".
+fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 impl qobject::TrackListModel {
@@ -399,9 +436,11 @@ impl qobject::TrackListModel {
             app.beatport_open(list.clone(), false);
         }
         let mut rows = match *self.source_kind() {
-            KIND_BEATPORT_SEARCH | KIND_BEATPORT_PLAYLIST | KIND_BEATPORT_LIST => {
-                app.beatport_rows(beatport.as_ref().expect("beatport list"))
-            }
+            KIND_BEATPORT_SEARCH
+            | KIND_BEATPORT_PLAYLIST
+            | KIND_BEATPORT_LIST
+            | KIND_BEATPORT_ARTIST
+            | KIND_BEATPORT_LABEL => app.beatport_rows(beatport.as_ref().expect("beatport list")),
             KIND_BEATPORT_RECENT => app.tracks(
                 if *self.source_id() == BP_OFFLINE { Source::BeatportOffline } else { Source::BeatportRecent },
                 &search,
@@ -437,7 +476,10 @@ impl qobject::TrackListModel {
                 rille_app::sort_rows(&mut rows, sort_key(&self.sort_key().to_string()), *self.descending());
             }
         }
-        if matches!(*self.source_kind(), KIND_BEATPORT_PLAYLIST | KIND_BEATPORT_LIST) {
+        if matches!(
+            *self.source_kind(),
+            KIND_BEATPORT_PLAYLIST | KIND_BEATPORT_LIST | KIND_BEATPORT_ARTIST | KIND_BEATPORT_LABEL
+        ) {
             let needle = search.to_lowercase();
             if !needle.is_empty() {
                 rows.retain(|r| {
@@ -457,6 +499,7 @@ impl qobject::TrackListModel {
             HashMap::new()
         };
         let tracks = format!("{} tracks, {:.1} hours", rows.len(), total_secs / 3600.0 + 0.0);
+        let status = beatport.as_ref().map(|l| app.beatport_status(l)).unwrap_or_default();
         let summary = match (*self.source_kind(), &beatport) {
             (3, _) => format!("{} files, {} not in the collection", rows.len(), new),
             (6, _) => match app.suggestion_reference() {
@@ -469,18 +512,25 @@ impl qobject::TrackListModel {
                 None => "Load or play a track to get suggestions".into(),
             },
             (_, Some(list)) => {
-                let status = app.beatport_status(list);
-                match (status.loading, status.error, list) {
-                    (true, _, _) => "Loading from Beatport…".to_string(),
+                // "100 of 4,834 tracks" while more pages can come.
+                let of = match status.total.filter(|t| status.more && *t > rows.len() as u64) {
+                    Some(t) => format!("{} of {} tracks", rows.len(), thousands(t)),
+                    None => tracks.clone(),
+                };
+                match (status.loading, status.error.clone(), list) {
+                    (true, _, _) if rows.is_empty() => "Loading from Beatport…".to_string(),
+                    (true, _, _) => format!("{of} · loading more…"),
                     (_, Some(e), _) => e,
                     (_, None, BeatportList::Search(q)) if q.is_empty() => {
                         "Search Beatport, or paste a beatport.com link".to_string()
                     }
-                    _ => tracks,
+                    _ if status.more => format!("{of} · scroll for more"),
+                    _ => of,
                 }
             }
             _ => tracks,
         };
+        self.as_mut().set_more(status.more);
         let seen = changes_seq();
         // The same tracks in the same order (e.g. a track was loaded or
         // imported): update the rows in place, so the view keeps its scroll
@@ -545,9 +595,8 @@ impl qobject::TrackListModel {
         // A folder file (id −1) loaded on a deck turns into a guest track:
         // the row takes its id, so its deck and played marks show.
         let fresh: Vec<TrackRow> = ids.iter().filter_map(|&id| app.track_row(id)).collect();
-        let same_file = |a: &Path, b: &Path| {
-            a == b || (a.file_name() == b.file_name() && a.canonicalize().is_ok_and(|c| c == b))
-        };
+        let same_file =
+            |a: &Path, b: &Path| a == b || (a.file_name() == b.file_name() && a.canonicalize().is_ok_and(|c| c == b));
         let adopted: Vec<(usize, TrackRow)> = self
             .rust()
             .rows
@@ -779,6 +828,30 @@ impl qobject::TrackListModel {
             }
         }
         self.emit_all_changed();
+    }
+
+    fn has_file(&self, row: i32) -> bool {
+        self.rust().rows.get(row.max(0) as usize).is_some_and(|r| r.path.is_file())
+    }
+
+    fn load_more_beatport(&self) {
+        if let (Some(app), Some(_)) = (app(), self.rust().beatport_list()) {
+            app.beatport_load_more();
+        }
+    }
+
+    fn beatport_links(&self, row: i32) -> QString {
+        let Some(app) = app() else { return QString::default() };
+        let bp = self.rust().rows.get(row.max(0) as usize).and_then(|r| r.beatport_id);
+        let Some(rille_app::beatport::BeatportLinks { artists, label }) = bp.and_then(|b| app.beatport_links(b)) else {
+            return QString::default();
+        };
+        let link = |(id, name): &(i64, String)| format!(r#"{{"id":{id},"name":{}}}"#, json_str(name));
+        QString::from(format!(
+            r#"{{"artists":[{}],"label":{}}}"#,
+            artists.iter().map(link).collect::<Vec<_>>().join(","),
+            label.as_ref().map_or("null".into(), link)
+        ))
     }
 
     fn add_selected_to_playlist(&self, playlist: i64) {

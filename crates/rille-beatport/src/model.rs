@@ -176,6 +176,9 @@ pub struct Playlist {
 pub struct SearchResults {
     #[serde(deserialize_with = "nullable")]
     pub tracks: Vec<Track>,
+    /// All matches (with `type=tracks`).
+    pub count: Option<u64>,
+    pub next: Option<String>,
 }
 
 /// Where to fetch a track's audio file.

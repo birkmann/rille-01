@@ -197,6 +197,26 @@ pub mod qobject {
         #[cxx_name = "cancelBeatportDownloads"]
         fn cancel_beatport_downloads(self: &AppController);
 
+        /// Lets a downloaded Beatport playlist go (files and local copy).
+        #[qinvokable]
+        #[cxx_name = "removeBeatportPlaylistDownload"]
+        fn remove_beatport_playlist_download(self: &AppController, playlist: i64);
+
+        /// Opens the folder with the Beatport downloads.
+        #[qinvokable]
+        #[cxx_name = "openBeatportDownloads"]
+        fn open_beatport_downloads(self: &AppController);
+
+        /// The folder with the Beatport downloads, for display.
+        #[qinvokable]
+        #[cxx_name = "beatportDownloadsFolder"]
+        fn beatport_downloads_folder(self: &AppController) -> QString;
+
+        /// Shows a file (path token) selected in the file manager.
+        #[qinvokable]
+        #[cxx_name = "showFile"]
+        fn show_file(self: &AppController, token: i64);
+
         /// Signs in to Beatport in the background (the password is not kept).
         #[qinvokable]
         #[cxx_name = "beatportLogin"]
@@ -441,6 +461,12 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "browseToken"]
         fn browse_token(self: &AppController) -> i64;
+
+        /// The text of `--beatport-search=<text>` (search Beatport at the
+        /// start, e.g. for screenshots), or empty.
+        #[qinvokable]
+        #[cxx_name = "beatportSearchArg"]
+        fn beatport_search_arg(self: &AppController) -> QString;
     }
 }
 
@@ -653,17 +679,58 @@ impl qobject::AppController {
             if b >= 1 << 30 { format!("{:.1} GB", b as f64 / f64::from(1 << 30)) } else { format!("{} MB", b >> 20) }
         };
         QString::from(format!(
-            "{} tracks · {}, of those {} kept offline ({})",
-            u.files,
-            size(u.bytes),
+            "Downloads: {} tracks · {}. Streaming cache: {} tracks · {}.",
             u.offline_files,
-            size(u.offline_bytes)
+            size(u.offline_bytes),
+            u.files,
+            size(u.bytes)
         ))
     }
 
     fn download_beatport_playlist(&self, playlist: i64) {
         if let Some(app) = app() {
             app.beatport_download_list(rille_app::BeatportList::Playlist(playlist));
+        }
+    }
+
+    fn remove_beatport_playlist_download(&self, playlist: i64) {
+        if let Some(app) = app() {
+            app.beatport_remove_playlist_download(playlist);
+        }
+    }
+
+    fn open_beatport_downloads(&self) {
+        let Some(app) = app() else { return };
+        let dir = app.beatport_downloads_folder();
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+    }
+
+    fn beatport_downloads_folder(&self) -> QString {
+        QString::from(app().map(|a| a.beatport_downloads_folder().display().to_string()).unwrap_or_default())
+    }
+
+    fn show_file(&self, token: i64) {
+        let Some(path) = token_path(token) else { return };
+        // The desktop's file manager selects the file (freedesktop
+        // FileManager1); without one, the folder opens.
+        let shown = std::process::Command::new("dbus-send")
+            .args([
+                "--session",
+                "--print-reply",
+                "--dest=org.freedesktop.FileManager1",
+                "--type=method_call",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+            ])
+            .arg(format!("array:string:{}", file_uri(&path)))
+            .arg("string:")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !shown && let Some(dir) = path.parent() {
+            let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
         }
     }
 
@@ -1432,6 +1499,12 @@ impl qobject::AppController {
             .map_or(-1, |p| crate::global::path_token(&p))
     }
 
+    fn beatport_search_arg(&self) -> QString {
+        QString::from(
+            std::env::args().find_map(|a| a.strip_prefix("--beatport-search=").map(str::to_owned)).unwrap_or_default(),
+        )
+    }
+
     fn has_arg(&self, name: &QString) -> bool {
         let flag = format!("--{name}");
         std::env::args().any(|a| a == flag)
@@ -1459,6 +1532,20 @@ impl qobject::AppController {
 
 fn fx_names() -> &'static [&'static str] {
     &["None", "Delay", "Reverb", "Filter", "Flanger", "Gater", "Beatmasher"]
+}
+
+/// A `file://` URL for a path, percent-encoding what URLs do not allow.
+fn file_uri(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut out = String::from("file://");
+    for &b in path.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 pub fn json_str(s: &str) -> String {

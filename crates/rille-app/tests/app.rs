@@ -152,12 +152,19 @@ fn streamed_tracks_live_apart_from_the_collection() {
     let mut s = app.settings();
     s.background_analysis = false;
     app.set_settings(s);
+    // The download moves out of the cache to the downloads folder, named
+    // after the track.
+    let moved = paths.beatport_downloads().join("Someone - Offline.wav");
+    wait_for("downloads folder", 10.0, || moved.exists() && !offline.exists());
     app.import_paths(vec![music.join("local.wav")], false);
-    wait_for("import", 20.0, || app.track_count() == 1);
+    // The collection: the local file and the download (not tracks only streamed).
+    wait_for("import", 20.0, || app.track_count() == 2);
     assert_eq!((app.streamed_count(), app.offline_count()), (3, 1));
     let collection = app.tracks(Source::Collection, "", SortKey::Artist, false);
-    assert_eq!(collection.len(), 1);
-    assert_eq!(collection[0].beatport_id, None);
+    let mut ids: Vec<_> = collection.iter().map(|r| r.beatport_id).collect();
+    ids.sort();
+    assert_eq!(ids, [None, Some(43)]);
+    assert!(collection.iter().any(|r| r.path == moved));
     let recent = app.tracks(Source::BeatportRecent, "", SortKey::Title, false);
     assert_eq!(recent.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(), ["Offline", "Other", "Streamed"]);
     let kept = app.tracks(Source::BeatportOffline, "", SortKey::Artist, false);
@@ -182,18 +189,18 @@ fn streamed_tracks_live_apart_from_the_collection() {
     wait_for("search", 10.0, || !app.beatport_status(&search).loading);
     assert!(app.beatport_status(&search).error.is_some_and(|e| e.contains("not signed in")));
 
-    // Clearing the streamed files keeps the offline download and the
-    // file on the deck; the cleared track stays in the collection.
+    // Clearing the cache keeps the download and the file on the deck; the
+    // cleared track is still listed as streamed.
     let usage = app.beatport_cache_usage();
-    assert_eq!((usage.files, usage.offline_files), (3, 1));
+    assert_eq!((usage.files, usage.offline_files), (2, 1));
     app.clear_beatport_cache(false);
-    assert!(cached.exists() && offline.exists() && !other.exists());
+    assert!(cached.exists() && moved.exists() && !other.exists());
     let other_row = app.tracks(Source::BeatportRecent, "Other", SortKey::Title, false);
     assert!(other_row[0].missing, "out of the cache, downloads again when loaded");
-    // Removing the download lets the offline track go too.
+    // Removing the download lets it go: file deleted, out of the collection.
     app.beatport_remove_downloads(&[kept[0].id]);
-    assert!(!offline.exists());
-    assert_eq!(app.offline_count(), 0);
+    assert!(!moved.exists());
+    assert_eq!((app.offline_count(), app.track_count()), (0, 1));
     assert!(app.tracks(Source::BeatportOffline, "", SortKey::Artist, false).is_empty());
     // Signed out, nothing is queued.
     app.beatport_download(vec![99]);
@@ -365,6 +372,102 @@ fn remix_deck_load_trigger_capture_and_persist() {
     app.set_settings(s);
     assert!(!app.is_remix_deck(2));
     wait_for("track deck", 5.0, || !app.snapshot().decks[2].remix);
+    app.shutdown();
+}
+
+/// Against the real Beatport API: a playlist download becomes a local
+/// playlist (cancelled at once, so little is downloaded); see
+/// [`beatport_live_download_queue_and_covers`].
+#[test]
+#[ignore]
+fn beatport_live_playlist_copy() {
+    let Some(token) = std::env::var_os("RILLE_BEATPORT_TOKEN") else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::under(dir.path());
+    paths.create().unwrap();
+    std::fs::copy(token, paths.beatport_token()).unwrap();
+    let app = start(dir.path());
+    let mut s = app.settings();
+    s.background_analysis = false;
+    s.beatport_quality = "high".into();
+    app.set_settings(s);
+    app.beatport_refresh_playlists();
+    wait_for("playlists", 30.0, || !app.beatport_playlists().is_empty());
+    let p = app.beatport_playlists().into_iter().min_by_key(|p| p.track_count.unwrap_or(u32::MAX)).unwrap();
+    let n = p.track_count.unwrap() as usize;
+
+    app.beatport_download_list(BeatportList::Playlist(p.id));
+    wait_for("local copy", 60.0, || app.beatport_playlist_offline(p.id).is_some());
+    app.beatport_cancel_downloads();
+    wait_for("stopped", 120.0, || !app.beatport_downloads().running);
+    let (done, all) = app.beatport_playlist_offline(p.id).unwrap();
+    assert!(all + 2 >= n && all > 0 && done < all, "{done}/{all} of {n}");
+    // Playlists → Beatport → the playlist's name, with all its tracks.
+    let folder = app.playlists().into_iter().find(|f| f.name == "Beatport" && f.is_folder).expect("Beatport folder");
+    let copy = folder.children.iter().find(|c| c.name == p.name).expect("local playlist");
+    assert_eq!(copy.track_count, all);
+
+    // Removing the download deletes the copy and the files.
+    app.beatport_remove_playlist_download(p.id);
+    assert_eq!(app.beatport_playlist_offline(p.id), None);
+    assert_eq!(app.offline_count(), 0);
+    let left = std::fs::read_dir(paths.beatport_downloads()).map_or(0, |d| d.count());
+    assert_eq!(left, 0, "downloaded files removed");
+    app.shutdown();
+}
+
+/// Against the real Beatport API (lists only, nothing downloaded); see
+/// [`beatport_live_download_queue_and_covers`].
+#[test]
+#[ignore]
+fn beatport_live_paging_and_links() {
+    let Some(token) = std::env::var_os("RILLE_BEATPORT_TOKEN") else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::under(dir.path());
+    paths.create().unwrap();
+    std::fs::copy(token, paths.beatport_token()).unwrap();
+    let app = start(dir.path());
+    let open = |list: &BeatportList| {
+        app.beatport_open(list.clone(), false);
+        wait_for("list", 30.0, || !app.beatport_status(list).loading);
+        assert_eq!(app.beatport_status(list).error, None);
+    };
+
+    // A search pages on past the first 100.
+    let search = BeatportList::Search("dustin zahn".into());
+    open(&search);
+    let first = app.beatport_rows(&search);
+    let status = app.beatport_status(&search);
+    assert_eq!(first.len(), 100);
+    assert!(status.more && status.total.is_some_and(|t| t > 1000), "{status:?}");
+    app.beatport_load_more();
+    wait_for("page 2", 30.0, || !app.beatport_status(&search).loading);
+    // Beatport's search pages overlap a little; each track is listed once.
+    let both = app.beatport_rows(&search);
+    let unique: std::collections::HashSet<_> = both.iter().map(|r| r.beatport_id).collect();
+    assert!(both.len() > 150 && unique.len() == both.len(), "{} rows, {} unique", both.len(), unique.len());
+
+    // The first track's artist and label lead to their tracks, newest first.
+    let bp = first[0].beatport_id.unwrap();
+    let rille_app::beatport::BeatportLinks { artists, label } =
+        app.beatport_links(bp).expect("listed tracks are known");
+    assert!(!artists.is_empty());
+    let artist = BeatportList::Artist(artists[0].0);
+    open(&artist);
+    assert!(!app.beatport_rows(&artist).is_empty());
+    let label = BeatportList::Label(label.expect("label").0);
+    open(&label);
+    assert!(!app.beatport_rows(&label).is_empty());
+
+    // A long playlist comes whole (more than the 500 of before).
+    app.beatport_refresh_playlists();
+    wait_for("playlists", 30.0, || !app.beatport_playlists().is_empty());
+    if let Some(p) = app.beatport_playlists().into_iter().find(|p| p.track_count.is_some_and(|n| n > 500)) {
+        let list = BeatportList::Playlist(p.id);
+        open(&list);
+        let n = app.beatport_rows(&list).len();
+        assert!(n > 500 && n as u32 + 5 >= p.track_count.unwrap(), "{n} of {:?}", p.track_count);
+    }
     app.shutdown();
 }
 

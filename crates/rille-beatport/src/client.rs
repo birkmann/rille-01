@@ -15,9 +15,20 @@ use crate::links::Link;
 use crate::model::{Download, Named, Paginated, Playlist, PlaylistItem, SearchResults, Track};
 use crate::{API, Error, Result, api_error, net};
 
-/// Lists stop after this many tracks.
-const MAX_TRACKS: usize = 500;
-const PER_PAGE: usize = 100;
+/// Whole lists (playlists, purchases) stop after this many tracks.
+const MAX_TRACKS: usize = 5000;
+/// Tracks per page; also the most the API returns per page.
+pub const PER_PAGE: usize = 100;
+
+/// One page of a long list (search, an artist's or label's tracks).
+#[derive(Clone, Debug, Default)]
+pub struct Page {
+    pub tracks: Vec<Track>,
+    /// All matches, when the API says.
+    pub total: Option<u64>,
+    /// There is a next page.
+    pub more: bool,
+}
 /// Parallel connections per download.
 const PARTS: u64 = 8;
 /// Smaller files (and parts) are not worth splitting further.
@@ -196,16 +207,45 @@ impl Client {
     /// Tracks available for streaming, best match first. Without `type`
     /// the API mixes in releases and artists and returns only a few tracks.
     pub fn search(&self, query: &str) -> Result<Vec<Track>> {
+        Ok(self.search_page(query, 1)?.tracks)
+    }
+
+    /// Page `page` (from 1) of a search, [`PER_PAGE`] tracks.
+    pub fn search_page(&self, query: &str, page: u32) -> Result<Page> {
         let r: SearchResults = self.get(
             "/catalog/search/",
             &[
                 ("q", query.trim().to_owned()),
                 ("type", "tracks".into()),
+                ("page", page.to_string()),
                 ("per_page", PER_PAGE.to_string()),
                 ("is_available_for_streaming", "true".into()),
             ],
         )?;
-        Ok(r.tracks)
+        Ok(Page { more: r.next.is_some() && !r.tracks.is_empty(), total: r.count, tracks: r.tracks })
+    }
+
+    /// Page `page` (from 1) of an artist's tracks, newest first.
+    pub fn artist_tracks(&self, artist: i64, page: u32) -> Result<Page> {
+        self.tracks_page(("artist_id", artist), page)
+    }
+
+    /// Page `page` (from 1) of a label's tracks, newest first.
+    pub fn label_tracks(&self, label: i64, page: u32) -> Result<Page> {
+        self.tracks_page(("label_id", label), page)
+    }
+
+    fn tracks_page(&self, (key, id): (&str, i64), page: u32) -> Result<Page> {
+        let p: Paginated<Track> = self.get(
+            "/catalog/tracks/",
+            &[
+                (key, id.to_string()),
+                ("order_by", "-publish_date".into()),
+                ("page", page.to_string()),
+                ("per_page", PER_PAGE.to_string()),
+            ],
+        )?;
+        Ok(Page { more: p.next.is_some() && !p.results.is_empty(), total: p.count, tracks: p.results })
     }
 
     /// Beatport's Top 100, overall or of one genre.

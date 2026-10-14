@@ -17,6 +17,8 @@ Rectangle {
     signal pressedRow(int row, int mods, int button)
     signal loadRow(int row, int deck)
     signal rate(var id, int stars)
+    // A Beatport row's artist or label was clicked ("artist" / "label").
+    signal linkClicked(int row, string which)
 
     // Set by the browser's row size (compact, medium, large).
     property int rowHeight: 30
@@ -99,14 +101,30 @@ Rectangle {
     Component {
         id: textCell
         UiText {
+            id: cellText
             property var col: ({})
+            // Beatport rows: the artist and label lead to their tracks.
+            readonly property bool link: row.model.streamed && (col.key === "artist" || col.key === "label") && text.length > 0
             leftPadding: 6
             rightPadding: 6
             text: col.role ? (row.model[col.role] === undefined ? "" : String(row.model[col.role])) : ""
             horizontalAlignment: col.align === "right" ? Text.AlignRight : (col.align === "center" ? Text.AlignHCenter : Text.AlignLeft)
-            color: col.tone === "faint" ? Theme.textFaint : (col.tone === "dim" ? Theme.textDim : Theme.text)
+            color: cellText.link && linkHover.hovered ? Theme.sync : (col.tone === "faint" ? Theme.textFaint : (col.tone === "dim" ? Theme.textDim : Theme.text))
             font.pixelSize: col.tone === "faint" ? Theme.fontSmall : Theme.fontNormal
+            font.underline: cellText.link && linkHover.hovered
             elide: col.key === "file" || col.key === "path" ? Text.ElideMiddle : Text.ElideRight
+            HoverHandler {
+                id: linkHover
+                enabled: cellText.link
+                cursorShape: Qt.PointingHandCursor
+            }
+            TapHandler {
+                enabled: cellText.link
+                acceptedButtons: Qt.LeftButton
+                // The row still gets the press (selection, dragging).
+                grabPermissions: PointerHandler.ApprovesTakeOverByAnything
+                onTapped: row.linkClicked(row.index, cellText.col.key)
+            }
         }
     }
     Component {

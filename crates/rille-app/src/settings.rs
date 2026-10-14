@@ -15,11 +15,14 @@ pub struct Paths {
     pub cache: PathBuf,
     /// Recordings of the main mix (created on the first recording).
     pub recordings: PathBuf,
+    /// The user's music folder (downloads go below it).
+    pub music: PathBuf,
 }
 
 impl Paths {
     /// XDG locations: `~/.config/rille`, `~/.local/share/rille`,
-    /// `~/.cache/rille`; recordings in the music folder's `rille recordings`.
+    /// `~/.cache/rille`, and the desktop's music folder (`~/Music`);
+    /// recordings in the music folder's `rille recordings`.
     pub fn xdg() -> Self {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
         let xdg = |var: &str, fallback: &str| {
@@ -40,6 +43,7 @@ impl Paths {
             data: xdg("XDG_DATA_HOME", ".local/share"),
             cache: xdg("XDG_CACHE_HOME", ".cache"),
             recordings: music.join("rille recordings"),
+            music,
         }
     }
 
@@ -50,7 +54,13 @@ impl Paths {
             data: root.join("data"),
             cache: root.join("cache"),
             recordings: root.join("recordings"),
+            music: root.join("music"),
         }
+    }
+
+    /// Beatport tracks downloaded for offline use, with readable names.
+    pub fn beatport_downloads(&self) -> PathBuf {
+        self.music.join("Beatport")
     }
 
     pub fn create(&self) -> std::io::Result<()> {

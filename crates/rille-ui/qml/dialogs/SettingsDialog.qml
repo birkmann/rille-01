@@ -854,8 +854,13 @@ Popup {
                         SettingsSection {
                             title: "Offline storage"
                             SettingRow {
-                                label: "Storage limit"
-                                hint: "Every streamed track stays on disk, so it loads at once next time and plays without a connection. When the limit is reached, the least recently played make room, never the ones you downloaded for offline use. Cues, beatgrids and analysis are kept either way."
+                                label: "Downloads"
+                                hint: "Tracks and playlists you download for offline use go here, named \"Artist - Title\". They join the Track Collection, downloaded playlists become playlists under Playlists → Beatport, and all of it stays when you sign out or have no connection. " + AppController.beatportDownloadsFolder()
+                                DjButton { icon: "folder"; text: "OPEN FOLDER"; onClicked: AppController.openBeatportDownloads() }
+                            }
+                            SettingRow {
+                                label: "Streaming cache"
+                                hint: "Tracks you only stream stay on disk too, so they load at once next time. When the cache reaches this size, the least recently played make room. Downloads do not count. Cues, beatgrids and analysis are kept either way."
                                 StyledSpin {
                                     from: 1; to: 500
                                     suffix: "GB"
@@ -870,8 +875,8 @@ Popup {
                                     spacing: 6
                                     DjButton {
                                         icon: "trash"
-                                        text: "CLEAR STREAMED"
-                                        tip: "Delete the files of streamed tracks you did not download for offline use (not those on a deck); they download again when loaded"
+                                        text: "CLEAR CACHE"
+                                        tip: "Delete the cached files of tracks you only streamed (not those on a deck); they download again when loaded. Downloads stay."
                                         onClicked: {
                                             AppController.clearBeatportCache(false)
                                             dialog.cacheText = AppController.beatportCacheText()
@@ -890,7 +895,7 @@ Popup {
                             }
                             UiText {
                                 Layout.fillWidth: true
-                                text: "Download a playlist for offline use: right-click it in the browser, or DOWNLOAD ALL above any Beatport list. A green check marks downloaded tracks."
+                                text: "Download a playlist for offline use: right-click it in the browser, or DOWNLOAD ALL above any Beatport list. A green check marks downloaded tracks and playlists."
                                 color: Theme.textDim
                                 wrapMode: Text.WordWrap
                             }

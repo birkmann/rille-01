@@ -24,7 +24,7 @@ Rectangle {
 
     function indexAt(x) {
         var acc = 0
-        for (var i = 0; i < columns.length; i++) {
+        for (let i = 0; i < columns.length; i++) {
             acc += columns[i].width
             if (x < acc - columns[i].width / 2)
                 return i
@@ -33,7 +33,7 @@ Rectangle {
     }
     function edgeX(i) {
         var acc = 0
-        for (var k = 0; k < i && k < columns.length; k++)
+        for (let k = 0; k < i && k < columns.length; k++)
             acc += columns[k].width
         return acc
     }
@@ -98,7 +98,7 @@ Rectangle {
                     }
                     onReleased: mouse => {
                         if (dragging) {
-                            var to = header.indexAt(cell.x + mouse.x)
+                            let to = header.indexAt(cell.x + mouse.x)
                             header.dropIndex = -1
                             if (to !== cell.index && to !== cell.index + 1)
                                 header.moved(cell.index, to > cell.index ? to - 1 : to)

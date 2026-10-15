@@ -147,11 +147,11 @@ Item {
         var out = []
         var fixed = 0
         var flex = 0
-        for (var i = 0; i < activeLayout.length; i++) {
-            var def = columnDef(activeLayout[i].key)
+        for (let i = 0; i < activeLayout.length; i++) {
+            let def = columnDef(activeLayout[i].key)
             if (!def)
                 continue
-            var c = Object.assign({}, def)
+            let c = Object.assign({}, def)
             c.width = setWidth(activeLayout[i])
             if (c.flex)
                 flex += c.width
@@ -160,7 +160,7 @@ Item {
             out.push(c)
         }
         var scale = flex > 0 ? Math.max(1, (viewWidth - fixed) / flex) : 1
-        for (var k = 0; k < out.length; k++) {
+        for (let k = 0; k < out.length; k++) {
             if (out[k].flex)
                 out[k].width = Math.floor(out[k].width * scale)
         }
@@ -168,7 +168,7 @@ Item {
     }
     readonly property real tableWidth: {
         var w = 0
-        for (var i = 0; i < columns.length; i++)
+        for (let i = 0; i < columns.length; i++)
             w += columns[i].width
         return Math.max(w, viewWidth)
     }
@@ -182,7 +182,7 @@ Item {
         AppController.setSetting("browser_row_size", String(size))
     }
     function columnDef(key) {
-        for (var i = 0; i < allColumns.length; i++)
+        for (let i = 0; i < allColumns.length; i++)
             if (allColumns[i].key === key)
                 return allColumns[i]
         return null
@@ -230,8 +230,8 @@ Item {
     function resizeColumn(i, shown) {
         var fixed = 0
         var otherFlex = 0
-        for (var j = 0; j < layout.length; j++) {
-            var def = columnDef(layout[j].key)
+        for (let j = 0; j < layout.length; j++) {
+            let def = columnDef(layout[j].key)
             if (!def)
                 continue
             if (!def.flex)
@@ -242,9 +242,9 @@ Item {
         var set = shown
         var mine = columnDef(layout[i].key)
         if (mine && mine.flex && otherFlex > 0) {
-            var avail = viewWidth - fixed
+            let avail = viewWidth - fixed
             if (avail - shown > 20) {
-                var candidate = shown * otherFlex / (avail - shown)
+                let candidate = shown * otherFlex / (avail - shown)
                 // Only while the table is stretched (no sideways scrolling).
                 if (avail / (otherFlex + candidate) >= 1)
                     set = candidate
@@ -306,7 +306,7 @@ Item {
     function syncSourceRow() {
         if (sourceRow < 0 && folderMode)
             return
-        for (var r = 0; r < tree.count; r++) {
+        for (let r = 0; r < tree.count; r++) {
             if (tree.kindAt(r) === tracks.sourceKind && tree.idAt(r) === tracks.sourceId) {
                 sourceRow = r
                 return
@@ -378,7 +378,7 @@ Item {
             } else {
                 columnMenu.popup()
             }
-            browser.Window.window.grabItem = m.background.parent
+            (browser.Window.window as Main).grabItem = m.background.parent
         }
     }
 
@@ -439,7 +439,7 @@ Item {
                 browser.loadSelected(Number(a.substring(5)))
             } else if (a.startsWith("cell:")) {
                 // "cell:<deck>:<cell>": the selected track into a remix cell.
-                var parts = a.split(":")
+                let parts = a.split(":")
                 if (list.currentIndex >= 0)
                     tracks.loadRowToCell(list.currentIndex, Number(parts[1]), Number(parts[2]))
             } else if (a.startsWith("drum:")) {
@@ -867,7 +867,7 @@ Item {
                                 tracks.selectAll()
                                 event.accepted = true
                             } else if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
-                                var next = currentIndex + (event.key === Qt.Key_Up ? -1 : 1)
+                                let next = currentIndex + (event.key === Qt.Key_Up ? -1 : 1)
                                 if (next >= 0 && next < count) {
                                     currentIndex = next
                                     tracks.select(next, (event.modifiers & Qt.ShiftModifier) ? 2 : 0)

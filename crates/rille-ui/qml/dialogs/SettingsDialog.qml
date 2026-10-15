@@ -626,7 +626,7 @@ Popup {
                                     id: portRow
                                     required property string modelData
                                     readonly property var entry: {
-                                        for (var i = 0; i < dialog.midi.connected.length; i++)
+                                        for (let i = 0; i < dialog.midi.connected.length; i++)
                                             if (dialog.midi.connected[i].port === portRow.modelData)
                                                 return dialog.midi.connected[i]
                                         return null

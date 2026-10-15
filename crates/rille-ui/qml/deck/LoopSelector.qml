@@ -22,7 +22,7 @@ Rectangle {
             press("loop_toggle")
             return
         }
-        for (var k = 0; k < Math.abs(d); k++)
+        for (let k = 0; k < Math.abs(d); k++)
             press(d > 0 ? "loop_size_up" : "loop_size_down")
         if (!dc.loopActive)
             press("loop_toggle")

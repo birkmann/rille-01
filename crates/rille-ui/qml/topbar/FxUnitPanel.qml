@@ -51,7 +51,7 @@ Rectangle {
                     currentIndex: panel.fx.effects[slot.index]
                     onActivated: idx => {
                         var d = idx - panel.fx.effects[slot.index]
-                        for (var i = 0; i < Math.abs(d); i++)
+                        for (let i = 0; i < Math.abs(d); i++)
                             AppController.nudge(panel.prefix + "select." + (slot.index + 1), d > 0 ? 1 : -1)
                     }
                 }

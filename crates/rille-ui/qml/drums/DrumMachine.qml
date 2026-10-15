@@ -220,7 +220,7 @@ Rectangle {
         }
         function stepAt(x, y) {
             var first = y > lineHeight + groupGap / 2 ? perLine * Math.min(lines - 1, Math.floor((y + groupGap / 2) / (lineHeight + groupGap))) : 0
-            for (var s = first; s < first + perLine - 1; s++) {
+            for (let s = first; s < first + perLine - 1; s++) {
                 if (x < stepX(s) + stepWidth + 1.5)
                     return s
             }

@@ -50,7 +50,7 @@ Rectangle {
             return dc.analyzing ? "Beatgrid: analyzing…" : "No beatgrid yet: the track has not been analyzed."
         var lines = [dc.gridLocked ? "Beatgrid locked: re-analysis keeps it." : (dc.gridText.length ? "Beatgrid needs a check:" : "Beatgrid OK.")]
         var notes = dc.gridText.length ? dc.gridText.split(", ") : []
-        for (var i = 0; i < notes.length; i++)
+        for (let i = 0; i < notes.length; i++)
             lines.push("•  " + (gridNoteHelp[notes[i]] || notes[i]))
         lines.push("Click to open the grid editor.")
         return lines.join("\n")
@@ -344,7 +344,7 @@ Rectangle {
                         id: wave
                         anchors.fill: parent // qmllint disable unqualified
                         anchors.margins: 1
-                        deck: deck.dc.deck
+                        deck: deck.dc.deck // qmllint disable id-shadows-member
                         seconds: 8
                     }
                     FrameAnimation {
@@ -675,7 +675,7 @@ Rectangle {
                     id: pad
                     required property int index
                     readonly property var cue: {
-                        for (var i = 0; i < deck.hotcues.length; i++)
+                        for (let i = 0; i < deck.hotcues.length; i++)
                             if (deck.hotcues[i].slot === index)
                                 return deck.hotcues[i]
                         return null

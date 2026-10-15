@@ -30,10 +30,10 @@ ApplicationWindow {
     font.family: Theme.fontFamily
     font.pixelSize: Theme.fontNormal
 
-    DeckController { id: deckA; deck: 0 }
-    DeckController { id: deckB; deck: 1 }
-    DeckController { id: deckC; deck: 2 }
-    DeckController { id: deckD; deck: 3 }
+    DeckController { id: dcA; deck: 0 }
+    DeckController { id: dcB; deck: 1 }
+    DeckController { id: dcC; deck: 2 }
+    DeckController { id: dcD; deck: 3 }
 
     // Settings → Decks: A/C stacked on the left, B/D on the right.
     readonly property bool fourDecks: AppController.deckCount === 4
@@ -63,11 +63,11 @@ ApplicationWindow {
         running: true
         onTriggered: {
             AppController.tick()
-            deckA.refresh()
-            deckB.refresh()
+            dcA.refresh()
+            dcB.refresh()
             if (window.fourDecks) {
-                deckC.refresh()
-                deckD.refresh()
+                dcC.refresh()
+                dcD.refresh()
             }
         }
     }
@@ -210,20 +210,20 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     spacing: Theme.gap
-                    Deck { dc: deckA; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: !deckA.remix && window.deckShown(0); Layout.fillWidth: true; Layout.fillHeight: true }
-                    RemixDeck { dc: deckA; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: deckA.remix && window.deckShown(0); Layout.fillWidth: true; Layout.fillHeight: true }
-                    Deck { dc: deckC; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && !deckC.remix && window.deckShown(2); Layout.fillWidth: true; Layout.fillHeight: true }
-                    RemixDeck { dc: deckC; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && deckC.remix && window.deckShown(2); Layout.fillWidth: true; Layout.fillHeight: true }
+                    Deck { dc: dcA; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: !dcA.remix && window.deckShown(0); Layout.fillWidth: true; Layout.fillHeight: true }
+                    RemixDeck { dc: dcA; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: dcA.remix && window.deckShown(0); Layout.fillWidth: true; Layout.fillHeight: true }
+                    Deck { dc: dcC; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && !dcC.remix && window.deckShown(2); Layout.fillWidth: true; Layout.fillHeight: true }
+                    RemixDeck { dc: dcC; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && dcC.remix && window.deckShown(2); Layout.fillWidth: true; Layout.fillHeight: true }
                 }
                 // Settings → Audio: hidden when a controller does the mixing.
                 Mixer {
                     visible: !AppController.mixerHidden && !window.mobile
                     Layout.row: 0
                     Layout.column: 1
-                    deckA: deckA
-                    deckB: deckB
-                    deckC: deckC
-                    deckD: deckD
+                    deckA: dcA
+                    deckB: dcB
+                    deckC: dcC
+                    deckD: dcD
                     fourDecks: window.fourDecks
                     Layout.preferredWidth: window.mixerWidth
                     Layout.fillWidth: false
@@ -236,10 +236,10 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     spacing: Theme.gap
-                    Deck { dc: deckB; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: !deckB.remix && window.deckShown(1); Layout.fillWidth: true; Layout.fillHeight: true }
-                    RemixDeck { dc: deckB; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: deckB.remix && window.deckShown(1); Layout.fillWidth: true; Layout.fillHeight: true }
-                    Deck { dc: deckD; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && !deckD.remix && window.deckShown(3); Layout.fillWidth: true; Layout.fillHeight: true }
-                    RemixDeck { dc: deckD; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && deckD.remix && window.deckShown(3); Layout.fillWidth: true; Layout.fillHeight: true }
+                    Deck { dc: dcB; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: !dcB.remix && window.deckShown(1); Layout.fillWidth: true; Layout.fillHeight: true }
+                    RemixDeck { dc: dcB; compact: window.mobile ? deckArea.tight : window.fourDecks; visible: dcB.remix && window.deckShown(1); Layout.fillWidth: true; Layout.fillHeight: true }
+                    Deck { dc: dcD; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && !dcD.remix && window.deckShown(3); Layout.fillWidth: true; Layout.fillHeight: true }
+                    RemixDeck { dc: dcD; compact: window.mobile ? deckArea.tight : true; visible: window.fourDecks && dcD.remix && window.deckShown(3); Layout.fillWidth: true; Layout.fillHeight: true }
                 }
             }
 
@@ -281,17 +281,17 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 sourceComponent: MobileMixerPage {
-                    deckA: deckA
-                    deckB: deckB
-                    deckC: deckC
-                    deckD: deckD
+                    deckA: dcA
+                    deckB: dcB
+                    deckC: dcC
+                    deckD: dcD
                     fourDecks: window.fourDecks
                 }
             }
 
             MiniDeckStrip {
                 visible: window.mobile && window.tab !== 0
-                decks: window.fourDecks ? [deckA, deckB, deckC, deckD] : [deckA, deckB]
+                decks: window.fourDecks ? [dcA, dcB, dcC, dcD] : [dcA, dcB]
                 Layout.fillWidth: true
                 Layout.preferredHeight: Theme.miniStripHeight
                 onDeckRequested: d => {
@@ -353,12 +353,12 @@ ApplicationWindow {
         // `--tab-mixer`, `--tab-drums`, `--tab-library`: start on a view of
         // the mobile layout (screenshots).
         var tabs = ["mixer", "drums", "library"]
-        for (var i = 0; i < tabs.length; i++) {
+        for (let i = 0; i < tabs.length; i++) {
             if (AppController.hasArg("tab-" + tabs[i]))
                 window.tab = i + 1
         }
         // `--settings` (or `--settings1`…`--settings4` for a page) opens the settings.
-        for (var p = 0; p < settings.pages.length; p++) {
+        for (let p = 0; p < settings.pages.length; p++) {
             if (AppController.hasArg(p === 0 ? "settings" : "settings" + p)) {
                 settings.page = p
                 settings.open()

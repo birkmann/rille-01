@@ -15,7 +15,11 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/rille/ui"
-cp "$gen/qmldir" "$gen/plugin.qmltypes" "$tmp/rille/ui/"
+cp "$gen/qmldir" "$tmp/rille/ui/"
+# qmltyperegistrar runs without Qt's foreign types, so it appends opaque stubs
+# for QString, double, … that hide the built-in string/number members from
+# qmllint (Qt >= 6.12: "Member "length" not found on type "QString"").
+grep -v 'isTypeOpaque: true' "$gen/plugin.qmltypes" > "$tmp/rille/ui/plugin.qmltypes"
 ln -s "$PWD/crates/rille-ui/qml" "$tmp/rille/ui/qml"
 
 qmllint="${QMLLINT:-/usr/lib/qt6/bin/qmllint}"

@@ -1341,6 +1341,32 @@ impl App {
         self.library.lock().expect("library lock").history_sessions().unwrap_or_default()
     }
 
+    /// The session plays are logged to, once one track has played.
+    pub fn current_history_session(&self) -> Option<i64> {
+        *self.history_session.lock().expect("history lock")
+    }
+
+    pub fn rename_history_session(&self, session: i64, name: &str) {
+        let _ = self.library.lock().expect("library lock").rename_history_session(session, name);
+        self.notify(UiEvent::LibraryChanged);
+    }
+
+    /// Deleting the running session starts a new one at the next play, and
+    /// its tracks no longer count as played.
+    pub fn delete_history_session(&self, session: i64) {
+        let _ = self.library.lock().expect("library lock").delete_history_session(session);
+        let mut current = self.history_session.lock().expect("history lock");
+        if *current == Some(session) {
+            *current = None;
+            drop(current);
+            let played: Vec<TrackId> = self.played.write().expect("played lock").drain().collect();
+            for id in played {
+                self.refresh_track(id);
+            }
+        }
+        self.notify(UiEvent::LibraryChanged);
+    }
+
     pub fn create_playlist(&self, name: &str) -> Option<i64> {
         let id = self.library.lock().expect("library lock").create_playlist(None, name, false).ok();
         self.notify(UiEvent::LibraryChanged);
@@ -1552,6 +1578,36 @@ impl App {
         if !unknown.is_empty() {
             self.import_paths(unknown, true);
         }
+    }
+
+    /// Analyzes files by path ahead of loading them, like [`Self::load_file`]
+    /// would: files not in the collection join as guest tracks, so they
+    /// stay out of it but load with their analysis ready.
+    pub fn analyze_files(self: &Arc<Self>, paths: Vec<PathBuf>, force: bool) {
+        let app = self.clone();
+        std::thread::Builder::new()
+            .name("analyze-files".into())
+            .spawn(move || {
+                let mut clock = ReadClock::new();
+                let total = paths.len();
+                let mut ids = Vec::with_capacity(total);
+                for (i, p) in paths.iter().enumerate() {
+                    let mut lib = app.library.lock().expect("library lock");
+                    let id = match lib.track_by_path(p) {
+                        Ok(Some(id)) => Some(id),
+                        _ => lib.import_file_guest(p).ok(),
+                    };
+                    drop(lib);
+                    ids.extend(id);
+                    if i % 64 == 0 {
+                        app.notify(UiEvent::ImportProgress { done: i, total, timing: clock.timing(i, total) });
+                    }
+                }
+                app.notify(UiEvent::ImportProgress { done: 0, total: 0, timing: Timing::default() });
+                app.refresh_tracks();
+                app.analyze_tracks(&ids, force);
+            })
+            .expect("spawn file analysis");
     }
 
     /// Drops the waiting jobs and turns the background pass off, so they

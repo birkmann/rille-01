@@ -20,6 +20,8 @@ pub struct HistorySession {
     pub id: SessionId,
     /// Unix seconds.
     pub started: i64,
+    /// Empty unless the user named it.
+    pub name: String,
     pub track_count: usize,
 }
 
@@ -266,11 +268,11 @@ impl Library {
     /// Newest first.
     pub fn history_sessions(&self) -> Result<Vec<HistorySession>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.started, (SELECT COUNT(*) FROM history_entries e WHERE e.session = s.id)
+            "SELECT s.id, s.started, s.name, (SELECT COUNT(*) FROM history_entries e WHERE e.session = s.id)
              FROM history_sessions s ORDER BY s.started DESC, s.id DESC",
         )?;
         let rows = stmt
-            .query_map([], |r| Ok(HistorySession { id: r.get(0)?, started: r.get(1)?, track_count: r.get(2)? }))?
+            .query_map([], |r| Ok(HistorySession { id: r.get(0)?, started: r.get(1)?, name: r.get(2)?, track_count: r.get(3)? }))?
             .collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }
@@ -288,6 +290,14 @@ impl Library {
             .query_map([session], |r| Ok(HistoryEntry { track: r.get(0)?, deck: r.get(1)?, played_at: r.get(2)? }))?
             .collect::<rusqlite::Result<_>>()?;
         Ok(rows)
+    }
+
+    /// An empty name goes back to showing the date.
+    pub fn rename_history_session(&mut self, session: SessionId, name: &str) -> Result<()> {
+        match self.conn.execute("UPDATE history_sessions SET name = ?2 WHERE id = ?1", params![session, name.trim()])? {
+            0 => Err(Error::Invalid("unknown history session")),
+            _ => Ok(()),
+        }
     }
 
     pub fn delete_history_session(&mut self, session: SessionId) -> Result<()> {

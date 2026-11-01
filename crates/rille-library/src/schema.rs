@@ -146,6 +146,10 @@ CREATE TABLE beatport_playlists (
     playlist INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE
 );
 "#,
+    r#"
+-- A name the user gave a history session; empty shows its date.
+ALTER TABLE history_sessions ADD COLUMN name TEXT NOT NULL DEFAULT '';
+"#,
 ];
 
 pub const VERSION: u32 = MIGRATIONS.len() as u32;

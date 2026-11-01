@@ -108,7 +108,7 @@ fn schema_create_and_reopen() {
     }
     let conn = rusqlite::Connection::open(&db).unwrap();
     let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
     let mode: String = conn.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap();
     assert_eq!(mode, "wal");
 
@@ -663,6 +663,10 @@ fn history() {
     assert_eq!(row.play_count, 2);
     assert!(row.last_played.is_some());
     assert_eq!(lib.track(t[2]).unwrap().unwrap().play_count, 1);
+
+    lib.rename_history_session(s2, "  Warehouse  ").unwrap();
+    assert_eq!(lib.history_sessions().unwrap()[0].name, "Warehouse");
+    assert!(lib.rename_history_session(999, "x").is_err());
 
     lib.delete_history_session(s1).unwrap();
     assert_eq!(lib.history_sessions().unwrap().len(), 1);

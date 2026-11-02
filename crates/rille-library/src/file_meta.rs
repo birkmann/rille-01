@@ -119,6 +119,14 @@ pub fn read_metas(paths: &[PathBuf], cache_dir: &Path, threads: usize) -> Vec<Fi
         .collect()
 }
 
+/// [`read_metas`] without covers (see [`meta::read_meta_quick`]).
+pub fn read_metas_quick(paths: &[PathBuf], threads: usize) -> Vec<FileMeta> {
+    par_map_n(paths, threads, |p| catch_unwind(AssertUnwindSafe(|| meta::read_meta_quick(p))).ok()?.ok())
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
 impl FileMeta {
     /// A browser row for a file outside the collection (id −1).
     pub fn to_row(&self) -> TrackRow {

@@ -411,6 +411,43 @@ fn unsynced_deck_takes_over_from_synced_leader() {
     assert!(s.decks[1].phase_error.abs() < 0.01, "B in phase: {}", s.decks[1].phase_error);
 }
 
+/// A synced deck plays and leads; a new track starts unsynced on the other
+/// deck: the playing tempo stays, the new track plays at its own.
+#[test]
+fn new_unsynced_track_keeps_playing_tempo() {
+    let (h, mut e) = create(SR, 1024);
+    load(&h, 0, 1, click_track(124.0, 0.2, 120.0, 44_100), 0.0);
+    load(&h, 1, 2, click_track(140.0, 0.3, 120.0, 44_100), 0.0);
+    press(&h, 0, Control::Sync);
+    press(&h, 0, Control::Play);
+    run(&mut e, 1.0);
+    let before = h.snapshot();
+    assert_eq!(before.master_deck, Some(0));
+    press(&h, 1, Control::Play);
+    run(&mut e, 2.0);
+    let s = h.snapshot();
+    assert_eq!(s.master_deck, Some(0), "A keeps the lead");
+    assert!((s.decks[0].bpm - before.decks[0].bpm).abs() < 0.01, "A keeps its tempo: {}", s.decks[0].bpm);
+    assert!((s.decks[1].bpm - 140.0).abs() < 0.01, "B plays at its own: {}", s.decks[1].bpm);
+}
+
+/// The tempo fader of a synced track that is only cued does not move the
+/// tempo that plays.
+#[test]
+fn cued_synced_fader_keeps_playing_tempo() {
+    let (h, mut e) = create(SR, 1024);
+    load(&h, 0, 1, click_track(124.0, 0.2, 120.0, 44_100), 0.0);
+    load(&h, 1, 2, click_track(140.0, 0.3, 120.0, 44_100), 0.0);
+    press(&h, 0, Control::Play);
+    press(&h, 1, Control::Sync);
+    run(&mut e, 1.0);
+    ctl(&h, 1, Control::Tempo, ControlValue::Absolute(0.9));
+    run(&mut e, 1.0);
+    let s = h.snapshot();
+    assert!((s.decks[0].bpm - 124.0).abs() < 0.01, "A keeps its tempo: {}", s.decks[0].bpm);
+    assert!((s.decks[1].bpm - 124.0).abs() < 0.05, "B stays on A's tempo: {}", s.decks[1].bpm);
+}
+
 /// Turning sync off keeps the synced tempo (the fader followed it).
 #[test]
 fn sync_off_keeps_tempo() {

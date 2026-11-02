@@ -15,14 +15,16 @@ mod playlists;
 mod scan;
 mod schema;
 mod search;
+mod serato;
 
-pub use file_meta::read_metas;
+pub use file_meta::{read_metas, read_metas_quick};
 pub use library::{CoverSize, Library, TrackRow, cover_thumb};
-pub use meta::{FileMeta, SUPPORTED_EXTENSIONS, Tags, is_supported, parse_key, read_meta};
+pub use meta::{FileMeta, SUPPORTED_EXTENSIONS, Tags, is_supported, parse_key, read_meta, read_meta_quick};
 pub use nml::NmlReport;
 pub use playlists::{HistoryEntry, HistorySession, PlaylistNode};
 pub use scan::{ImportReport, ScanError, ScanProgress, ScanReport};
 pub use search::SearchIndex;
+pub use serato::{serato_root, serato_tracks};
 
 use std::path::PathBuf;
 

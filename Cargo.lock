@@ -2639,6 +2639,7 @@ version = "0.1.6"
 dependencies = [
  "hound",
  "image",
+ "libc",
  "lofty",
  "quick-xml",
  "rille-core",

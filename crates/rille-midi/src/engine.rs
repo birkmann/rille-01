@@ -376,7 +376,12 @@ impl State<'_> {
                     _ => return,
                 };
                 let hit = (b.mode() == InputMode::Velocity).then(|| f32::from(vel.min(127)) / 127.0);
-                if down && active && !self.slot.pressed {
+                if b.latching {
+                    if active {
+                        self.press(b, true, None, t);
+                        self.press(b, false, None, t);
+                    }
+                } else if down && active && !self.slot.pressed {
                     self.slot.pressed = true;
                     if b.tap {
                         self.used.retain(|m| !self.here.contains(m));
@@ -729,6 +734,17 @@ mod tests {
         assert_eq!(hit(&mut r), [Control::DrumTrigger(1)]);
         r.send(&[0x90, 30, 127]);
         assert_eq!(hit(&mut r), [Control::DrumPattern(1)], "PATTERN (hold) outranks the latched PLAY mode");
+    }
+
+    #[test]
+    fn switch_presses_on_note_on_and_off() {
+        let mut pfl = InputBinding::new(deck_a(Control::Pfl), note(1, 12));
+        pfl.latching = true;
+        let mut r = Rig::new(vec![pfl]);
+        let press = [ControlValue::Press(true), ControlValue::Press(false)];
+        assert_eq!(r.values(&[0x90, 12, 127]), press);
+        assert_eq!(r.values(&[0x80, 12, 0]), press);
+        assert_eq!(r.values(&[0x90, 12, 0]), press, "note on at velocity 0 is note off");
     }
 
     #[test]

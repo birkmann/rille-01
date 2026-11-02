@@ -249,6 +249,11 @@ pub struct InputBinding {
     /// meanwhile (SYNC held + encoder changes the tempo, a tap syncs).
     #[serde(default, skip_serializing_if = "is_false")]
     pub tap: bool,
+    /// Button inputs only: a latching hardware button that sends note on at
+    /// one press and note off at the next, so each of them is a full press
+    /// (the Akai AMX's PFL buttons).
+    #[serde(default, rename = "switch", skip_serializing_if = "is_false")]
+    pub latching: bool,
     /// Latched modifiers only: a press held longer than [`HOLD_TIME`] holds
     /// the modifier only while down (tap to latch, hold for a moment). For
     /// precedence it counts as held, so it outranks latched modes.
@@ -287,6 +292,7 @@ impl InputBinding {
             condition: None,
             latch: false,
             tap: false,
+            latching: false,
             hold: false,
             group: None,
             default_on: false,
@@ -374,6 +380,9 @@ impl InputBinding {
         }
         if self.tap && (mode != InputMode::Button || self.target.control().is_none()) {
             return Err("tap is for button inputs on a control only".into());
+        }
+        if self.latching && (mode != InputMode::Button || self.target.control().is_none() || self.tap) {
+            return Err("switch is for button inputs on a control only, without tap".into());
         }
         if (self.hold || self.group.is_some() || self.default_on) && !self.latch {
             return Err("hold, group and default are for latched modifiers only".into());

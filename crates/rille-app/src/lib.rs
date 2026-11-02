@@ -1746,9 +1746,10 @@ impl App {
 
     /// The explorer's view of a folder: its audio files, with collection
     /// (or guest) data where the file has a track, else the tags read
-    /// while browsing. Files whose tags are not read yet get a title from
-    /// the file name (id −1) and are read in the background; a
-    /// [`UiEvent::FolderMetaChanged`] follows.
+    /// while browsing. Files not fully read yet show what is known so far
+    /// (a Serato database, tags without covers, else a title from the file
+    /// name; id −1) and are read in the background; a
+    /// [`UiEvent::FolderMetaChanged`] follows each batch.
     pub fn folder_rows(self: &Arc<Self>, dir: &Path) -> Vec<TrackRow> {
         let files = explorer::audio_files(dir, false);
         let canon_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_owned());
@@ -1779,7 +1780,9 @@ impl App {
                     return row;
                 }
                 unread.push(c.clone());
-                explorer::file_row(p)
+                let mut row = self.early_folder_row(c).unwrap_or_else(|| explorer::file_row(p));
+                row.path.clone_from(p);
+                row
             })
             .collect();
         if !unread.is_empty() {

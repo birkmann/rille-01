@@ -41,6 +41,10 @@ struct Clock {
     auto: bool,
     /// The user chose the master deck (MASTER button); keep it.
     explicit: bool,
+    /// Unsynced decks (bits) that already played, still without a grid,
+    /// when the lead was taken: once analyzed, one of them takes over.
+    /// Decks started later never do, so the playing tempo stays put.
+    waiting: u8,
     bpm: f64,
     beat: f64,
     /// Clock beat of a downbeat of the leading track: bars (and drum
@@ -147,6 +151,7 @@ impl Engine {
                 master: None,
                 auto: true,
                 explicit: false,
+                waiting: 0,
                 bpm: 120.0,
                 beat: 0.0,
                 bar_origin: 0.0,
@@ -536,10 +541,14 @@ impl Engine {
 
     /// A synced deck that does not lead follows the clock, so its tempo
     /// fader moves the tempo everyone syncs to: the leader's, or the clock's
-    /// while no deck leads.
+    /// while no deck leads. Not while it is stopped: a track being cued
+    /// never changes the tempo that plays.
     fn synced_tempo(&mut self, unit: usize, fader: f32) {
         let range = self.settings.tempo_range.max(1e-6);
         let deck = &mut self.decks[unit];
+        if !deck.playing {
+            return;
+        }
         deck.tempo_fader = fader;
         let Some(own) = deck.track_bpm() else { return };
         let rate = 1.0 + (f64::from(fader) - 0.5) * 2.0 * range;
@@ -555,8 +564,13 @@ impl Engine {
 
     /// The deck that leads, choosing one automatically when needed.
     fn leader(&mut self) -> Option<usize> {
-        let unsynced_ready =
-            (0..MAX_DECKS).find(|&i| self.decks[i].playing && self.decks[i].grid.is_some() && !self.decks[i].sync);
+        for i in 0..MAX_DECKS {
+            if !self.decks[i].playing || self.decks[i].sync {
+                self.clock.waiting &= !(1 << i);
+            }
+        }
+        let unsynced_ready = (0..MAX_DECKS)
+            .find(|&i| self.clock.waiting & (1 << i) != 0 && self.decks[i].playing && self.decks[i].grid.is_some());
         if let Some(m) = self.clock.master {
             let d = &self.decks[usize::from(m)];
             if d.playing && d.grid.is_some() {
@@ -568,6 +582,7 @@ impl Engine {
                     && let Some(i) = unsynced_ready
                 {
                     self.clock.master = Some(i as u8);
+                    self.clock.waiting = 0;
                     if let Some(b) = self.decks[i].beat() {
                         self.clock.beat = b;
                     }
@@ -600,6 +615,9 @@ impl Engine {
                     deck.tempo_fader = (0.5 + (rate - 1.0) / (2.0 * range)).clamp(0.0, 1.0) as f32;
                 }
                 self.clock.master = Some(i as u8);
+                self.clock.waiting = (0..MAX_DECKS)
+                    .filter(|&j| self.decks[j].playing && self.decks[j].grid.is_none() && !self.decks[j].sync)
+                    .fold(0, |m, j| m | 1 << j);
                 if let Some(b) = self.decks[i].beat() {
                     self.clock.beat = b / self.decks[i].sync_mult;
                 }
@@ -767,6 +785,16 @@ impl Engine {
                 _ => {
                     // Unsynced (or synced without a grid): own tempo; a
                     // synced deck without a lead still takes the clock tempo.
+                    // A stopped synced deck already shows the pitch it will
+                    // play at: its tempo fader follows the clock.
+                    if deck.sync
+                        && !deck.playing
+                        && let Some(own) = deck.track_bpm()
+                        && own > 0.0
+                    {
+                        let rate = self.clock.bpm * deck.sync_mult / own;
+                        deck.tempo_fader = (0.5 + (rate - 1.0) / (2.0 * range.max(1e-6))).clamp(0.0, 1.0) as f32;
+                    }
                     let mut s = deck.free_speed(n, self.sr, range);
                     if deck.sync
                         && deck.playing
@@ -960,7 +988,7 @@ impl Engine {
             };
             // Synced decks show the tempo they follow, not the momentary
             // speed that includes phase correction.
-            let synced = d.sync && d.playing && track_bpm > 0.0 && clock.master != Some(i as u8);
+            let synced = d.sync && track_bpm > 0.0 && clock.master != Some(i as u8);
             let rate = if synced {
                 clock.bpm * d.sync_mult / track_bpm
             } else if d.playing {

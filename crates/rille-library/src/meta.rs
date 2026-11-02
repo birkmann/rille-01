@@ -5,7 +5,8 @@ use crate::{Result, io_err};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use lofty::config::ParseOptions;
-use lofty::file::FileType;
+use lofty::file::{FileType, TaggedFile};
+use lofty::id3::v2::Id3v2Tag;
 use lofty::mpeg::MpegFile;
 use lofty::picture::PictureType;
 use lofty::prelude::*;
@@ -13,7 +14,7 @@ use lofty::probe::Probe;
 use lofty::tag::Tag;
 use rille_core::Key;
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use xxhash_rust::xxh3::Xxh3;
@@ -98,7 +99,7 @@ pub fn read_meta(path: &Path, cache_dir: &Path) -> Result<FileMeta> {
 fn read_meta_inner(path: &Path, cache_dir: &Path) -> Result<(FileMeta, Option<String>)> {
     let (size, mtime) = stat(path).map_err(io_err(path))?;
     let mut warnings = Vec::new();
-    let (mut tags, picture) = read_tags(path).unwrap_or_else(|e| {
+    let (mut tags, picture) = read_tags(path, ParseOptions::new()).unwrap_or_else(|e| {
         warnings.push(format!("tags: {e}"));
         (Tags::default(), None)
     });
@@ -110,13 +111,196 @@ fn read_meta_inner(path: &Path, cache_dir: &Path) -> Result<(FileMeta, Option<St
     Ok((FileMeta { path: path.to_owned(), size, mtime, tags, cover }, warning))
 }
 
+/// What the browser shows first for a file outside the collection: tags and
+/// duration, without the cover. An MP3's ID3 tag is read frame by frame,
+/// seeking over pictures and other binary frames: they are most of its
+/// bytes, and USB sticks are slow to read. [`read_meta`] fills in the rest.
+pub fn read_meta_quick(path: &Path) -> Result<FileMeta> {
+    let (size, mtime) = stat(path).map_err(io_err(path))?;
+    let mut tags = match id3_quick(path, size) {
+        Ok(Some(tags)) => tags,
+        // Not an MP3 with an ID3v2.3/2.4 tag: lofty, without the pictures.
+        _ => read_tags(path, ParseOptions::new().read_cover_art(false)).map(|(t, _)| t).unwrap_or_default(),
+    };
+    fill_from_filename(&mut tags, path);
+    Ok(FileMeta { path: path.to_owned(), size, mtime, tags, cover: None })
+}
+
+/// ID3v2 frames a browser row uses; the rest are skipped unread.
+const ROW_FRAMES: [&[u8]; 13] = [
+    b"TIT2", b"TPE1", b"TPE2", b"TALB", b"TPE4", b"TPUB", b"TCON", b"COMM", b"TYER", b"TDRC", b"TBPM", b"TKEY", b"TXXX",
+];
+/// Bytes read per frame header lookup: small frames come in one read.
+const ID3_CHUNK: u64 = 4096;
+/// A larger "text" frame is not one worth waiting for.
+const MAX_ROW_FRAME: u64 = 64 * 1024;
+
+/// Tags and stream properties of an MP3 from its text frames and its first
+/// audio frame. `None` for files this does not handle (no ID3v2.3/2.4 tag,
+/// whole-tag unsynchronisation, a tag lofty cannot parse).
+fn id3_quick(path: &Path, size: u64) -> io::Result<Option<Tags>> {
+    let f = File::open(path)?;
+    advise_random(&f);
+    let mut head = [0u8; 10];
+    read_at(&f, 0, &mut head)?;
+    if &head[..3] != b"ID3" || !matches!(head[3], 3 | 4) || head[5] & 0x80 != 0 {
+        return Ok(None);
+    }
+    let v4 = head[3] == 4;
+    let tag_end = (10 + syncsafe(&head[6..10])).min(size);
+    let mut pos = 10;
+    if head[5] & 0x40 != 0 {
+        let mut b = [0u8; 4];
+        read_at(&f, pos, &mut b)?;
+        pos += if v4 { syncsafe(&b) } else { 4 + u64::from(u32::from_be_bytes(b)) };
+    }
+    let mut kept = Vec::new();
+    let (mut buf, mut buf_at) = (Vec::new(), 0);
+    while pos + 10 <= tag_end {
+        if pos < buf_at || pos + 10 > buf_at + buf.len() as u64 {
+            buf = read_vec(&f, pos, ID3_CHUNK.min(tag_end - pos))?;
+            buf_at = pos;
+        }
+        let h = &buf[(pos - buf_at) as usize..][..10];
+        // Padding, or a size this misread: what was kept so far stands.
+        if !h[..4].iter().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+            break;
+        }
+        let len = if v4 { syncsafe(&h[4..8]) } else { u64::from(u32::from_be_bytes([h[4], h[5], h[6], h[7]])) };
+        let end = pos + 10 + len;
+        if end > tag_end {
+            break;
+        }
+        if len <= MAX_ROW_FRAME && ROW_FRAMES.contains(&&h[..4]) {
+            if end > buf_at + buf.len() as u64 {
+                buf = read_vec(&f, pos, end - pos)?;
+                buf_at = pos;
+            }
+            kept.extend_from_slice(&buf[(pos - buf_at) as usize..(end - buf_at) as usize]);
+        }
+        pos = end;
+    }
+    let audio = read_vec(&f, tag_end, ID3_CHUNK.min(size - tag_end))?;
+    // A tag of only the kept frames, then the first audio bytes, for lofty.
+    let kept_len = u32::try_from(kept.len()).expect("frames under 4 GiB");
+    let mut mini = Vec::with_capacity(10 + kept.len() + audio.len());
+    mini.extend_from_slice(&[b'I', b'D', b'3', head[3], 0, 0]);
+    mini.extend_from_slice(&[
+        (kept_len >> 21) as u8 & 0x7f,
+        (kept_len >> 14) as u8 & 0x7f,
+        (kept_len >> 7) as u8 & 0x7f,
+        kept_len as u8 & 0x7f,
+    ]);
+    mini.extend_from_slice(&kept);
+    mini.extend_from_slice(&audio);
+    let options = ParseOptions::new().read_properties(false).read_cover_art(false);
+    let Ok(file) = Probe::new(Cursor::new(&mini)).options(options).set_file_type(FileType::Mpeg).read() else {
+        return Ok(None);
+    };
+    let (mut tags, _) = tags_of(&file);
+    if let Ok(mp3) = MpegFile::read_from(&mut Cursor::new(&mini), options)
+        && let Some(id3) = mp3.id3v2()
+    {
+        user_texts(id3, &mut tags);
+    }
+    if let Some(s) = mpeg_stream(&audio, size - tag_end) {
+        (tags.duration_secs, tags.bitrate, tags.sample_rate) = (s.duration_secs, Some(s.kbps), Some(s.sample_rate));
+    }
+    Ok(Some(tags))
+}
+
+fn syncsafe(b: &[u8]) -> u64 {
+    b.iter().fold(0, |n, &x| n << 7 | u64::from(x & 0x7f))
+}
+
+fn read_at(f: &File, pos: u64, buf: &mut [u8]) -> io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::FileExt::read_exact_at(f, buf, pos);
+    #[cfg(not(unix))]
+    {
+        let mut f = f;
+        f.seek(SeekFrom::Start(pos))?;
+        f.read_exact(buf)
+    }
+}
+
+fn read_vec(f: &File, pos: u64, len: u64) -> io::Result<Vec<u8>> {
+    let mut buf = vec![0; len as usize];
+    read_at(f, pos, &mut buf)?;
+    Ok(buf)
+}
+
+/// Turns off read-ahead, which would pull in the pictures being skipped.
+fn advise_random(f: &File) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: a valid open descriptor; the call only sets a hint.
+        unsafe { libc::posix_fadvise(f.as_raw_fd(), 0, 0, libc::POSIX_FADV_RANDOM) };
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = f;
+}
+
+#[derive(Debug, PartialEq)]
+struct MpegStream {
+    duration_secs: f64,
+    kbps: u32,
+    sample_rate: u32,
+}
+
+/// Duration, bitrate and sample rate from the first MPEG layer III frame in
+/// `head`: a Xing/Info header's frame count, else the bitrate over
+/// `stream_len` (constant bitrate).
+fn mpeg_stream(head: &[u8], stream_len: u64) -> Option<MpegStream> {
+    const KBPS_V1: [u32; 15] = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+    const KBPS_V2: [u32; 15] = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+    let (i, version, kbps, sample_rate) = head.windows(4).enumerate().find_map(|(i, h)| {
+        // Sync, layer III, a valid bitrate and sample rate.
+        if h[0] != 0xff || h[1] & 0xe0 != 0xe0 || h[1] & 0x06 != 0x02 {
+            return None;
+        }
+        let version = (h[1] >> 3) & 3; // 0: 2.5, 2: 2, 3: 1
+        let (b, r) = ((h[2] >> 4) as usize, ((h[2] >> 2) & 3) as usize);
+        if version == 1 || b == 0 || b == 15 || r == 3 {
+            return None;
+        }
+        let kbps = if version == 3 { KBPS_V1[b] } else { KBPS_V2[b] };
+        let rate = [44100, 48000, 32000][r] >> (3 - version.max(1));
+        Some((i, version, kbps, rate))
+    })?;
+    let mono = head[i + 3] >> 6 == 3;
+    let side_info = match (version == 3, mono) {
+        (true, false) => 32,
+        (true, true) | (false, false) => 17,
+        (false, true) => 9,
+    };
+    let samples_per_frame = if version == 3 { 1152.0 } else { 576.0 };
+    let xing = head.get(i + 4 + side_info..i + 4 + side_info + 12).filter(|x| &x[..4] == b"Xing" || &x[..4] == b"Info");
+    let frames = xing.filter(|x| x[7] & 1 != 0).map(|x| u32::from_be_bytes([x[8], x[9], x[10], x[11]]));
+    let duration_secs = match frames {
+        Some(n) => f64::from(n) * samples_per_frame / f64::from(sample_rate),
+        None => stream_len.saturating_sub(i as u64) as f64 * 8.0 / (f64::from(kbps) * 1000.0),
+    };
+    Some(MpegStream { duration_secs, kbps, sample_rate })
+}
+
 // ---------------------------------------------------------------------------
 // Tags
 // ---------------------------------------------------------------------------
 
-fn read_tags(path: &Path) -> Result<(Tags, Option<Vec<u8>>), lofty::error::FileParseError> {
+fn read_tags(path: &Path, options: ParseOptions) -> Result<(Tags, Option<Vec<u8>>), lofty::error::FileParseError> {
     // Sniff the content: extensions lie, and ".alac" is not known by name.
-    let file = Probe::open(path)?.guess_file_type()?.read()?;
+    let file = Probe::open(path)?.options(options).guess_file_type()?.read()?;
+    let (mut tags, picture) = tags_of(&file);
+    if file.file_type() == FileType::Mpeg && (tags.label.is_empty() || tags.key.is_none()) {
+        id3_user_texts(path, &mut tags);
+    }
+    Ok((tags, picture))
+}
+
+/// A parsed file's tags and its cover image (front cover first).
+fn tags_of(file: &TaggedFile) -> (Tags, Option<Vec<u8>>) {
     // Primary tag first, then any others (e.g. ID3v1, or ID3v2 in a FLAC).
     let mut all: Vec<&Tag> = file.primary_tag().into_iter().collect();
     all.extend(file.tags().iter().filter(|t| Some(t.tag_type()) != file.primary_tag().map(|p| p.tag_type())));
@@ -148,13 +332,9 @@ fn read_tags(path: &Path) -> Result<(Tags, Option<Vec<u8>>), lofty::error::FileP
         bitrate: props.audio_bitrate().or(props.overall_bitrate()).filter(|b| *b > 0),
         sample_rate: props.sample_rate().filter(|r| *r > 0),
     };
-    let mut tags = tags;
-    if file.file_type() == FileType::Mpeg && (tags.label.is_empty() || tags.key.is_none()) {
-        id3_user_texts(path, &mut tags);
-    }
     let pics = || all.iter().flat_map(|t| t.pictures());
     let picture = pics().find(|p| p.pic_type() == PictureType::CoverFront).or_else(|| pics().next());
-    Ok((tags, picture.map(|p| p.data().to_vec())))
+    (tags, picture.map(|p| p.data().to_vec()))
 }
 
 /// Beatport and Traktor write label and key into TXXX frames, which lofty's
@@ -164,7 +344,12 @@ fn id3_user_texts(path: &Path, tags: &mut Tags) {
     let Ok(mp3) = MpegFile::read_from(&mut f, ParseOptions::new().read_properties(false).read_cover_art(false)) else {
         return;
     };
-    let Some(id3) = mp3.id3v2() else { return };
+    if let Some(id3) = mp3.id3v2() {
+        user_texts(id3, tags);
+    }
+}
+
+fn user_texts(id3: &Id3v2Tag, tags: &mut Tags) {
     let get = |keys: &[&str]| keys.iter().find_map(|k| id3.get_user_text(k)).map(str::trim).filter(|s| !s.is_empty());
     if let (true, Some(label)) = (tags.label.is_empty(), get(&["LABEL", "PUBLISHER"])) {
         label.clone_into(&mut tags.label);
@@ -364,5 +549,52 @@ mod tests {
         let mut t = Tags { title: "Tagged".into(), ..Tags::default() };
         fill_from_filename(&mut t, Path::new("A - B.mp3"));
         assert_eq!((t.artist.as_str(), t.title.as_str()), ("A", "Tagged"));
+    }
+
+    #[test]
+    fn quick_read_skips_the_cover_and_matches_the_full_read() {
+        use lofty::config::WriteOptions;
+        use lofty::picture::{MimeType, Picture};
+        use lofty::tag::TagType;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("01 x.mp3");
+        // 100 silent MPEG-1 layer III frames, 128 kbit/s, 44.1 kHz.
+        let frame: Vec<u8> = [0xff, 0xfb, 0x90, 0x00].into_iter().chain(std::iter::repeat_n(0, 413)).collect();
+        std::fs::write(&path, frame.repeat(100)).unwrap();
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.push_picture(
+            Picture::unchecked(vec![7; 300_000]).pic_type(PictureType::CoverFront).mime_type(MimeType::Png).build(),
+        );
+        tag.insert_text(ItemKey::TrackTitle, "Title".into());
+        tag.insert_text(ItemKey::TrackArtist, "Artist".into());
+        tag.insert_text(ItemKey::Label, "Label".into());
+        tag.insert_text(ItemKey::IntegerBpm, "126".into());
+        tag.insert_text(ItemKey::InitialKey, "8A".into());
+        tag.save_to_path(&path, WriteOptions::default()).unwrap();
+
+        let quick = read_meta_quick(&path).unwrap();
+        let full = read_meta(&path, dir.path()).unwrap();
+        let (q, f) = (&quick.tags, &full.tags);
+        assert_eq!((q.title.as_str(), q.artist.as_str(), q.label.as_str()), ("Title", "Artist", "Label"));
+        assert_eq!((q.bpm, q.key), (Some(126.0), parse_key("8A")));
+        assert_eq!((q.bpm, q.key, &q.title, &q.label), (f.bpm, f.key, &f.title, &f.label));
+        assert_eq!((q.bitrate, q.sample_rate), (Some(128), Some(44100)));
+        assert!((q.duration_secs - 2.6).abs() < 0.05, "{}", q.duration_secs);
+        assert!(quick.cover.is_none());
+    }
+
+    #[test]
+    fn mpeg_stream_reads_xing_frame_counts() {
+        // MPEG-1 layer III, 44.1 kHz, stereo: Xing after 32 bytes of side info.
+        let mut head = vec![0x00, 0x11, 0xff, 0xfb, 0x90, 0x00];
+        head.extend([0; 32]);
+        head.extend(b"Xing");
+        head.extend(1u32.to_be_bytes());
+        head.extend(1000u32.to_be_bytes());
+        let s = mpeg_stream(&head, 1 << 20).unwrap();
+        assert_eq!((s.kbps, s.sample_rate), (128, 44100));
+        assert!((s.duration_secs - 1000.0 * 1152.0 / 44100.0).abs() < 1e-9);
+        assert_eq!(mpeg_stream(&[0xff, 0xfb, 0xf0, 0x00], 1000), None, "bitrate index 15 is invalid");
     }
 }

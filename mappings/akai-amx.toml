@@ -10,6 +10,8 @@
 #
 # Everything is on MIDI channel 1. Buttons send note on (127) when pressed and
 # note off when released; the knobs' touch sensors send notes the same way.
+# The PFL buttons latch in hardware instead: one press sends note on, the next
+# note off, so they are mapped with `switch` to toggle on every press.
 #
 # AUDIO: rille uses the AMX's sound card by itself when no output device is set
 # in Settings -> Audio: main mix on MASTER OUT (1/2), headphones on 3/4. MASTER,
@@ -267,10 +269,12 @@ condition = { modifier = "search_a" }
 [[input]]
 target = "deck.A.pfl"
 midi = { type = "note", channel = 1, number = 12 }
+switch = true
 
 [[input]]
 target = "deck.A.tick"
 midi = { type = "note", channel = 1, number = 12 }
+switch = true
 condition = { modifier = "shift" }
 
 [[input]]
@@ -388,10 +392,12 @@ condition = { modifier = "search_b" }
 [[input]]
 target = "deck.B.pfl"
 midi = { type = "note", channel = 1, number = 13 }
+switch = true
 
 [[input]]
 target = "deck.B.tick"
 midi = { type = "note", channel = 1, number = 13 }
+switch = true
 condition = { modifier = "shift" }
 
 [[input]]
